@@ -1,5 +1,7 @@
 //! Task filtering and selection behavior shared by every presentation adapter.
 
+use crate::input::{InputAction, WindowCommand};
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProcessIdentity {
     pub id: u32,
@@ -93,6 +95,206 @@ pub struct Switcher {
     // A mouse hit pins the rendered range so selecting that hit cannot move it under the cursor.
     pinned_visible_start: Option<usize>,
     filter: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SwitcherSessionSettings {
+    pub typed_search: bool,
+    pub release_alt_switches: bool,
+    pub release_right_button_switches: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowCommandRequest {
+    pub command: WindowCommand,
+    pub window_handle: isize,
+    pub process_identity: ProcessIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SwitcherEffect {
+    None,
+    Open { selection_delta: Option<i32> },
+    Hide,
+    Redraw,
+    Activate(isize),
+    Execute(WindowCommandRequest),
+}
+
+#[derive(Debug)]
+pub struct SwitcherSession {
+    switcher: Switcher,
+    settings: SwitcherSessionSettings,
+    visible: bool,
+    context_menu_open: bool,
+}
+
+impl SwitcherSession {
+    #[must_use]
+    pub const fn new(settings: SwitcherSessionSettings) -> Self {
+        Self {
+            switcher: Switcher {
+                all_tasks: Vec::new(),
+                visible_indices: Vec::new(),
+                selected_visible_index: None,
+                pinned_visible_start: None,
+                filter: String::new(),
+            },
+            settings,
+            visible: false,
+            context_menu_open: false,
+        }
+    }
+
+    pub fn open(
+        &mut self,
+        tasks: impl IntoIterator<Item = SwitchTask>,
+        selection_delta: Option<i32>,
+    ) {
+        self.switcher.clear_filter();
+        self.switcher.set_tasks(tasks);
+        if let Some(delta) = selection_delta {
+            self.switcher.select_next(delta);
+        }
+        self.visible = true;
+    }
+
+    #[must_use]
+    pub const fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    #[must_use]
+    pub const fn switcher(&self) -> &Switcher {
+        &self.switcher
+    }
+
+    #[must_use]
+    pub const fn switcher_mut(&mut self) -> &mut Switcher {
+        &mut self.switcher
+    }
+
+    pub fn update_settings(&mut self, settings: SwitcherSessionSettings) {
+        self.settings = settings;
+    }
+
+    pub fn set_context_menu_open(&mut self, open: bool) {
+        self.context_menu_open = open;
+    }
+
+    pub fn hide(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn restore_visible(&mut self) {
+        self.visible = true;
+    }
+
+    #[must_use]
+    pub const fn search_active(&self) -> bool {
+        self.visible && self.settings.typed_search
+    }
+
+    #[must_use]
+    pub fn handle_input(&mut self, action: InputAction) -> SwitcherEffect {
+        if !self.visible {
+            return match action {
+                InputAction::Switch(delta) => SwitcherEffect::Open {
+                    selection_delta: Some(delta),
+                },
+                InputAction::RightButtonPressed => SwitcherEffect::Open {
+                    selection_delta: None,
+                },
+                _ => SwitcherEffect::None,
+            };
+        }
+
+        match action {
+            InputAction::Switch(delta) => {
+                self.switcher.select_next(delta);
+                SwitcherEffect::Redraw
+            }
+            InputAction::Navigate(delta) => {
+                self.switcher.select_bounded(delta);
+                SwitcherEffect::Redraw
+            }
+            InputAction::SelectFirst => {
+                self.switcher.select_first();
+                SwitcherEffect::Redraw
+            }
+            InputAction::SelectLast => {
+                self.switcher.select_last();
+                SwitcherEffect::Redraw
+            }
+            InputAction::DismissOverlay => {
+                self.visible = false;
+                SwitcherEffect::Hide
+            }
+            InputAction::CloseSelected => self.command(WindowCommand::Close),
+            InputAction::WindowCommand(command) => self.command(command),
+            InputAction::ActivateVisiblePosition(position) => {
+                if self.switcher.select_visible_position(position) {
+                    self.activate_selected()
+                } else {
+                    SwitcherEffect::None
+                }
+            }
+            InputAction::ActivateSelected => self.activate_selected(),
+            InputAction::AltReleased if self.settings.release_alt_switches => {
+                self.activate_from_release()
+            }
+            InputAction::RightButtonReleased if self.settings.release_right_button_switches => {
+                self.activate_from_release()
+            }
+            InputAction::RightButtonPressed => SwitcherEffect::Open {
+                selection_delta: None,
+            },
+            InputAction::MouseWheel(delta) => {
+                self.switcher.select_next(if delta > 0 { -1 } else { 1 });
+                SwitcherEffect::Redraw
+            }
+            InputAction::AppendSearchCharacter(character) if self.settings.typed_search => {
+                self.switcher.append_filter_character(character);
+                SwitcherEffect::Redraw
+            }
+            InputAction::BackspaceSearch if self.settings.typed_search => {
+                self.switcher.backspace_filter();
+                SwitcherEffect::Redraw
+            }
+            InputAction::AltReleased
+            | InputAction::RightButtonReleased
+            | InputAction::AppendSearchCharacter(_)
+            | InputAction::BackspaceSearch => SwitcherEffect::None,
+        }
+    }
+
+    fn activate_from_release(&mut self) -> SwitcherEffect {
+        if self.context_menu_open {
+            SwitcherEffect::None
+        } else {
+            self.activate_selected()
+        }
+    }
+
+    fn activate_selected(&mut self) -> SwitcherEffect {
+        let Some(target) = self.switcher.selected_task().map(|task| task.window_handle) else {
+            return SwitcherEffect::None;
+        };
+        self.visible = false;
+        SwitcherEffect::Activate(target)
+    }
+
+    fn command(&self, command: WindowCommand) -> SwitcherEffect {
+        self.switcher
+            .selected_task()
+            .map_or(SwitcherEffect::None, |task| {
+                SwitcherEffect::Execute(WindowCommandRequest {
+                    command,
+                    window_handle: task.window_handle,
+                    process_identity: task.process_identity,
+                })
+            })
+    }
 }
 
 impl Switcher {
@@ -272,6 +474,120 @@ mod tests {
             SwitchTask::new(1, 10, "Project - Zed", "zed"),
             SwitchTask::new(2, 20, "Documentation", "firefox"),
         ]
+    }
+
+    #[test]
+    fn session_open_switch_activate_sequence_is_explicit() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+
+        assert_eq!(
+            session.handle_input(InputAction::Switch(1)),
+            SwitcherEffect::Open {
+                selection_delta: Some(1)
+            }
+        );
+        session.open(tasks(), Some(1));
+        assert!(session.is_visible());
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(20)
+        );
+        assert_eq!(
+            session.handle_input(InputAction::ActivateSelected),
+            SwitcherEffect::Activate(20)
+        );
+        assert!(!session.is_visible());
+    }
+
+    #[test]
+    fn session_release_activation_requires_setting_and_clear_context_menu() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: false,
+        });
+        session.open(tasks(), None);
+
+        assert_eq!(
+            session.handle_input(InputAction::RightButtonReleased),
+            SwitcherEffect::None
+        );
+        session.set_context_menu_open(true);
+        assert_eq!(
+            session.handle_input(InputAction::AltReleased),
+            SwitcherEffect::None
+        );
+        assert!(session.is_visible());
+
+        session.set_context_menu_open(false);
+        assert_eq!(
+            session.handle_input(InputAction::AltReleased),
+            SwitcherEffect::Activate(10)
+        );
+        assert!(!session.is_visible());
+    }
+
+    #[test]
+    fn session_commands_capture_the_selected_process_identity() {
+        let identity = ProcessIdentity::new(42, 9001);
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [SwitchTask::new(1, 20, "Selected", "editor").with_process_identity(identity)],
+            None,
+        );
+
+        assert_eq!(
+            session.handle_input(InputAction::WindowCommand(WindowCommand::Terminate)),
+            SwitcherEffect::Execute(WindowCommandRequest {
+                command: WindowCommand::Terminate,
+                window_handle: 20,
+                process_identity: identity,
+            })
+        );
+    }
+
+    #[test]
+    fn reopening_session_clears_search_and_replaces_tasks() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(tasks(), None);
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('z')),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().visible_task_count(), 1);
+
+        session.open(
+            [
+                SwitchTask::new(1, 30, "Terminal", "terminal"),
+                SwitchTask::new(2, 40, "Files", "explorer"),
+            ],
+            None,
+        );
+
+        assert!(session.switcher().filter().is_empty());
+        assert_eq!(session.switcher().visible_task_count(), 2);
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(30)
+        );
     }
 
     #[test]

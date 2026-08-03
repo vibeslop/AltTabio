@@ -15,7 +15,8 @@ use alttabio::input::{
 };
 use alttabio::settings::{Settings, Theme};
 use alttabio::switcher::{
-    ProcessIdentity, SwitchTask, Switcher, WindowEligibility, is_switchable_window,
+    ProcessIdentity, SwitchTask, Switcher, SwitcherEffect, SwitcherSession,
+    SwitcherSessionSettings, WindowCommandRequest, WindowEligibility, is_switchable_window,
 };
 use alttabio::theme::{ResolvedTheme, Rgb8, resolve};
 use std::cell::RefCell;
@@ -148,7 +149,7 @@ pub fn run(
     if preview_mode {
         unsafe {
             // SAFETY: host_pointer remains live and initialization released its state borrow.
-            (*host_pointer).state.borrow_mut().show_overlay();
+            (*host_pointer).state.borrow_mut().show_overlay(None);
         }
     }
 
@@ -328,7 +329,7 @@ impl Drop for ComApartment {
 )]
 struct App {
     hwnd: HWND,
-    switcher: Switcher,
+    session: SwitcherSession,
     renderer: Renderer,
     resolved_theme: ResolvedTheme,
     preview: Option<DwmPreview>,
@@ -345,7 +346,6 @@ struct App {
     settings_store: SettingsStore,
     settings_dialog_open: bool,
     about_dialog_open: bool,
-    context_menu_open: bool,
 }
 
 struct AppHost {
@@ -421,19 +421,6 @@ impl AppHost {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct OverlayActivationState {
-    visible: bool,
-    context_menu_open: bool,
-    release: ReleaseActivationSettings,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ReleaseActivationSettings {
-    alt_switches: bool,
-    right_button_switches: bool,
-}
-
 impl App {
     fn new(
         exit_when_hidden: bool,
@@ -442,9 +429,10 @@ impl App {
         settings_store: SettingsStore,
     ) -> Result<Self> {
         let resolved_theme = resolve_current_theme(settings.appearance.theme);
+        let session = SwitcherSession::new(switcher_session_settings(&settings));
         Ok(Self {
             hwnd: HWND::default(),
-            switcher: Switcher::default(),
+            session,
             renderer: Renderer::new(resolved_theme)?,
             resolved_theme,
             preview: None,
@@ -461,7 +449,6 @@ impl App {
             settings_store,
             settings_dialog_open: false,
             about_dialog_open: false,
-            context_menu_open: false,
         })
     }
 
@@ -546,8 +533,7 @@ impl App {
             }
             WM_MOUSEWHEEL => {
                 let delta = high_word_usize(wparam.0).cast_signed();
-                self.switcher.select_next(if delta > 0 { -1 } else { 1 });
-                self.request_redraw();
+                self.handle_input_action(InputAction::MouseWheel(i32::from(delta.signum())));
                 Some(LRESULT(0))
             }
             WM_SIZE => {
@@ -589,7 +575,7 @@ impl App {
             _ => TrayAction::None,
         };
         match action {
-            TrayAction::Show => self.show_overlay(),
+            TrayAction::Show => self.show_overlay(None),
             TrayAction::Settings => self.request_modal_dialog(WM_SHOW_SETTINGS, "Settings"),
             TrayAction::About => self.request_modal_dialog(WM_SHOW_ABOUT, "About"),
             TrayAction::Exit => self.request_close("the tray"),
@@ -681,6 +667,8 @@ impl App {
 
         self.preview = None;
         self.settings = settings;
+        self.session
+            .update_settings(switcher_session_settings(&self.settings));
         if icon_changed {
             let icon_result = self
                 .tray
@@ -771,75 +759,13 @@ impl App {
     }
 
     fn handle_input_action(&mut self, action: InputAction) {
-        match action {
-            InputAction::Switch(delta) => {
-                if self.is_visible() {
-                    self.switcher.select_next(delta);
-                    self.request_redraw();
-                } else {
-                    self.show_overlay();
-                    self.switcher.select_next(delta);
-                    self.request_redraw();
-                }
-            }
-            InputAction::Navigate(delta) => {
-                if self.is_visible() {
-                    self.switcher.select_bounded(delta);
-                    self.request_redraw();
-                }
-            }
-            InputAction::SelectFirst => {
-                if self.is_visible() {
-                    self.switcher.select_first();
-                    self.request_redraw();
-                }
-            }
-            InputAction::SelectLast => {
-                if self.is_visible() {
-                    self.switcher.select_last();
-                    self.request_redraw();
-                }
-            }
-            InputAction::DismissOverlay => self.hide_overlay(),
-            InputAction::CloseSelected => {
-                if self.is_visible() {
-                    self.execute_selected(WindowCommand::Close);
-                }
-            }
-            InputAction::WindowCommand(command) => {
-                if self.is_visible() {
-                    self.execute_selected(command);
-                }
-            }
-            InputAction::ActivateVisiblePosition(position) => {
-                if self.is_visible() && self.switcher.select_visible_position(position) {
-                    self.activate_selected();
-                }
-            }
-            InputAction::ActivateSelected
-            | InputAction::AltReleased
-            | InputAction::RightButtonReleased => {
-                self.activate_for_input(action);
-            }
-            InputAction::RightButtonPressed => self.show_overlay(),
-            InputAction::MouseWheel(delta) => {
-                if self.is_visible() {
-                    self.switcher.select_next(if delta > 0 { -1 } else { 1 });
-                    self.request_redraw();
-                }
-            }
-            InputAction::AppendSearchCharacter(character) => {
-                if self.search_active() {
-                    self.switcher.append_filter_character(character);
-                    self.request_redraw();
-                }
-            }
-            InputAction::BackspaceSearch => {
-                if self.search_active() {
-                    self.switcher.backspace_filter();
-                    self.request_redraw();
-                }
-            }
+        match self.session.handle_input(action) {
+            SwitcherEffect::None => {}
+            SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
+            SwitcherEffect::Hide => self.hide_overlay(),
+            SwitcherEffect::Redraw => self.request_redraw(),
+            SwitcherEffect::Activate(target) => self.activate_target(target),
+            SwitcherEffect::Execute(request) => self.execute_window_command(request),
         }
     }
 
@@ -862,22 +788,20 @@ impl App {
             return;
         }
         let value = u32::try_from(value).unwrap_or_default();
-        if value == u32::from(VK_BACK.0) {
-            self.switcher.backspace_filter();
+        let action = if value == u32::from(VK_BACK.0) {
+            InputAction::BackspaceSearch
         } else if let Some(character) = char::from_u32(value)
             && !character.is_control()
         {
-            self.switcher.append_filter_character(character);
+            InputAction::AppendSearchCharacter(character)
         } else {
             return;
-        }
-        self.request_redraw();
+        };
+        self.handle_input_action(action);
     }
 
-    fn execute_selected(&mut self, command: WindowCommand) {
-        let Some(request) = selected_window_command(&self.switcher, command) else {
-            return;
-        };
+    fn execute_window_command(&mut self, request: WindowCommandRequest) {
+        let command = request.command;
         if !execute_window_command(
             request.command,
             request.window_handle,
@@ -889,7 +813,7 @@ impl App {
         match enumerate_switchable_windows(&self.settings) {
             Ok(tasks) => {
                 let close_refresh_target = close_refresh_target_after_enumeration(request, &tasks);
-                self.switcher.set_tasks(tasks);
+                self.session.switcher_mut().set_tasks(tasks);
                 if let Some(window_handle) = close_refresh_target {
                     self.schedule_close_refresh(window_handle);
                 }
@@ -926,7 +850,7 @@ impl App {
         let keep_refreshing = match enumerate_switchable_windows(&self.settings) {
             Ok(tasks) => {
                 let keep_refreshing = self.close_refresh_tracker.reconcile(&tasks);
-                self.switcher.set_tasks(tasks);
+                self.session.switcher_mut().set_tasks(tasks);
                 keep_refreshing
             }
             Err(error) => {
@@ -965,12 +889,12 @@ impl App {
         if self.settings.general.mouse_over_selection
             && !self.close_button.is_pressed()
             && let Some(TaskListHit::Task(position)) = hit
-            && select_hovered_position(&mut self.switcher, position)
+            && select_hovered_position(self.session.switcher_mut(), position)
         {
             needs_redraw = true;
             hit = self.hit_test(lparam);
         }
-        let close_target = close_target_for_hit(&self.switcher, hit);
+        let close_target = close_target_for_hit(self.session.switcher(), hit);
         needs_redraw |= self.close_button.update_hover(close_target);
         if needs_redraw {
             self.request_redraw();
@@ -986,7 +910,7 @@ impl App {
 
     fn handle_button_down(&mut self, lparam: LPARAM) {
         let hit = self.hit_test(lparam);
-        let target = close_target_for_hit(&self.switcher, hit);
+        let target = close_target_for_hit(self.session.switcher(), hit);
         let Some(target) = target else {
             return;
         };
@@ -1001,7 +925,7 @@ impl App {
     fn handle_button_up(&mut self, lparam: LPARAM) {
         let hit = self.hit_test(lparam);
         if self.close_button.is_pressed() {
-            let target = close_target_for_hit(&self.switcher, hit);
+            let target = close_target_for_hit(self.session.switcher(), hit);
             let command = self.close_button.release(target);
             let release_result = unsafe {
                 // SAFETY: this UI thread acquired mouse capture when the close button was pressed.
@@ -1012,15 +936,13 @@ impl App {
             }
             self.request_redraw();
             if let Some(command) = command {
-                self.execute_selected(command);
+                self.handle_input_action(InputAction::WindowCommand(command));
             }
             return;
         }
 
-        if let Some(TaskListHit::Task(position)) = hit
-            && self.switcher.select_visible_position(position)
-        {
-            self.activate_selected();
+        if let Some(TaskListHit::Task(position)) = hit {
+            self.handle_input_action(InputAction::ActivateVisiblePosition(position));
         }
     }
 
@@ -1048,7 +970,7 @@ impl App {
         let (x, y) = mouse_coordinates(lparam);
         Renderer::hit_test(
             self.hwnd,
-            &mut self.switcher,
+            self.session.switcher_mut(),
             x,
             y,
             self.settings.appearance.compact_list,
@@ -1060,15 +982,19 @@ impl App {
             return;
         };
         let position = hit.position();
-        if !self.switcher.select_visible_position(position) {
+        if !self
+            .session
+            .switcher_mut()
+            .select_visible_position(position)
+        {
             return;
         }
         self.request_redraw();
-        self.context_menu_open = true;
+        self.session.set_context_menu_open(true);
         let command = show_window_command_menu(self.hwnd);
-        self.context_menu_open = false;
+        self.session.set_context_menu_open(false);
         if let Some(command) = command {
-            self.execute_selected(command);
+            self.handle_input_action(InputAction::WindowCommand(command));
         }
     }
 
@@ -1106,9 +1032,9 @@ impl App {
         self.request_redraw();
     }
 
-    fn show_overlay(&mut self) {
+    fn show_overlay(&mut self, selection_delta: Option<i32>) {
         match enumerate_switchable_windows(&self.settings) {
-            Ok(tasks) => prepare_switcher_for_open(&mut self.switcher, tasks),
+            Ok(tasks) => self.session.open(tasks, selection_delta),
             Err(error) => {
                 self.set_hook_search_active(false);
                 self.set_hook_overlay_active(self.is_visible());
@@ -1136,6 +1062,7 @@ impl App {
     }
 
     fn hide_overlay(&mut self) {
+        self.session.hide();
         self.set_hook_search_active(false);
         self.reset_hook_gestures();
         if let Some(preview) = &mut self.preview {
@@ -1172,28 +1099,6 @@ impl App {
         }
     }
 
-    fn activate_selected(&mut self) {
-        let Some(target) = self.switcher.selected_task().map(|task| task.window_handle) else {
-            return;
-        };
-        self.activate_target(target);
-    }
-
-    fn activate_for_input(&mut self, action: InputAction) {
-        let mut state = OverlayActivationState {
-            visible: self.is_visible(),
-            context_menu_open: self.context_menu_open,
-            release: ReleaseActivationSettings {
-                alt_switches: self.settings.general.release_alt_switches,
-                right_button_switches: self.settings.general.release_right_button_switches,
-            },
-        };
-        let selected = self.switcher.selected_task().map(|task| task.window_handle);
-        if let Some(target) = take_activation_target(action, &mut state, selected) {
-            self.activate_target(target);
-        }
-    }
-
     fn activate_target(&mut self, target: isize) {
         self.hide_overlay();
         let target = HWND(target as *mut c_void);
@@ -1202,6 +1107,7 @@ impl App {
                 // SAFETY: the HWND is live and owned by this UI thread.
                 let _was_visible = ShowWindow(self.hwnd, SW_SHOW);
             }
+            self.session.restore_visible();
             self.set_hook_search_active(true);
             self.set_hook_overlay_active(true);
             self.request_redraw();
@@ -1215,17 +1121,18 @@ impl App {
             BeginPaint(self.hwnd, &raw mut paint);
         }
         let render_options = RenderOptions::from(&self.settings.appearance);
-        let selected_target = self.switcher.selected_task().map(|task| task.window_handle);
+        let switcher = self.session.switcher();
+        let selected_target = switcher.selected_task().map(|task| task.window_handle);
         if let Err(error) = self.renderer.draw(
             self.hwnd,
-            &self.switcher,
+            switcher,
             self.preview.as_ref().and_then(DwmPreview::frame),
             render_options,
             self.close_button.visual_state(selected_target),
         ) {
             eprintln!("Could not render the overlay: {error}");
         }
-        Renderer::draw_icons(self.hwnd, paint.hdc, &self.switcher, render_options);
+        Renderer::draw_icons(self.hwnd, paint.hdc, switcher, render_options);
         unsafe {
             // SAFETY: this exactly balances the successful BeginPaint call above.
             let _ended = EndPaint(self.hwnd, &raw const paint);
@@ -1234,7 +1141,8 @@ impl App {
 
     fn request_redraw(&mut self) {
         let source = self
-            .switcher
+            .session
+            .switcher()
             .selected_task()
             .map(|task| HWND(task.window_handle as *mut c_void));
         if let Some(preview) = &mut self.preview
@@ -1252,7 +1160,7 @@ impl App {
     }
 
     fn search_active(&self) -> bool {
-        self.settings.general.typed_search && self.is_visible()
+        self.session.search_active()
     }
 
     fn set_hook_search_active(&self, overlay_visible: bool) {
@@ -1279,10 +1187,7 @@ impl App {
     }
 
     fn is_visible(&self) -> bool {
-        unsafe {
-            // SAFETY: the HWND is live and IsWindowVisible has no pointer preconditions.
-            IsWindowVisible(self.hwnd).as_bool()
-        }
+        self.session.is_visible()
     }
 }
 
@@ -2057,31 +1962,21 @@ fn hook_settings(settings: &Settings) -> HookSettings {
     }
 }
 
+const fn switcher_session_settings(settings: &Settings) -> SwitcherSessionSettings {
+    SwitcherSessionSettings {
+        typed_search: settings.general.typed_search,
+        release_alt_switches: settings.general.release_alt_switches,
+        release_right_button_switches: settings.general.release_right_button_switches,
+    }
+}
+
 const fn key_was_previously_down(lparam: LPARAM) -> bool {
     let previous_key_state_mask = 1_isize << 30;
     lparam.0 & previous_key_state_mask != 0
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SelectedWindowCommand {
-    command: WindowCommand,
-    window_handle: isize,
-    process_identity: ProcessIdentity,
-}
-
-fn selected_window_command(
-    switcher: &Switcher,
-    command: WindowCommand,
-) -> Option<SelectedWindowCommand> {
-    switcher.selected_task().map(|task| SelectedWindowCommand {
-        command,
-        window_handle: task.window_handle,
-        process_identity: task.process_identity,
-    })
-}
-
 fn close_refresh_target_after_enumeration(
-    request: SelectedWindowCommand,
+    request: WindowCommandRequest,
     tasks: &[SwitchTask],
 ) -> Option<isize> {
     (request.command == WindowCommand::Close
@@ -2102,41 +1997,12 @@ fn select_hovered_position(switcher: &mut Switcher, position: usize) -> bool {
     switcher.select_visible_position(position) && switcher.selected_visible_index() != previous
 }
 
-fn prepare_switcher_for_open(switcher: &mut Switcher, tasks: impl IntoIterator<Item = SwitchTask>) {
-    switcher.clear_filter();
-    switcher.set_tasks(tasks);
-}
-
 fn close_target_for_hit(switcher: &Switcher, hit: Option<TaskListHit>) -> Option<isize> {
     let TaskListHit::CloseButton(position) = hit? else {
         return None;
     };
     let selected_position = switcher.selected_visible_index()?.checked_add(1)?;
     (position == selected_position).then_some(switcher.selected_task()?.window_handle)
-}
-
-fn take_activation_target(
-    action: InputAction,
-    state: &mut OverlayActivationState,
-    selected_window: Option<isize>,
-) -> Option<isize> {
-    let should_activate = match action {
-        InputAction::ActivateSelected => state.visible,
-        InputAction::AltReleased => {
-            state.release.alt_switches && state.visible && !state.context_menu_open
-        }
-        InputAction::RightButtonReleased => {
-            state.release.right_button_switches && state.visible && !state.context_menu_open
-        }
-        _ => false,
-    };
-    if !should_activate {
-        return None;
-    }
-
-    let target = selected_window?;
-    state.visible = false;
-    Some(target)
 }
 
 #[allow(
@@ -2214,28 +2080,8 @@ mod tests {
     }
 
     #[test]
-    fn close_command_targets_the_current_switcher_selection() {
-        let mut switcher = Switcher::default();
-        switcher.set_tasks(vec![
-            SwitchTask::new(1, 10, "Previously active", "first"),
-            SwitchTask::new(2, 20, "Selected", "second"),
-            SwitchTask::new(3, 30, "Unrelated", "third"),
-        ]);
-        assert!(switcher.select_visible_position(2));
-
-        assert_eq!(
-            selected_window_command(&switcher, WindowCommand::Close),
-            Some(SelectedWindowCommand {
-                command: WindowCommand::Close,
-                window_handle: 20,
-                process_identity: ProcessIdentity::default(),
-            })
-        );
-    }
-
-    #[test]
     fn accepted_close_schedules_another_refresh_when_the_first_snapshot_is_stale() {
-        let request = SelectedWindowCommand {
+        let request = WindowCommandRequest {
             command: WindowCommand::Close,
             window_handle: 20,
             process_identity: ProcessIdentity::default(),
@@ -2257,7 +2103,7 @@ mod tests {
 
         assert_eq!(
             close_refresh_target_after_enumeration(
-                SelectedWindowCommand {
+                WindowCommandRequest {
                     command: WindowCommand::Close,
                     window_handle: 10,
                     process_identity: ProcessIdentity::default(),
@@ -2268,7 +2114,7 @@ mod tests {
         );
         assert_eq!(
             close_refresh_target_after_enumeration(
-                SelectedWindowCommand {
+                WindowCommandRequest {
                     command: WindowCommand::Minimize,
                     window_handle: 20,
                     process_identity: ProcessIdentity::default(),
@@ -2304,33 +2150,6 @@ mod tests {
     }
 
     #[test]
-    fn function_key_commands_target_the_selected_item() {
-        let mut switcher = Switcher::default();
-        switcher.set_tasks([
-            SwitchTask::new(1, 10, "First", "first"),
-            SwitchTask::new(2, 20, "Selected", "selected"),
-        ]);
-        assert!(switcher.select_visible_position(2));
-
-        for expected_command in [
-            WindowCommand::Minimize,
-            WindowCommand::Maximize,
-            WindowCommand::Restore,
-            WindowCommand::Terminate,
-            WindowCommand::Run,
-        ] {
-            assert_eq!(
-                selected_window_command(&switcher, expected_command),
-                Some(SelectedWindowCommand {
-                    command: expected_command,
-                    window_handle: 20,
-                    process_identity: ProcessIdentity::default(),
-                })
-            );
-        }
-    }
-
-    #[test]
     fn hover_selection_requests_redraw_only_when_the_item_changes() {
         let mut switcher = Switcher::default();
         switcher.set_tasks(vec![
@@ -2346,108 +2165,6 @@ mod tests {
             assert!(!select_hovered_position(&mut switcher, 2));
         }
         assert!(!select_hovered_position(&mut switcher, 3));
-    }
-
-    #[test]
-    fn reopening_starts_with_an_empty_query_and_the_complete_new_list() {
-        let mut switcher = Switcher::default();
-        switcher.set_tasks([
-            SwitchTask::new(1, 10, "Editor", "editor"),
-            SwitchTask::new(2, 20, "Browser", "browser"),
-        ]);
-        switcher.set_filter("editor");
-        assert_eq!(switcher.visible_task_count(), 1);
-
-        prepare_switcher_for_open(
-            &mut switcher,
-            [
-                SwitchTask::new(1, 30, "Terminal", "terminal"),
-                SwitchTask::new(2, 40, "Files", "explorer"),
-            ],
-        );
-
-        assert!(switcher.filter().is_empty());
-        assert_eq!(switcher.visible_task_count(), 2);
-        assert_eq!(
-            switcher.selected_task().map(|task| task.window_handle),
-            Some(30)
-        );
-    }
-
-    #[test]
-    fn enter_activation_takes_the_selected_target_and_dismisses_overlay_once() {
-        let mut state = OverlayActivationState {
-            visible: true,
-            context_menu_open: false,
-            release: ReleaseActivationSettings {
-                alt_switches: true,
-                right_button_switches: true,
-            },
-        };
-
-        assert_eq!(
-            take_activation_target(InputAction::ActivateSelected, &mut state, Some(20)),
-            Some(20)
-        );
-        assert!(!state.visible);
-        assert_eq!(
-            take_activation_target(InputAction::ActivateSelected, &mut state, Some(20)),
-            None
-        );
-    }
-
-    #[test]
-    fn alt_release_activation_keeps_its_existing_application_state_rules() {
-        let mut state = OverlayActivationState {
-            visible: true,
-            context_menu_open: false,
-            release: ReleaseActivationSettings {
-                alt_switches: true,
-                right_button_switches: true,
-            },
-        };
-
-        assert_eq!(
-            take_activation_target(InputAction::AltReleased, &mut state, Some(20)),
-            Some(20)
-        );
-        assert!(!state.visible);
-    }
-
-    #[test]
-    fn right_button_release_activation_requires_its_setting_and_unobstructed_overlay() {
-        let mut state = OverlayActivationState {
-            visible: true,
-            context_menu_open: false,
-            release: ReleaseActivationSettings {
-                alt_switches: true,
-                right_button_switches: true,
-            },
-        };
-
-        assert_eq!(
-            take_activation_target(InputAction::RightButtonReleased, &mut state, Some(20)),
-            Some(20)
-        );
-
-        for (visible, context_menu_open, release_right_button_switches) in [
-            (false, false, true),
-            (true, true, true),
-            (true, false, false),
-        ] {
-            state = OverlayActivationState {
-                visible,
-                context_menu_open,
-                release: ReleaseActivationSettings {
-                    alt_switches: true,
-                    right_button_switches: release_right_button_switches,
-                },
-            };
-            assert_eq!(
-                take_activation_target(InputAction::RightButtonReleased, &mut state, Some(20)),
-                None
-            );
-        }
     }
 
     #[test]
