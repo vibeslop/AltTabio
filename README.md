@@ -21,14 +21,14 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 ## Installation
 
 1. Download the latest Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases).
-2. Extract it to a permanent folder.
+2. Extract it to a permanent folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
 3. Run `AltTabio.exe` and accept the Windows administrator prompt.
 
 AltTabio is distributed as one self-contained executable with no separate runtime installation.
 
 AltTabio requires administrator privileges for its global input hooks and window-management commands.
 
-Enabling **Autostart** creates a Windows scheduled task that launches the executable from its current location, so move it to its permanent folder first.
+Enabling **Autostart** creates a highest-privilege Windows scheduled task that launches the executable from its current location. If a non-elevated process can replace that file, it can gain administrator privileges at the next logon. Move AltTabio to an administrator-writable-only folder before enabling Autostart.
 
 ## Implementation
 
@@ -53,7 +53,7 @@ The build produces one `AltTabio.exe` with its icon, version information, per-mo
 | F6 | Maximize the selected window |
 | F7 | Restore the selected window |
 | F8 | Terminate the selected window's process |
-| F9 | Launch another instance of the selected application |
+| F9 | Launch another instance of the selected application without inheriting AltTabio's elevation |
 
 The tray icon provides access to settings and exit. Right-clicking the selected row opens its window-command menu.
 

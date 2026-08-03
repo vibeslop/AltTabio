@@ -1,6 +1,25 @@
 use std::ffi::OsString;
+use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+use windows::Win32::Security::{
+    ACL, AccessCheck, DACL_SECURITY_INFORMATION, DuplicateToken, GENERIC_MAPPING,
+    GROUP_SECURITY_INFORMATION, GetTokenInformation, OWNER_SECURITY_INFORMATION, PRIVILEGE_SET,
+    PSECURITY_DESCRIPTOR, SecurityImpersonation, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_QUERY,
+    TokenElevation,
+};
+use windows::Win32::Storage::FileSystem::{
+    DELETE, FILE_ADD_FILE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
+};
+use windows::Win32::System::Threading::{
+    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
+use windows::core::{BOOL, PCWSTR};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -44,6 +63,7 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     let output = if enabled {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
+        validate_autostart_target(&executable)?;
         run_owned(create_arguments(&executable))?
     } else {
         if !status()?.task_exists {
@@ -58,6 +78,197 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
             "Autostart task update failed: {}",
             output_details(&output)
         ))
+    }
+}
+
+fn validate_autostart_target(executable: &Path) -> Result<(), String> {
+    let token = shell_impersonation_token()?;
+    validate_autostart_target_with(executable, |path| executable_is_replaceable(path, token.0))
+}
+
+fn validate_autostart_target_with(
+    executable: &Path,
+    mut is_replaceable: impl FnMut(&Path) -> Result<bool, String>,
+) -> Result<(), String> {
+    if is_replaceable(executable)? {
+        Err(format!(
+            "Autostart was not enabled because non-elevated processes can replace {}. Move AltTabio to an administrator-writable-only folder first.",
+            executable.display()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn shell_impersonation_token() -> Result<OwnedHandle, String> {
+    let shell_window = unsafe {
+        // SAFETY: GetShellWindow has no preconditions and returns a borrowed handle.
+        GetShellWindow()
+    };
+    let mut shell_process_id = 0;
+    unsafe {
+        // SAFETY: shell_process_id is writable and shell_window is borrowed from Windows.
+        GetWindowThreadProcessId(shell_window, Some(&raw mut shell_process_id));
+    }
+    if shell_process_id == 0 {
+        return Err("Could not identify the non-elevated Windows shell process".to_owned());
+    }
+    let shell_process = unsafe {
+        // SAFETY: the process id belongs to the interactive shell and access is query-only.
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, shell_process_id)
+    }
+    .map(OwnedHandle)
+    .map_err(|error| format!("Could not open the non-elevated Windows shell process: {error}"))?;
+    let mut primary_token = HANDLE::default();
+    unsafe {
+        // SAFETY: shell_process is live and primary_token is writable.
+        OpenProcessToken(
+            shell_process.0,
+            TOKEN_DUPLICATE | TOKEN_QUERY,
+            &raw mut primary_token,
+        )
+    }
+    .map_err(|error| format!("Could not open the non-elevated Windows shell token: {error}"))?;
+    let primary_token = OwnedHandle(primary_token);
+    if token_is_elevated(primary_token.0)? {
+        return Err(
+            "The Windows shell token is elevated, so non-elevated path access cannot be verified"
+                .to_owned(),
+        );
+    }
+    let mut impersonation_token = HANDLE::default();
+    unsafe {
+        // SAFETY: primary_token is live and impersonation_token is writable. AccessCheck requires
+        // an impersonation token and does not retain it after returning.
+        DuplicateToken(
+            primary_token.0,
+            SecurityImpersonation,
+            &raw mut impersonation_token,
+        )
+    }
+    .map_err(|error| {
+        format!("Could not duplicate the non-elevated Windows shell token: {error}")
+    })?;
+    Ok(OwnedHandle(impersonation_token))
+}
+
+fn token_is_elevated(token: HANDLE) -> Result<bool, String> {
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned_bytes = 0;
+    unsafe {
+        // SAFETY: token is live, elevation is writable for its exact size, and returned_bytes is a
+        // writable scalar output. GetTokenInformation retains no pointers.
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            Some((&raw mut elevation).cast()),
+            u32::try_from(size_of::<TOKEN_ELEVATION>()).unwrap_or_default(),
+            &raw mut returned_bytes,
+        )
+    }
+    .map_err(|error| format!("Could not inspect the Windows shell token: {error}"))?;
+    Ok(elevation.TokenIsElevated != 0)
+}
+
+fn executable_is_replaceable(executable: &Path, token: HANDLE) -> Result<bool, String> {
+    let parent = executable
+        .parent()
+        .ok_or_else(|| "The AltTabio executable has no parent folder".to_owned())?;
+    let file_write = token_has_access(executable, token, FILE_WRITE_DATA.0)?
+        || token_has_access(executable, token, WRITE_DAC.0)?
+        || token_has_access(executable, token, WRITE_OWNER.0)?;
+    let file_delete = token_has_access(executable, token, DELETE.0)?;
+    let parent_add = token_has_access(parent, token, FILE_ADD_FILE.0)?;
+    let parent_delete = token_has_access(parent, token, FILE_DELETE_CHILD.0)?;
+    let parent_controls_acl = token_has_access(parent, token, WRITE_DAC.0)?
+        || token_has_access(parent, token, WRITE_OWNER.0)?;
+    Ok(file_write || parent_controls_acl || (parent_add && (file_delete || parent_delete)))
+}
+
+fn token_has_access(path: &Path, token: HANDLE, desired_access: u32) -> Result<bool, String> {
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    let mut dacl = std::ptr::null_mut::<ACL>();
+    unsafe {
+        // SAFETY: path is null-terminated and descriptor is writable. Windows allocates the
+        // returned descriptor with LocalAlloc; OwnedSecurityDescriptor frees it exactly once.
+        GetNamedSecurityInfoW(
+            PCWSTR(path.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&raw mut dacl),
+            None,
+            &raw mut descriptor,
+        )
+    }
+    .ok()
+    .map_err(|error| format!("Could not read autostart path permissions: {error}"))?;
+    if descriptor.is_invalid() {
+        return Err("Windows returned no security descriptor for the autostart path".to_owned());
+    }
+    let descriptor = OwnedSecurityDescriptor(descriptor);
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ.0,
+        GenericWrite: FILE_GENERIC_WRITE.0,
+        GenericExecute: FILE_GENERIC_EXECUTE.0,
+        GenericAll: FILE_ALL_ACCESS.0,
+    };
+    let privilege_words = 128;
+    let mut privileges = [0_usize; 128];
+    let mut privilege_bytes = u32::try_from(privilege_words * size_of::<usize>())
+        .map_err(|error| format!("Privilege buffer is too large: {error}"))?;
+    let mut granted_access = 0;
+    let mut access_status = BOOL::default();
+    unsafe {
+        // SAFETY: descriptor and token are live; mapping and all outputs are writable. The aligned
+        // privilege buffer is larger than a Windows privilege set and is not retained.
+        AccessCheck(
+            descriptor.0,
+            token,
+            desired_access,
+            &raw const mapping,
+            Some(privileges.as_mut_ptr().cast::<PRIVILEGE_SET>()),
+            &raw mut privilege_bytes,
+            &raw mut granted_access,
+            &raw mut access_status,
+        )
+    }
+    .map_err(|error| format!("Could not evaluate autostart path permissions: {error}"))?;
+    Ok(access_status.as_bool() && granted_access & desired_access == desired_access)
+}
+
+struct OwnedHandle(HANDLE);
+
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        let result = unsafe {
+            // SAFETY: this guard uniquely owns the HANDLE and closes it exactly once.
+            CloseHandle(self.0)
+        };
+        if let Err(error) = result {
+            eprintln!("Could not close an autostart security handle: {error}");
+        }
+    }
+}
+
+struct OwnedSecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+impl Drop for OwnedSecurityDescriptor {
+    fn drop(&mut self) {
+        let remaining = unsafe {
+            // SAFETY: GetNamedSecurityInfoW allocated this descriptor with LocalAlloc and ownership
+            // remains unique until this drop.
+            LocalFree(Some(HLOCAL(self.0.0)))
+        };
+        if !remaining.is_invalid() {
+            eprintln!("Could not release an autostart path security descriptor");
+        }
     }
 }
 
@@ -201,5 +412,14 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn autostart_rejects_an_executable_replaceable_by_non_elevated_processes() {
+        let executable = Path::new(r"C:\Users\Example\AltTabio\AltTabio.exe");
+
+        let result = validate_autostart_target_with(executable, |_| Ok(true));
+
+        assert!(result.is_err());
     }
 }

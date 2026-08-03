@@ -12,7 +12,9 @@ use crate::window_commands::{
 };
 use alttabio::input::{HookSettings, InputAction, WindowCommand};
 use alttabio::settings::{Settings, Theme};
-use alttabio::switcher::{SwitchTask, Switcher, WindowEligibility, is_switchable_window};
+use alttabio::switcher::{
+    ProcessIdentity, SwitchTask, Switcher, WindowEligibility, is_switchable_window,
+};
 use alttabio::theme::{ResolvedTheme, Rgb8, resolve};
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -34,7 +36,7 @@ use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUn
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_NAME_WIN32,
+    AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -492,7 +494,9 @@ impl App {
 
     fn handle_message(&mut self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         if message == WM_HOOK_ACTION {
-            if let Some(action) = decode_action(wparam, lparam) {
+            if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
+                && let Some(action) = decode_action(wparam, lparam)
+            {
                 self.handle_input_action(action);
             }
             return Some(LRESULT(0));
@@ -891,7 +895,11 @@ impl App {
         let Some(request) = selected_window_command(&self.switcher, command) else {
             return;
         };
-        if !execute_window_command(request.command, request.window_handle) {
+        if !execute_window_command(
+            request.command,
+            request.window_handle,
+            request.process_identity,
+        ) {
             eprintln!("Could not execute {command:?} for the selected window");
             return;
         }
@@ -1385,6 +1393,10 @@ const fn is_modal_dialog_message(message: u32) -> bool {
     matches!(message, WM_SHOW_SETTINGS | WM_SHOW_ABOUT)
 }
 
+const fn hook_actions_enabled(settings_dialog_open: bool, about_dialog_open: bool) -> bool {
+    !settings_dialog_open && !about_dialog_open
+}
+
 fn show_error_for_window(owner: HWND, message: &str) {
     let text = null_terminated(message);
     unsafe {
@@ -1574,14 +1586,11 @@ fn create_switch_task(
         return None;
     }
 
+    let (process_name, process_identity) = process_details(process_id);
     Some(
-        SwitchTask::new(
-            index + 1,
-            hwnd.0 as isize,
-            &title,
-            &process_name(process_id),
-        )
-        .with_icon_handle(window_icon(hwnd)),
+        SwitchTask::new(index + 1, hwnd.0 as isize, &title, &process_name)
+            .with_process_identity(process_identity)
+            .with_icon_handle(window_icon(hwnd)),
     )
 }
 
@@ -1663,14 +1672,15 @@ fn utf16_prefix(buffer: &[u16], written: i32) -> String {
     String::from_utf16_lossy(buffer.get(..length).unwrap_or_default())
 }
 
-fn process_name(process_id: u32) -> String {
+fn process_details(process_id: u32) -> (String, ProcessIdentity) {
     let handle = match unsafe {
         // SAFETY: OpenProcess is called with query-only access for the process id from EnumWindows.
         OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)
     } {
         Ok(handle) => OwnedHandle(handle),
-        Err(_) => return String::new(),
+        Err(_) => return (String::new(), ProcessIdentity::new(process_id, 0)),
     };
+    let started_at = process_started_at(handle.0).unwrap_or_default();
     let mut buffer = vec![0_u16; 32_768];
     let mut length = u32::try_from(buffer.len()).unwrap_or_default();
     let result = unsafe {
@@ -1684,15 +1694,35 @@ fn process_name(process_id: u32) -> String {
         )
     };
     if result.is_err() {
-        return String::new();
+        return (String::new(), ProcessIdentity::new(process_id, started_at));
     }
     let length = usize::try_from(length).unwrap_or_default();
     let path = String::from_utf16_lossy(buffer.get(..length).unwrap_or_default());
-    Path::new(&path)
+    let name = Path::new(&path)
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or_default()
-        .to_owned()
+        .to_owned();
+    (name, ProcessIdentity::new(process_id, started_at))
+}
+
+fn process_started_at(process: HANDLE) -> Option<u64> {
+    let mut creation = windows::Win32::Foundation::FILETIME::default();
+    let mut exit = windows::Win32::Foundation::FILETIME::default();
+    let mut kernel = windows::Win32::Foundation::FILETIME::default();
+    let mut user = windows::Win32::Foundation::FILETIME::default();
+    unsafe {
+        // SAFETY: process is live and queryable; all four FILETIME outputs are writable.
+        GetProcessTimes(
+            process,
+            &raw mut creation,
+            &raw mut exit,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    }
+    .ok()?;
+    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
 struct OwnedHandle(HANDLE);
@@ -2084,6 +2114,7 @@ const fn key_was_previously_down(lparam: LPARAM) -> bool {
 struct SelectedWindowCommand {
     command: WindowCommand,
     window_handle: isize,
+    process_identity: ProcessIdentity,
 }
 
 fn selected_window_command(
@@ -2093,6 +2124,7 @@ fn selected_window_command(
     switcher.selected_task().map(|task| SelectedWindowCommand {
         command,
         window_handle: task.window_handle,
+        process_identity: task.process_identity,
     })
 }
 
@@ -2223,6 +2255,13 @@ mod tests {
     }
 
     #[test]
+    fn modal_dialogs_gate_hook_actions() {
+        assert!(hook_actions_enabled(false, false));
+        assert!(!hook_actions_enabled(true, false));
+        assert!(!hook_actions_enabled(false, true));
+    }
+
+    #[test]
     fn visible_number_shortcuts_match_the_existing_keyboard_ranges() {
         assert_eq!(number_position(VK_1.0), Some(1));
         assert_eq!(number_position(VK_9.0), Some(9));
@@ -2273,6 +2312,7 @@ mod tests {
             Some(SelectedWindowCommand {
                 command: WindowCommand::Close,
                 window_handle: 20,
+                process_identity: ProcessIdentity::default(),
             })
         );
     }
@@ -2282,6 +2322,7 @@ mod tests {
         let request = SelectedWindowCommand {
             command: WindowCommand::Close,
             window_handle: 20,
+            process_identity: ProcessIdentity::default(),
         };
         let first_snapshot = vec![
             SwitchTask::new(1, 10, "Browser", "browser"),
@@ -2303,6 +2344,7 @@ mod tests {
                 SelectedWindowCommand {
                     command: WindowCommand::Close,
                     window_handle: 10,
+                    process_identity: ProcessIdentity::default(),
                 },
                 &tasks,
             ),
@@ -2313,6 +2355,7 @@ mod tests {
                 SelectedWindowCommand {
                     command: WindowCommand::Minimize,
                     window_handle: 20,
+                    process_identity: ProcessIdentity::default(),
                 },
                 &tasks,
             ),
@@ -2366,6 +2409,7 @@ mod tests {
                 Some(SelectedWindowCommand {
                     command: expected_command,
                     window_handle: 20,
+                    process_identity: ProcessIdentity::default(),
                 })
             );
         }

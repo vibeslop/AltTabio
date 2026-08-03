@@ -1,9 +1,23 @@
 //! Task filtering and selection behavior shared by every presentation adapter.
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProcessIdentity {
+    pub id: u32,
+    pub started_at: u64,
+}
+
+impl ProcessIdentity {
+    #[must_use]
+    pub const fn new(id: u32, started_at: u64) -> Self {
+        Self { id, started_at }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwitchTask {
     pub number: usize,
     pub window_handle: isize,
+    pub process_identity: ProcessIdentity,
     pub icon_handle: isize,
     pub title: String,
     pub process_name: String,
@@ -15,6 +29,7 @@ impl SwitchTask {
         Self {
             number,
             window_handle,
+            process_identity: ProcessIdentity::default(),
             icon_handle: 0,
             title: title.to_owned(),
             process_name: process_name.to_owned(),
@@ -24,6 +39,12 @@ impl SwitchTask {
     #[must_use]
     pub const fn with_icon_handle(mut self, icon_handle: isize) -> Self {
         self.icon_handle = icon_handle;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_process_identity(mut self, process_identity: ProcessIdentity) -> Self {
+        self.process_identity = process_identity;
         self
     }
 }

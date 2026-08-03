@@ -440,17 +440,28 @@ fn finish_callback(
     lparam: LPARAM,
     outcome: Option<HookOutcome>,
 ) -> LRESULT {
+    finish_callback_with(outcome, post_actions, reset_context, || {
+        call_next(code, wparam, lparam)
+    })
+}
+
+fn finish_callback_with(
+    outcome: Option<HookOutcome>,
+    post: impl FnOnce(HookOutcome) -> bool,
+    reset: impl FnOnce(),
+    call_next: impl FnOnce() -> LRESULT,
+) -> LRESULT {
     let Some(outcome) = outcome else {
-        return call_next(code, wparam, lparam);
+        return call_next();
     };
-    let posted = post_actions(outcome);
+    let posted = post(outcome);
     if !posted {
-        reset_context();
+        reset();
     }
-    if outcome.suppress {
+    if outcome.suppress && posted {
         LRESULT(1)
     } else {
-        call_next(code, wparam, lparam)
+        call_next()
     }
 }
 
@@ -828,6 +839,32 @@ mod tests {
         assert!(post_context_actions(&mut context, outcome, |_, _| true));
         assert!(overlay_active.load(Ordering::Acquire));
         assert!(search_active.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn failed_ui_delivery_forwards_the_suppressed_key_to_windows() {
+        let mut state = HookState::default();
+        let outcome = state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            HookSettings {
+                replace_alt_tab: true,
+                ..HookSettings::default()
+            },
+        );
+        let mut reset = false;
+        let next_result = LRESULT(42);
+
+        let result =
+            finish_callback_with(Some(outcome), |_| false, || reset = true, || next_result);
+
+        assert_eq!(result, next_result);
+        assert!(reset);
     }
 
     #[test]

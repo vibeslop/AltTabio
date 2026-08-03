@@ -1,18 +1,27 @@
 use alttabio::input::WindowCommand;
+use alttabio::switcher::ProcessIdentity;
 use std::ffi::c_void;
+use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::process::Command;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM};
+use windows::Win32::Security::{
+    GetTokenInformation, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_QUERY,
+    TokenElevation,
+};
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-    QueryFullProcessImageNameW, TerminateProcess,
+    CreateProcessWithTokenW, LOGON_WITH_PROFILE, OpenProcess, OpenProcessToken,
+    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTUPINFOW,
+    TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetWindowThreadProcessId, HMENU,
-    MF_STRING, PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow,
-    ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_CLOSE,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetShellWindow,
+    GetWindowThreadProcessId, HMENU, MF_STRING, PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+    SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TrackPopupMenu, WM_CLOSE,
 };
-use windows::core::{PWSTR, w};
+use windows::core::{PCWSTR, PWSTR, w};
 
 pub fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let menu = unsafe {
@@ -63,15 +72,19 @@ pub fn show_menu(owner: HWND) -> Option<WindowCommand> {
         .find_map(|(id, _, command)| (*id == selected).then_some(*command))
 }
 
-pub fn execute(command: WindowCommand, window_handle: isize) -> bool {
+pub fn execute(
+    command: WindowCommand,
+    window_handle: isize,
+    process_identity: ProcessIdentity,
+) -> bool {
     let window = HWND(window_handle as *mut c_void);
     match command {
         WindowCommand::Close => close_window(window),
         WindowCommand::Minimize => show_window(window, SW_MINIMIZE),
         WindowCommand::Maximize => show_window(window, SW_MAXIMIZE),
         WindowCommand::Restore => show_window(window, SW_RESTORE),
-        WindowCommand::Terminate => terminate_window_process(window),
-        WindowCommand::Run => run_window_process(window),
+        WindowCommand::Terminate => terminate_window_process(window, process_identity),
+        WindowCommand::Run => run_window_process(window, process_identity),
     }
 }
 
@@ -102,23 +115,16 @@ fn show_window(
     }
 }
 
-fn terminate_window_process(window: HWND) -> bool {
-    let Some(process_id) = process_id(window) else {
-        return false;
-    };
-    if process_id == std::process::id() {
+fn terminate_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
+    if process_identity.id == std::process::id() {
         return false;
     }
-    let process = match unsafe {
-        // SAFETY: the process id was read from the selected HWND and the requested access is
-        // limited to termination.
-        OpenProcess(PROCESS_TERMINATE, false, process_id)
-    } {
-        Ok(handle) => OwnedHandle(handle),
-        Err(error) => {
-            eprintln!("Could not open the selected process for termination: {error}");
-            return false;
-        }
+    let Some(process) = open_selected_process(
+        window,
+        process_identity,
+        PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+    ) else {
+        return false;
     };
     let result = unsafe {
         // SAFETY: the guard owns a live process handle with PROCESS_TERMINATE access.
@@ -132,34 +138,33 @@ fn terminate_window_process(window: HWND) -> bool {
     }
 }
 
-fn run_window_process(window: HWND) -> bool {
-    let Some(path) = executable_path(window) else {
+fn run_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
+    let Some(process) =
+        open_selected_process(window, process_identity, PROCESS_QUERY_LIMITED_INFORMATION)
+    else {
         return false;
     };
-    match Command::new(&path).spawn() {
-        Ok(_child) => true,
-        Err(error) => {
-            eprintln!("Could not start {}: {error}", path.display());
-            false
-        }
+    let Some(path) = executable_path(process.0) else {
+        return false;
+    };
+    if let Err(error) = launch_with_shell_token(&path) {
+        eprintln!(
+            "Could not start {} without elevation: {error}",
+            path.display()
+        );
+        return false;
     }
+    true
 }
 
-fn executable_path(window: HWND) -> Option<PathBuf> {
-    let process_id = process_id(window)?;
-    let process = unsafe {
-        // SAFETY: the process id was read from the selected HWND and access is query-only.
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)
-    }
-    .ok()
-    .map(OwnedHandle)?;
+fn executable_path(process: HANDLE) -> Option<PathBuf> {
     let mut buffer = vec![0_u16; 32_768];
     let mut length = u32::try_from(buffer.len()).ok()?;
     unsafe {
         // SAFETY: the process handle is live and query-only, while the UTF-16 buffer and length are
         // writable for the synchronous call.
         QueryFullProcessImageNameW(
-            process.0,
+            process,
             PROCESS_NAME_WIN32,
             PWSTR(buffer.as_mut_ptr()),
             &raw mut length,
@@ -170,6 +175,138 @@ fn executable_path(window: HWND) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf16_lossy(
         buffer.get(..length)?,
     )))
+}
+
+fn open_selected_process(
+    window: HWND,
+    expected: ProcessIdentity,
+    access: windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS,
+) -> Option<OwnedHandle> {
+    open_selected_process_with(
+        window,
+        expected,
+        |process_id| unsafe {
+            // SAFETY: process_id comes from the immutable switcher snapshot and the caller chooses
+            // the minimum access needed for this command.
+            OpenProcess(access, false, process_id).ok().map(OwnedHandle)
+        },
+        |process| process_started_at(process.0),
+        process_id,
+    )
+}
+
+fn open_selected_process_with<P>(
+    window: HWND,
+    expected: ProcessIdentity,
+    mut open: impl FnMut(u32) -> Option<P>,
+    mut started_at: impl FnMut(&P) -> Option<u64>,
+    mut current_process_id: impl FnMut(HWND) -> Option<u32>,
+) -> Option<P> {
+    if expected.id == 0 || expected.started_at == 0 || current_process_id(window)? != expected.id {
+        return None;
+    }
+    let process = open(expected.id)?;
+    if started_at(&process)? != expected.started_at || current_process_id(window)? != expected.id {
+        return None;
+    }
+    Some(process)
+}
+
+fn process_started_at(process: HANDLE) -> Option<u64> {
+    let mut creation = windows::Win32::Foundation::FILETIME::default();
+    let mut exit = windows::Win32::Foundation::FILETIME::default();
+    let mut kernel = windows::Win32::Foundation::FILETIME::default();
+    let mut user = windows::Win32::Foundation::FILETIME::default();
+    unsafe {
+        // SAFETY: process is live and queryable; all four FILETIME outputs are writable.
+        windows::Win32::System::Threading::GetProcessTimes(
+            process,
+            &raw mut creation,
+            &raw mut exit,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    }
+    .ok()?;
+    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+fn launch_with_shell_token(path: &std::path::Path) -> Result<(), String> {
+    let shell_window = unsafe {
+        // SAFETY: GetShellWindow has no preconditions and returns a borrowed handle.
+        GetShellWindow()
+    };
+    let shell_process_id = process_id(shell_window)
+        .ok_or_else(|| "the Windows shell process could not be identified".to_owned())?;
+    let shell_process = unsafe {
+        // SAFETY: the process id belongs to the current interactive shell and access is query-only.
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, shell_process_id)
+    }
+    .map(OwnedHandle)
+    .map_err(|error| format!("the Windows shell process could not be opened: {error}"))?;
+    let mut shell_token = HANDLE::default();
+    unsafe {
+        // SAFETY: shell_process is live and shell_token is writable. The requested rights are the
+        // minimum CreateProcessWithTokenW requires for a primary process token.
+        OpenProcessToken(
+            shell_process.0,
+            TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY,
+            &raw mut shell_token,
+        )
+    }
+    .map_err(|error| format!("the Windows shell token could not be opened: {error}"))?;
+    let shell_token = OwnedHandle(shell_token);
+    if token_is_elevated(shell_token.0)? {
+        return Err("the Windows shell token is elevated".to_owned());
+    }
+
+    let application = path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let mut startup = STARTUPINFOW {
+        cb: u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or_default(),
+        ..STARTUPINFOW::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    unsafe {
+        // SAFETY: the shell token is a live primary token; application is null-terminated; startup
+        // and process are writable for the synchronous creation call. No Rust references are kept.
+        CreateProcessWithTokenW(
+            shell_token.0,
+            LOGON_WITH_PROFILE,
+            PCWSTR(application.as_ptr()),
+            None,
+            PROCESS_CREATION_FLAGS::default(),
+            None,
+            PCWSTR::null(),
+            &raw mut startup,
+            &raw mut process,
+        )
+    }
+    .map_err(|error| format!("the process could not be created with the shell token: {error}"))?;
+    let _process = OwnedHandle(process.hProcess);
+    let _thread = OwnedHandle(process.hThread);
+    Ok(())
+}
+
+fn token_is_elevated(token: HANDLE) -> Result<bool, String> {
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned_bytes = 0;
+    unsafe {
+        // SAFETY: token is live, elevation is writable for its exact size, and returned_bytes is a
+        // writable scalar output. GetTokenInformation retains no pointers.
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            Some((&raw mut elevation).cast()),
+            u32::try_from(size_of::<TOKEN_ELEVATION>()).unwrap_or_default(),
+            &raw mut returned_bytes,
+        )
+    }
+    .map_err(|error| format!("the Windows shell token could not be inspected: {error}"))?;
+    Ok(elevation.TokenIsElevated != 0)
 }
 
 fn process_id(window: HWND) -> Option<u32> {
@@ -240,5 +377,42 @@ mod tests {
         let target = HWND(42_isize as *mut c_void);
 
         assert!(!execute_close_with(target, |_, _, _, _| false));
+    }
+
+    #[test]
+    fn stale_window_process_identity_is_not_opened_for_a_command() {
+        let target = HWND(42_isize as *mut c_void);
+        let expected = ProcessIdentity::new(100, 1_000);
+        let mut opened = false;
+
+        let process = open_selected_process_with(
+            target,
+            expected,
+            |_| {
+                opened = true;
+                Some(())
+            },
+            |()| Some(1_000),
+            |_| Some(200),
+        );
+
+        assert!(process.is_none());
+        assert!(!opened);
+    }
+
+    #[test]
+    fn reused_process_id_is_rejected_by_creation_time() {
+        let target = HWND(42_isize as *mut c_void);
+        let expected = ProcessIdentity::new(100, 1_000);
+
+        let process = open_selected_process_with(
+            target,
+            expected,
+            |_| Some(()),
+            |()| Some(2_000),
+            |_| Some(100),
+        );
+
+        assert!(process.is_none());
     }
 }
