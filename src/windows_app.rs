@@ -1,5 +1,5 @@
 use crate::about_dialog;
-use crate::hook::{HookThread, WM_HOOK_ACTION, decode_action};
+use crate::hook::{HookThread, WM_HOOK_ACTION, decode_action, decode_virtual_key};
 use crate::preview::DwmPreview;
 use crate::renderer::{CloseButtonVisualState, RenderOptions, Renderer, TaskListHit};
 use crate::settings_dialog;
@@ -10,7 +10,9 @@ use crate::tray::{TrayAction, TrayIcon, WM_TRAY_CALLBACK};
 use crate::window_commands::{
     execute as execute_window_command, show_menu as show_window_command_menu,
 };
-use alttabio::input::{HookSettings, InputAction, WindowCommand};
+use alttabio::input::{
+    HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
+};
 use alttabio::settings::{Settings, Theme};
 use alttabio::switcher::{
     ProcessIdentity, SwitchTask, Switcher, WindowEligibility, is_switchable_window,
@@ -41,9 +43,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetActiveWindow, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_0, VK_1, VK_9, VK_BACK, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F5, VK_F6,
-    VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD9, VK_RETURN, VK_RIGHT,
-    VK_SHIFT, VK_TAB, VK_UP,
+    TrackMouseEvent, VK_BACK, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
@@ -511,7 +511,7 @@ impl App {
         }
         match message {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
-                self.handle_key(wparam.0, lparam);
+                self.handle_focused_key(wparam.0, lparam);
                 Some(LRESULT(0))
             }
             WM_CHAR => {
@@ -811,9 +811,6 @@ impl App {
                     self.execute_selected(command);
                 }
             }
-            InputAction::KeyPressed(virtual_key) => {
-                self.handle_key(usize::from(virtual_key), LPARAM(0));
-            }
             InputAction::ActivateVisiblePosition(position) => {
                 if self.is_visible() && self.switcher.select_visible_position(position) {
                     self.activate_selected();
@@ -846,32 +843,18 @@ impl App {
         }
     }
 
-    fn handle_key(&mut self, virtual_key: usize, lparam: LPARAM) {
-        let key = u16::try_from(virtual_key).unwrap_or_default();
-        if let Some(position) = number_position(key) {
-            if self.switcher.select_visible_position(position) {
-                self.activate_selected();
-            }
+    fn handle_focused_key(&mut self, virtual_key: usize, lparam: LPARAM) {
+        let Ok(virtual_key) = u32::try_from(virtual_key) else {
             return;
+        };
+        let event = OverlayKeyEvent {
+            key: decode_virtual_key(virtual_key),
+            repeated: key_was_previously_down(lparam),
+            shift: key_is_down(VK_SHIFT.0),
+        };
+        if let Some(action) = overlay_key_action(event) {
+            self.handle_input_action(action);
         }
-        if let Some(command) = command_for_key_event(key, lparam) {
-            self.execute_selected(command);
-            return;
-        }
-        match key {
-            value if value == VK_RETURN.0 => self.activate_selected(),
-            value if value == VK_ESCAPE.0 => self.hide_overlay(),
-            value if value == VK_DOWN.0 || value == VK_RIGHT.0 => self.switcher.select_bounded(1),
-            value if value == VK_UP.0 || value == VK_LEFT.0 => self.switcher.select_bounded(-1),
-            value if value == VK_TAB.0 => {
-                self.switcher
-                    .select_next(if key_is_down(VK_SHIFT.0) { -1 } else { 1 });
-            }
-            value if value == VK_HOME.0 => self.switcher.select_first(),
-            value if value == VK_END.0 => self.switcher.select_last(),
-            _ => return,
-        }
-        self.request_redraw();
     }
 
     fn handle_character(&mut self, value: usize) {
@@ -2074,37 +2057,6 @@ fn hook_settings(settings: &Settings) -> HookSettings {
     }
 }
 
-fn number_position(virtual_key: u16) -> Option<usize> {
-    if (VK_1.0..=VK_9.0).contains(&virtual_key) {
-        return Some(usize::from(virtual_key - VK_0.0));
-    }
-    if (VK_NUMPAD1.0..=VK_NUMPAD9.0).contains(&virtual_key) {
-        return Some(usize::from(virtual_key - VK_NUMPAD0.0));
-    }
-    None
-}
-
-const fn command_for_key(virtual_key: u16) -> Option<WindowCommand> {
-    match virtual_key {
-        value if value == VK_F4.0 => Some(WindowCommand::Close),
-        value if value == VK_F5.0 => Some(WindowCommand::Minimize),
-        value if value == VK_F6.0 => Some(WindowCommand::Maximize),
-        value if value == VK_F7.0 => Some(WindowCommand::Restore),
-        value if value == VK_F8.0 => Some(WindowCommand::Terminate),
-        value if value == VK_F9.0 => Some(WindowCommand::Run),
-        _ => None,
-    }
-}
-
-fn command_for_key_event(virtual_key: u16, lparam: LPARAM) -> Option<WindowCommand> {
-    let command = command_for_key(virtual_key)?;
-    if command == WindowCommand::Close && key_was_previously_down(lparam) {
-        None
-    } else {
-        Some(command)
-    }
-}
-
 const fn key_was_previously_down(lparam: LPARAM) -> bool {
     let previous_key_state_mask = 1_isize << 30;
     lparam.0 & previous_key_state_mask != 0
@@ -2262,42 +2214,6 @@ mod tests {
     }
 
     #[test]
-    fn visible_number_shortcuts_match_the_existing_keyboard_ranges() {
-        assert_eq!(number_position(VK_1.0), Some(1));
-        assert_eq!(number_position(VK_9.0), Some(9));
-        assert_eq!(number_position(VK_NUMPAD1.0), Some(1));
-        assert_eq!(number_position(VK_NUMPAD9.0), Some(9));
-        assert_eq!(number_position(VK_0.0), None);
-    }
-
-    #[test]
-    fn function_keys_map_to_window_commands() {
-        assert_eq!(command_for_key(VK_F4.0), Some(WindowCommand::Close));
-        assert_eq!(command_for_key(VK_F5.0), Some(WindowCommand::Minimize));
-        assert_eq!(command_for_key(VK_F6.0), Some(WindowCommand::Maximize));
-        assert_eq!(command_for_key(VK_F7.0), Some(WindowCommand::Restore));
-        assert_eq!(command_for_key(VK_F8.0), Some(WindowCommand::Terminate));
-        assert_eq!(command_for_key(VK_F9.0), Some(WindowCommand::Run));
-        assert_eq!(command_for_key(VK_ESCAPE.0), None);
-    }
-
-    #[test]
-    fn repeated_f4_message_does_not_issue_another_close_command() {
-        let first_press = LPARAM(0);
-        let repeated_press = LPARAM(1_isize << 30);
-
-        assert_eq!(
-            command_for_key_event(VK_F4.0, first_press),
-            Some(WindowCommand::Close)
-        );
-        assert_eq!(command_for_key_event(VK_F4.0, repeated_press), None);
-        assert_eq!(
-            command_for_key_event(VK_F5.0, repeated_press),
-            Some(WindowCommand::Minimize)
-        );
-    }
-
-    #[test]
     fn close_command_targets_the_current_switcher_selection() {
         let mut switcher = Switcher::default();
         switcher.set_tasks(vec![
@@ -2396,16 +2312,15 @@ mod tests {
         ]);
         assert!(switcher.select_visible_position(2));
 
-        for (virtual_key, expected_command) in [
-            (VK_F5.0, WindowCommand::Minimize),
-            (VK_F6.0, WindowCommand::Maximize),
-            (VK_F7.0, WindowCommand::Restore),
-            (VK_F8.0, WindowCommand::Terminate),
-            (VK_F9.0, WindowCommand::Run),
+        for expected_command in [
+            WindowCommand::Minimize,
+            WindowCommand::Maximize,
+            WindowCommand::Restore,
+            WindowCommand::Terminate,
+            WindowCommand::Run,
         ] {
             assert_eq!(
-                command_for_key(virtual_key)
-                    .and_then(|command| selected_window_command(&switcher, command)),
+                selected_window_command(&switcher, expected_command),
                 Some(SelectedWindowCommand {
                     command: expected_command,
                     window_handle: 20,

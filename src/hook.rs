@@ -42,7 +42,6 @@ const ACTION_ALT_RELEASED: usize = 3;
 const ACTION_RIGHT_BUTTON_PRESSED: usize = 4;
 const ACTION_RIGHT_BUTTON_RELEASED: usize = 5;
 const ACTION_MOUSE_WHEEL: usize = 6;
-const ACTION_KEY_PRESSED: usize = 7;
 const ACTION_APPEND_SEARCH_CHARACTER: usize = 8;
 const ACTION_BACKSPACE_SEARCH: usize = 9;
 const ACTION_NAVIGATE: usize = 10;
@@ -193,7 +192,6 @@ pub fn decode_action(wparam: WPARAM, lparam: LPARAM) -> Option<InputAction> {
         ACTION_RIGHT_BUTTON_PRESSED => Some(InputAction::RightButtonPressed),
         ACTION_RIGHT_BUTTON_RELEASED => Some(InputAction::RightButtonReleased),
         ACTION_MOUSE_WHEEL => i32::try_from(lparam.0).ok().map(InputAction::MouseWheel),
-        ACTION_KEY_PRESSED => u16::try_from(lparam.0).ok().map(InputAction::KeyPressed),
         ACTION_APPEND_SEARCH_CHARACTER => u32::try_from(lparam.0)
             .ok()
             .and_then(char::from_u32)
@@ -365,7 +363,7 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     if is_own_replayed_input(data.dwExtraInfo) {
         return None;
     }
-    let key = map_key(data.vkCode);
+    let key = decode_virtual_key(data.vkCode);
     let modifiers = Modifiers {
         alt: data.flags.contains(LLKHF_ALTDOWN),
         left_windows: key_pressed(VK_LWIN.0),
@@ -517,10 +515,6 @@ fn post_action(target: HWND, action: InputAction) -> bool {
         InputAction::WindowCommand(command) => {
             (ACTION_WINDOW_COMMAND, isize::from(command.function_key()))
         }
-        InputAction::KeyPressed(virtual_key) => (
-            ACTION_KEY_PRESSED,
-            isize::try_from(virtual_key).unwrap_or_default(),
-        ),
         InputAction::ActivateVisiblePosition(position) => (
             ACTION_ACTIVATE_POSITION,
             isize::try_from(position).unwrap_or_default(),
@@ -692,7 +686,7 @@ fn translate_search_character(data: &KBDLLHOOKSTRUCT, target_thread_id: u32) -> 
     characters.next().is_none().then_some(character)
 }
 
-fn map_key(virtual_key: u32) -> Key {
+pub(crate) fn decode_virtual_key(virtual_key: u32) -> Key {
     match virtual_key {
         value if value == u32::from(VK_TAB.0) => Key::Tab,
         value if value == u32::from(VK_RETURN.0) => Key::Enter,
@@ -737,16 +731,16 @@ mod tests {
 
     #[test]
     fn arrow_virtual_keys_map_to_directional_hook_keys() {
-        assert_eq!(map_key(u32::from(VK_LEFT.0)), Key::LeftArrow);
-        assert_eq!(map_key(u32::from(VK_UP.0)), Key::UpArrow);
-        assert_eq!(map_key(u32::from(VK_RIGHT.0)), Key::RightArrow);
-        assert_eq!(map_key(u32::from(VK_DOWN.0)), Key::DownArrow);
+        assert_eq!(decode_virtual_key(u32::from(VK_LEFT.0)), Key::LeftArrow);
+        assert_eq!(decode_virtual_key(u32::from(VK_UP.0)), Key::UpArrow);
+        assert_eq!(decode_virtual_key(u32::from(VK_RIGHT.0)), Key::RightArrow);
+        assert_eq!(decode_virtual_key(u32::from(VK_DOWN.0)), Key::DownArrow);
     }
 
     #[test]
     fn windows_virtual_keys_preserve_their_physical_side() {
-        assert_eq!(map_key(u32::from(VK_LWIN.0)), Key::LeftWindows);
-        assert_eq!(map_key(u32::from(VK_RWIN.0)), Key::RightWindows);
+        assert_eq!(decode_virtual_key(u32::from(VK_LWIN.0)), Key::LeftWindows);
+        assert_eq!(decode_virtual_key(u32::from(VK_RWIN.0)), Key::RightWindows);
     }
 
     #[test]
@@ -869,10 +863,19 @@ mod tests {
 
     #[test]
     fn control_and_print_screen_virtual_keys_map_to_passthrough_hook_keys() {
-        assert_eq!(map_key(u32::from(VK_CONTROL.0)), Key::Control);
-        assert_eq!(map_key(u32::from(VK_LCONTROL.0)), Key::LeftControl);
-        assert_eq!(map_key(u32::from(VK_RCONTROL.0)), Key::RightControl);
-        assert_eq!(map_key(u32::from(VK_SNAPSHOT.0)), Key::PrintScreen);
+        assert_eq!(decode_virtual_key(u32::from(VK_CONTROL.0)), Key::Control);
+        assert_eq!(
+            decode_virtual_key(u32::from(VK_LCONTROL.0)),
+            Key::LeftControl
+        );
+        assert_eq!(
+            decode_virtual_key(u32::from(VK_RCONTROL.0)),
+            Key::RightControl
+        );
+        assert_eq!(
+            decode_virtual_key(u32::from(VK_SNAPSHOT.0)),
+            Key::PrintScreen
+        );
     }
 
     #[test]
@@ -889,7 +892,7 @@ mod tests {
 
     #[test]
     fn enter_virtual_key_and_activation_message_map_to_the_new_input_event() {
-        assert_eq!(map_key(u32::from(VK_RETURN.0)), Key::Enter);
+        assert_eq!(decode_virtual_key(u32::from(VK_RETURN.0)), Key::Enter);
         assert_eq!(
             decode_action(WPARAM(ACTION_ACTIVATE_SELECTED), LPARAM(0)),
             Some(InputAction::ActivateSelected)
@@ -898,8 +901,8 @@ mod tests {
 
     #[test]
     fn home_and_end_virtual_keys_map_to_boundary_keys() {
-        assert_eq!(map_key(u32::from(VK_HOME.0)), Key::Home);
-        assert_eq!(map_key(u32::from(VK_END.0)), Key::End);
+        assert_eq!(decode_virtual_key(u32::from(VK_HOME.0)), Key::Home);
+        assert_eq!(decode_virtual_key(u32::from(VK_END.0)), Key::End);
     }
 
     #[test]
@@ -916,7 +919,7 @@ mod tests {
 
     #[test]
     fn escape_virtual_key_maps_to_escape_input() {
-        assert_eq!(map_key(u32::from(VK_ESCAPE.0)), Key::Escape);
+        assert_eq!(decode_virtual_key(u32::from(VK_ESCAPE.0)), Key::Escape);
     }
 
     #[test]
@@ -929,7 +932,7 @@ mod tests {
 
     #[test]
     fn f4_maps_to_close_selected_across_the_hook_message_boundary() {
-        assert_eq!(map_key(u32::from(VK_F4.0)), Key::F4);
+        assert_eq!(decode_virtual_key(u32::from(VK_F4.0)), Key::F4);
         assert_eq!(
             decode_action(WPARAM(ACTION_CLOSE_SELECTED), LPARAM(0)),
             Some(InputAction::CloseSelected)
@@ -942,7 +945,7 @@ mod tests {
             [(VK_F5, 5), (VK_F6, 6), (VK_F7, 7), (VK_F8, 8), (VK_F9, 9)]
         {
             assert_eq!(
-                map_key(u32::from(virtual_key.0)),
+                decode_virtual_key(u32::from(virtual_key.0)),
                 Key::Function(function_key)
             );
         }

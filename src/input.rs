@@ -151,7 +151,6 @@ pub enum InputAction {
     DismissOverlay,
     CloseSelected,
     WindowCommand(WindowCommand),
-    KeyPressed(u16),
     ActivateVisiblePosition(usize),
     AltReleased,
     RightButtonPressed,
@@ -159,6 +158,50 @@ pub enum InputAction {
     MouseWheel(i32),
     AppendSearchCharacter(char),
     BackspaceSearch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OverlayKeyEvent {
+    pub key: Key,
+    pub repeated: bool,
+    pub shift: bool,
+}
+
+impl OverlayKeyEvent {
+    #[must_use]
+    pub const fn pressed(key: Key) -> Self {
+        Self {
+            key,
+            repeated: false,
+            shift: false,
+        }
+    }
+}
+
+#[must_use]
+pub const fn overlay_key_action(event: OverlayKeyEvent) -> Option<InputAction> {
+    match event.key {
+        Key::Tab => Some(InputAction::Switch(if event.shift { -1 } else { 1 })),
+        Key::LeftArrow | Key::UpArrow => Some(InputAction::Navigate(-1)),
+        Key::RightArrow | Key::DownArrow => Some(InputAction::Navigate(1)),
+        Key::Home => Some(InputAction::SelectFirst),
+        Key::End => Some(InputAction::SelectLast),
+        Key::Enter if !event.repeated => Some(InputAction::ActivateSelected),
+        Key::Escape if !event.repeated => Some(InputAction::DismissOverlay),
+        Key::F4 if !event.repeated => Some(InputAction::CloseSelected),
+        Key::Function(number) if !event.repeated => {
+            match WindowCommand::from_function_key(number) {
+                Some(command) => Some(InputAction::WindowCommand(command)),
+                None => None,
+            }
+        }
+        Key::Digit(position) | Key::NumpadDigit(position)
+            if !event.repeated && position >= 1 && position <= 9 =>
+        {
+            Some(InputAction::ActivateVisiblePosition(position as usize))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -352,20 +395,8 @@ impl HookState {
             };
         }
 
-        if pressed
-            && self.alt_switch_gesture_active
-            && alt_down
-            && let Some(position) = number_position(event.key)
-        {
-            self.alt_switch_gesture_active = false;
-            self.win_switch_gesture_active = false;
-            self.suppress_owned_key_release(event.key);
-            return HookOutcome::one(true, InputAction::ActivateVisiblePosition(position));
-        }
-
-        if pressed && self.win_switch_gesture_active && number_position(event.key).is_some() {
-            self.suppress_owned_key_release(event.key);
-            return HookOutcome::one(true, InputAction::KeyPressed(virtual_key(event.key)));
+        if let Some(outcome) = self.process_number_shortcut(event, key_was_down, alt_down) {
+            return outcome;
         }
 
         if let Some(outcome) = self.process_search_key(event, settings.search_active) {
@@ -374,10 +405,44 @@ impl HookState {
 
         if pressed && self.win_switch_gesture_active {
             self.suppress_owned_key_release(event.key);
-            return HookOutcome::one(true, InputAction::KeyPressed(virtual_key(event.key)));
+            return HookOutcome {
+                suppress: true,
+                ..HookOutcome::default()
+            };
         }
 
         HookOutcome::default()
+    }
+
+    fn process_number_shortcut(
+        &mut self,
+        event: KeyEvent,
+        key_was_down: bool,
+        alt_down: bool,
+    ) -> Option<HookOutcome> {
+        if event.transition != KeyTransition::Pressed {
+            return None;
+        }
+        let action @ InputAction::ActivateVisiblePosition(_) =
+            overlay_key_action(OverlayKeyEvent {
+                key: event.key,
+                repeated: key_was_down,
+                shift: self.shift_down(),
+            })?
+        else {
+            return None;
+        };
+        if self.alt_switch_gesture_active && alt_down {
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+            self.suppress_owned_key_release(event.key);
+            return Some(HookOutcome::one(true, action));
+        }
+        if self.win_switch_gesture_active {
+            self.suppress_owned_key_release(event.key);
+            return Some(HookOutcome::one(true, action));
+        }
+        None
     }
 
     #[must_use]
@@ -523,10 +588,12 @@ impl HookState {
             self.pending_windows_keys &= !pending_windows_keys;
             self.suppress_owned_key_release(key);
         }
-        Some(HookOutcome::one(
-            true,
-            InputAction::Switch(if self.shift_down() { -1 } else { 1 }),
-        ))
+        let action = overlay_key_action(OverlayKeyEvent {
+            key,
+            repeated: key_was_down,
+            shift: self.shift_down(),
+        })?;
+        Some(HookOutcome::one(true, action))
     }
 
     fn process_alt_gesture_release(&mut self, event: KeyEvent) -> Option<HookOutcome> {
@@ -638,10 +705,17 @@ impl HookState {
     }
 
     fn process_arrow(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        let delta = arrow_navigation(event.key)?;
+        let action = overlay_key_action(OverlayKeyEvent {
+            key: event.key,
+            repeated: false,
+            shift: self.shift_down(),
+        })?;
+        if !matches!(action, InputAction::Navigate(_)) {
+            return None;
+        }
         if event.transition == KeyTransition::Pressed && self.switch_gesture_active() {
             self.suppress_owned_key_release(event.key);
-            return Some(HookOutcome::one(true, InputAction::Navigate(delta)));
+            return Some(HookOutcome::one(true, action));
         }
         None
     }
@@ -663,7 +737,8 @@ impl HookState {
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
         self.suppress_owned_key_release(event.key);
-        Some(HookOutcome::one(true, InputAction::ActivateSelected))
+        let action = overlay_key_action(OverlayKeyEvent::pressed(event.key))?;
+        Some(HookOutcome::one(true, action))
     }
 
     fn process_f4(&mut self, event: KeyEvent) -> Option<HookOutcome> {
@@ -681,7 +756,8 @@ impl HookState {
         }
 
         self.suppress_owned_key_release(event.key);
-        Some(HookOutcome::one(true, InputAction::CloseSelected))
+        let action = overlay_key_action(OverlayKeyEvent::pressed(event.key))?;
+        Some(HookOutcome::one(true, action))
     }
 
     fn process_function_key(&mut self, event: KeyEvent) -> Option<HookOutcome> {
@@ -700,10 +776,9 @@ impl HookState {
         if !self.switch_gesture_active() {
             return None;
         }
-        let command = WindowCommand::from_function_key(number)?;
-
         self.suppress_owned_key_release(event.key);
-        Some(HookOutcome::one(true, InputAction::WindowCommand(command)))
+        let action = overlay_key_action(OverlayKeyEvent::pressed(Key::Function(number)))?;
+        Some(HookOutcome::one(true, action))
     }
 
     fn process_escape(&mut self, event: KeyEvent) -> Option<HookOutcome> {
@@ -731,11 +806,15 @@ impl HookState {
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
         self.suppress_owned_key_release(event.key);
-        Some(HookOutcome::one(true, InputAction::DismissOverlay))
+        let action = overlay_key_action(OverlayKeyEvent::pressed(event.key))?;
+        Some(HookOutcome::one(true, action))
     }
 
     fn process_boundary_key(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        let action = boundary_key_action(event.key)?;
+        let action = overlay_key_action(OverlayKeyEvent::pressed(event.key))?;
+        if !matches!(action, InputAction::SelectFirst | InputAction::SelectLast) {
+            return None;
+        }
         if event.transition == KeyTransition::Pressed && self.switch_gesture_active() {
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
@@ -861,31 +940,6 @@ const fn shift_mask(key: Key) -> Option<u8> {
     match key {
         Key::LeftShift => Some(1),
         Key::RightShift => Some(2),
-        _ => None,
-    }
-}
-
-const fn arrow_navigation(key: Key) -> Option<i32> {
-    match key {
-        Key::LeftArrow | Key::UpArrow => Some(-1),
-        Key::RightArrow | Key::DownArrow => Some(1),
-        _ => None,
-    }
-}
-
-const fn boundary_key_action(key: Key) -> Option<InputAction> {
-    match key {
-        Key::Home => Some(InputAction::SelectFirst),
-        Key::End => Some(InputAction::SelectLast),
-        _ => None,
-    }
-}
-
-const fn number_position(key: Key) -> Option<usize> {
-    match key {
-        Key::Digit(value) | Key::NumpadDigit(value) if value >= 1 && value <= 9 => {
-            Some(value as usize)
-        }
         _ => None,
     }
 }
@@ -1640,7 +1694,7 @@ mod tests {
         let trigger = state.process_key(KeyEvent::pressed(Key::Tab, windows), settings);
         let tab_released = state.process_key(KeyEvent::released(Key::Tab, windows), settings);
         let arrow_pressed = state.process_key(
-            KeyEvent::pressed(Key::Other(0x25), Modifiers::default()),
+            KeyEvent::pressed(Key::LeftArrow, Modifiers::default()),
             settings,
         );
         state.reset_gestures();
@@ -1649,7 +1703,7 @@ mod tests {
             settings,
         );
         let arrow_released = state.process_key(
-            KeyEvent::released(Key::Other(0x25), Modifiers::default()),
+            KeyEvent::released(Key::LeftArrow, Modifiers::default()),
             settings,
         );
         let background_key = state.process_key(
@@ -1668,7 +1722,7 @@ mod tests {
             arrow_pressed,
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::KeyPressed(0x25)), None],
+                actions: [Some(InputAction::Navigate(-1)), None],
             }
         );
         assert_eq!(
@@ -2538,5 +2592,81 @@ mod tests {
                 )
                 .suppress
         );
+    }
+
+    #[test]
+    fn overlay_numbers_produce_semantic_activation_actions() {
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::Digit(3))),
+            Some(InputAction::ActivateVisiblePosition(3))
+        );
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::NumpadDigit(9))),
+            Some(InputAction::ActivateVisiblePosition(9))
+        );
+    }
+
+    #[test]
+    fn overlay_navigation_keys_produce_semantic_actions() {
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::Tab)),
+            Some(InputAction::Switch(1))
+        );
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent {
+                key: Key::Tab,
+                repeated: true,
+                shift: true,
+            }),
+            Some(InputAction::Switch(-1))
+        );
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::LeftArrow)),
+            Some(InputAction::Navigate(-1))
+        );
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::RightArrow)),
+            Some(InputAction::Navigate(1))
+        );
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::Home)),
+            Some(InputAction::SelectFirst)
+        );
+        assert_eq!(
+            overlay_key_action(OverlayKeyEvent::pressed(Key::End)),
+            Some(InputAction::SelectLast)
+        );
+    }
+
+    #[test]
+    fn overlay_one_shot_keys_ignore_repeated_messages() {
+        let cases = [
+            (Key::Enter, InputAction::ActivateSelected),
+            (Key::Escape, InputAction::DismissOverlay),
+            (Key::F4, InputAction::CloseSelected),
+            (
+                Key::Function(5),
+                InputAction::WindowCommand(WindowCommand::Minimize),
+            ),
+            (
+                Key::Function(9),
+                InputAction::WindowCommand(WindowCommand::Run),
+            ),
+        ];
+
+        for (key, action) in cases {
+            assert_eq!(
+                overlay_key_action(OverlayKeyEvent::pressed(key)),
+                Some(action)
+            );
+            assert_eq!(
+                overlay_key_action(OverlayKeyEvent {
+                    key,
+                    repeated: true,
+                    shift: false,
+                }),
+                None
+            );
+        }
     }
 }
