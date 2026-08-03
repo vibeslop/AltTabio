@@ -20,9 +20,9 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 
 ## Installation
 
-1. Download `AltTabio.exe` from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases).
-2. Put it in a permanent folder.
-3. Run it and accept the Windows administrator prompt.
+1. Download the latest Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases).
+2. Extract it to a permanent folder.
+3. Run `AltTabio.exe` and accept the Windows administrator prompt.
 
 AltTabio is distributed as one self-contained executable with no separate runtime installation.
 
