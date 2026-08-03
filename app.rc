@@ -1,0 +1,68 @@
+#define RT_MANIFEST 24
+#define IDI_APP_AZURE 1
+#define IDI_APP_COPPER 2
+#define IDI_APP_EMBER 3
+#define IDI_APP_INDIGO 4
+#define IDI_APP_ORCHID 5
+#define IDI_APP_ROSEWOOD 6
+#define IDI_APP_VERMILION 7
+#define IDI_APP_VIOLET 8
+#define IDI_TRAY_AZURE 101
+#define IDI_TRAY_COPPER 102
+#define IDI_TRAY_EMBER 103
+#define IDI_TRAY_INDIGO 104
+#define IDI_TRAY_ORCHID 105
+#define IDI_TRAY_ROSEWOOD 106
+#define IDI_TRAY_VERMILION 107
+#define IDI_TRAY_VIOLET 108
+
+IDI_APP_AZURE ICON "assets/icons/azure/AltTabio-azure.ico"
+IDI_APP_COPPER ICON "assets/icons/copper/AltTabio-copper.ico"
+IDI_APP_EMBER ICON "assets/icons/ember/AltTabio-ember.ico"
+IDI_APP_INDIGO ICON "assets/icons/indigo/AltTabio-indigo.ico"
+IDI_APP_ORCHID ICON "assets/icons/orchid/AltTabio-orchid.ico"
+IDI_APP_ROSEWOOD ICON "assets/icons/rosewood/AltTabio-rosewood.ico"
+IDI_APP_VERMILION ICON "assets/icons/vermilion/AltTabio-vermilion.ico"
+IDI_APP_VIOLET ICON "assets/icons/violet/AltTabio-violet.ico"
+IDI_TRAY_AZURE ICON "assets/icons/azure/AltTabio-azure-tray.ico"
+IDI_TRAY_COPPER ICON "assets/icons/copper/AltTabio-copper-tray.ico"
+IDI_TRAY_EMBER ICON "assets/icons/ember/AltTabio-ember-tray.ico"
+IDI_TRAY_INDIGO ICON "assets/icons/indigo/AltTabio-indigo-tray.ico"
+IDI_TRAY_ORCHID ICON "assets/icons/orchid/AltTabio-orchid-tray.ico"
+IDI_TRAY_ROSEWOOD ICON "assets/icons/rosewood/AltTabio-rosewood-tray.ico"
+IDI_TRAY_VERMILION ICON "assets/icons/vermilion/AltTabio-vermilion-tray.ico"
+IDI_TRAY_VIOLET ICON "assets/icons/violet/AltTabio-violet-tray.ico"
+#ifdef DEVELOPMENT_BUILD
+1 RT_MANIFEST "app.dev.manifest"
+#else
+1 RT_MANIFEST "app.manifest"
+#endif
+
+1 VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "VibeSlop\0"
+            VALUE "FileDescription", "AltTabio Windows switcher\0"
+            VALUE "FileVersion", "1.0.0\0"
+            VALUE "InternalName", "AltTabio\0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 VibeSlop\0"
+            VALUE "OriginalFilename", "AltTabio.exe\0"
+            VALUE "ProductName", "AltTabio\0"
+            VALUE "ProductVersion", "1.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

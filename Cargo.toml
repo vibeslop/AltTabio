@@ -1,0 +1,62 @@
+[package]
+name = "alttabio"
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+description = "AltTabio Windows switcher"
+repository = "https://github.com/vibeslop/AltTabio"
+publish = false
+
+[features]
+dev-manifest = []
+
+[lib]
+path = "src/alttabio.rs"
+
+[[bin]]
+name = "AltTabio"
+path = "src/main.rs"
+
+[dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-numerics = "0.3.1"
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+expect_used = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = "z"
+panic = "unwind"
+strip = "symbols"
+
+[profile.release-dev]
+inherits = "release"
