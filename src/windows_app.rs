@@ -1043,6 +1043,10 @@ impl App {
                 return;
             }
         }
+        if !self.session.is_visible() {
+            self.hide_overlay();
+            return;
+        }
         self.reset_mouse_selection();
         if let Err(error) = position_on_cursor_monitor(self.hwnd) {
             eprintln!("Could not position the overlay: {error}");

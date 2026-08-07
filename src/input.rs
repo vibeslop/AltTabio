@@ -2595,6 +2595,72 @@ mod tests {
     }
 
     #[test]
+    fn rejected_open_reset_allows_a_later_alt_tab_gesture() {
+        let mut state = HookState::default();
+        let settings = HookSettings::default();
+
+        assert!(
+            state
+                .process_key(KeyEvent::pressed(Key::Alt, ALT), settings)
+                .suppress
+        );
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings),
+            HookOutcome {
+                suppress: true,
+                actions: [Some(InputAction::Switch(1)), None],
+            }
+        );
+
+        state.set_overlay_active(true);
+        state.set_overlay_active(false);
+        state.reset_gestures();
+
+        assert_eq!(
+            state.process_key(KeyEvent::released(Key::Tab, ALT), settings),
+            HookOutcome {
+                suppress: true,
+                ..HookOutcome::default()
+            }
+        );
+        assert_eq!(
+            state.process_key(KeyEvent::released(Key::Alt, Modifiers::default()), settings),
+            HookOutcome {
+                suppress: true,
+                ..HookOutcome::default()
+            }
+        );
+
+        assert!(
+            state
+                .process_key(KeyEvent::pressed(Key::Alt, ALT), settings)
+                .suppress
+        );
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings),
+            HookOutcome {
+                suppress: true,
+                actions: [Some(InputAction::Switch(1)), None],
+            }
+        );
+        state.set_overlay_active(true);
+        assert_eq!(
+            state.process_key(KeyEvent::released(Key::Tab, ALT), settings),
+            HookOutcome {
+                suppress: true,
+                ..HookOutcome::default()
+            }
+        );
+        assert_eq!(
+            state.process_key(KeyEvent::released(Key::Alt, Modifiers::default()), settings),
+            HookOutcome {
+                suppress: true,
+                actions: [Some(InputAction::AltReleased), None],
+            }
+        );
+    }
+
+    #[test]
     fn overlay_numbers_produce_semantic_activation_actions() {
         assert_eq!(
             overlay_key_action(OverlayKeyEvent::pressed(Key::Digit(3))),

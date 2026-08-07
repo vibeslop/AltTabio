@@ -156,7 +156,7 @@ impl SwitcherSession {
         if let Some(delta) = selection_delta {
             self.switcher.select_next(delta);
         }
-        self.visible = true;
+        self.visible = self.switcher.visible_task_count() != 0;
     }
 
     #[must_use]
@@ -501,6 +501,50 @@ mod tests {
         );
         assert_eq!(
             session.handle_input(InputAction::ActivateSelected),
+            SwitcherEffect::Activate(20)
+        );
+        assert!(!session.is_visible());
+    }
+
+    #[test]
+    fn empty_open_dismisses_and_allows_a_later_successful_invocation() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+
+        assert_eq!(
+            session.handle_input(InputAction::Switch(1)),
+            SwitcherEffect::Open {
+                selection_delta: Some(1)
+            }
+        );
+        session.open([], Some(1));
+
+        assert!(!session.is_visible());
+        assert_eq!(
+            session.handle_input(InputAction::AltReleased),
+            SwitcherEffect::None
+        );
+        assert_eq!(
+            session.handle_input(InputAction::Switch(1)),
+            SwitcherEffect::Open {
+                selection_delta: Some(1)
+            }
+        );
+
+        session.open(tasks(), Some(1));
+        assert!(session.is_visible());
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(20)
+        );
+        assert_eq!(
+            session.handle_input(InputAction::AltReleased),
             SwitcherEffect::Activate(20)
         );
         assert!(!session.is_visible());
