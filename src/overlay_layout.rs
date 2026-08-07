@@ -20,7 +20,7 @@ pub fn layout_scale(window_dpi: u32) -> f32 {
 pub struct OverlayLayout {
     pub outer_padding: f32,
     pub list_width_fraction: f32,
-    pub minimum_list_width: f32,
+    pub minimum_list_pixel_width: f32,
     pub row_height: f32,
     pub row_gap: f32,
     pub number_width: f32,
@@ -36,8 +36,10 @@ pub struct OverlayLayout {
 
 impl OverlayLayout {
     #[must_use]
-    pub fn list_width(self, client_width: f32) -> f32 {
-        (client_width * self.list_width_fraction).max(self.minimum_list_width)
+    pub fn list_width(self, client_width: f32, scale: f32) -> f32 {
+        let scale = scale.max(1.0);
+        let proportional_pixel_width = (client_width * self.list_width_fraction * scale).round();
+        proportional_pixel_width.max(self.minimum_list_pixel_width) / scale
     }
 
     #[must_use]
@@ -81,7 +83,7 @@ pub const fn for_compact_list(compact: bool) -> OverlayLayout {
         OverlayLayout {
             outer_padding: 18.0,
             list_width_fraction: 0.27,
-            minimum_list_width: 260.0,
+            minimum_list_pixel_width: 260.0,
             row_height: 44.0,
             row_gap: 2.0,
             number_width: 30.0,
@@ -98,7 +100,7 @@ pub const fn for_compact_list(compact: bool) -> OverlayLayout {
         OverlayLayout {
             outer_padding: 20.0,
             list_width_fraction: 0.46,
-            minimum_list_width: 320.0,
+            minimum_list_pixel_width: 320.0,
             row_height: 58.0,
             row_gap: 6.0,
             number_width: 38.0,
@@ -123,8 +125,31 @@ mod tests {
         let compact = for_compact_list(true);
         let roomy = for_compact_list(false);
 
-        assert!((compact.list_width(1_920.0) - 518.4).abs() < 0.01);
-        assert!((roomy.list_width(1_920.0) - 883.2).abs() < 0.01);
+        assert!((compact.list_width(1_920.0, 1.0) - 518.0).abs() < 0.01);
+        assert!((roomy.list_width(1_920.0, 1.0) - 883.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn compact_list_width_keeps_its_physical_proportion_at_common_display_scales() {
+        let layout = for_compact_list(true);
+        let client_pixel_width = 1_260.0;
+        let expected_list_right = 340.0;
+
+        for window_dpi in [96, 120, 144, 168, 192] {
+            let scale = layout_scale(window_dpi);
+            let client_width = client_pixel_width / scale;
+            let list_right = (layout.list_width(client_width, scale) * scale).round();
+
+            assert!(
+                (list_right - expected_list_right).abs() < f32::EPSILON,
+                "compact list edge changed at {window_dpi} DPI: expected {expected_list_right}, got {list_right}"
+            );
+            let divider_right = (list_right + (layout.outer_padding * scale)) / client_pixel_width;
+            assert!(
+                (0.28..0.30).contains(&divider_right),
+                "divider stopped occupying a little less than one third at {window_dpi} DPI"
+            );
+        }
     }
 
     #[test]
@@ -160,7 +185,7 @@ mod tests {
         let scale = layout_scale(192);
         let client_pixel_width = 2_400.0;
         let client_width = client_pixel_width / scale;
-        let list_right = layout.list_width(client_width);
+        let list_right = layout.list_width(client_width, scale);
         let content_left = (layout.outer_padding
             + layout.number_width
             + layout.icon_slot_width

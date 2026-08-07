@@ -247,6 +247,12 @@ impl Renderer {
             GetDpiForWindow(hwnd)
         };
         let scale = layout_scale(window_dpi);
+        let target_dpi = f32::from(layout_dpi(window_dpi));
+        unsafe {
+            // SAFETY: the target is valid on this UI thread and both DPI values are finite and
+            // positive, keeping its logical coordinate space synchronized with the live window.
+            resources.target.SetDpi(target_dpi, target_dpi);
+        }
         let draw_result = draw_switcher(
             resources,
             text,
@@ -517,7 +523,7 @@ fn draw_switcher(
         target.GetSize()
     };
     let layout = for_compact_list(options.compact_list);
-    let list_width = layout.list_width(size.width);
+    let list_width = layout.list_width(size.width, scale);
     let visible_rows = layout.visible_row_count(size.height);
     let list_top = layout.list_top();
     let start = switcher.visible_range(visible_rows).start;
@@ -746,16 +752,17 @@ fn close_glyph_geometry(
     clippy::cast_sign_loss,
     reason = "logical coordinates are bounded to the small on-screen task list"
 )]
-fn hit_test_task_list(
+fn hit_test_task_list_at_scale(
     switcher: &mut Switcher,
     client_width: f32,
     client_height: f32,
     x: f32,
     y: f32,
     compact_list: bool,
+    scale: f32,
 ) -> Option<TaskListHit> {
     let layout = for_compact_list(compact_list);
-    let list_width = layout.list_width(client_width);
+    let list_width = layout.list_width(client_width, scale);
     let list_top = layout.list_top();
     if x < layout.outer_padding || x >= list_width || y < list_top {
         return None;
@@ -791,6 +798,26 @@ fn hit_test_task_list(
     }
 }
 
+#[cfg(test)]
+fn hit_test_task_list(
+    switcher: &mut Switcher,
+    client_width: f32,
+    client_height: f32,
+    x: f32,
+    y: f32,
+    compact_list: bool,
+) -> Option<TaskListHit> {
+    hit_test_task_list_at_scale(
+        switcher,
+        client_width,
+        client_height,
+        x,
+        y,
+        compact_list,
+        1.0,
+    )
+}
+
 #[allow(
     clippy::cast_precision_loss,
     reason = "Win32 client coordinates and DPI values are small integers represented as f32"
@@ -802,14 +829,16 @@ fn hit_test_task_list_pixels(
     window_dpi: u32,
     compact_list: bool,
 ) -> Option<TaskListHit> {
-    let scale = 1.0 / layout_scale(window_dpi);
-    hit_test_task_list(
+    let scale = layout_scale(window_dpi);
+    let logical_scale = 1.0 / scale;
+    hit_test_task_list_at_scale(
         switcher,
-        client_pixels.0 as f32 * scale,
-        client_pixels.1 as f32 * scale,
-        point_pixels.0 as f32 * scale,
-        point_pixels.1 as f32 * scale,
+        client_pixels.0 as f32 * logical_scale,
+        client_pixels.1 as f32 * logical_scale,
+        point_pixels.0 as f32 * logical_scale,
+        point_pixels.1 as f32 * logical_scale,
         compact_list,
+        scale,
     )
 }
 
@@ -1057,7 +1086,7 @@ mod tests {
             let row_bounds = D2D_RECT_F {
                 left: layout.outer_padding,
                 top: layout.outer_padding,
-                right: layout.list_width(900.0),
+                right: layout.list_width(900.0, scale),
                 bottom: layout.outer_padding + layout.row_height,
             };
             let hit_target = close_button_bounds(row_bounds, layout);
@@ -1205,7 +1234,7 @@ mod tests {
         let row_bounds = D2D_RECT_F {
             left: layout.outer_padding,
             top: layout.list_top(),
-            right: layout.list_width(900.0),
+            right: layout.list_width(900.0, scale),
             bottom: layout.list_top() + layout.row_height,
         };
         let hit_target = close_button_bounds(row_bounds, layout);
@@ -1369,7 +1398,7 @@ mod tests {
         visible_start: usize,
     ) -> Option<TaskListHit> {
         let layout = for_compact_list(compact_list);
-        let list_width = layout.list_width(client_width);
+        let list_width = layout.list_width(client_width, layout_scale(120));
         let list_top = layout.list_top();
         if x < layout.outer_padding || x >= list_width || y < list_top {
             return None;

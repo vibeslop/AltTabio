@@ -88,7 +88,7 @@ impl DwmPreview {
         let scale = layout_scale(window_dpi);
         let layout = for_compact_list(self.compact_list);
         let logical_width = width as f32 / scale;
-        let list_right = (layout.list_width(logical_width) * scale).round() as i32;
+        let list_right = (layout.list_width(logical_width, scale) * scale).round() as i32;
         let host = RECT {
             left: list_right + (padding * 2),
             top: padding,
