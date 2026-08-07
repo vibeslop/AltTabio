@@ -142,6 +142,11 @@ pub enum MouseEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayedMouseEvent {
+    RightButtonReleased,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Switch(i32),
     Navigate(i32),
@@ -276,6 +281,7 @@ pub struct HookState {
     pending_alt_keys: u8,
     pending_windows_keys: u8,
     replayed_key_events: [Option<ReplayedKeyEvent>; 3],
+    replayed_mouse_event: Option<ReplayedMouseEvent>,
     overlay_active: bool,
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
@@ -299,11 +305,24 @@ impl HookState {
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
+        // The synthetic release already balanced the forwarded down. Keep owning the later
+        // physical release so a rejected or dismissed overlay cannot leak a duplicate button-up.
+        if self.right_button != RightButtonState::WheelGesture {
+            self.right_button = RightButtonState::Released;
+        }
+    }
+
+    pub fn abandon_right_button_gesture(&mut self) {
         self.right_button = RightButtonState::Released;
+        self.replayed_mouse_event = None;
     }
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
         core::mem::take(&mut self.replayed_key_events)
+    }
+
+    pub fn take_replayed_mouse_event(&mut self) -> Option<ReplayedMouseEvent> {
+        self.replayed_mouse_event.take()
     }
 
     #[must_use]
@@ -470,6 +489,7 @@ impl HookState {
                     HookOutcome::one(true, wheel)
                 } else {
                     self.right_button = RightButtonState::WheelGesture;
+                    self.replayed_mouse_event = Some(ReplayedMouseEvent::RightButtonReleased);
                     HookOutcome::two(true, InputAction::RightButtonPressed, wheel)
                 }
             }
@@ -1046,12 +1066,46 @@ mod tests {
             }
         );
         assert_eq!(
+            state.take_replayed_mouse_event(),
+            Some(ReplayedMouseEvent::RightButtonReleased)
+        );
+        assert_eq!(
             state.process_mouse(MouseEvent::Wheel(-120), settings),
             HookOutcome {
                 suppress: true,
                 actions: [Some(InputAction::MouseWheel(-1)), None],
             }
         );
+        assert_eq!(
+            state.process_mouse(MouseEvent::RightButtonReleased, settings),
+            HookOutcome {
+                suppress: true,
+                actions: [Some(InputAction::RightButtonReleased), None],
+            }
+        );
+    }
+
+    #[test]
+    fn rejected_open_reset_keeps_the_replayed_right_button_release_owned() {
+        let mut state = HookState::default();
+        let settings = HookSettings::default();
+
+        assert_eq!(
+            state.process_mouse(MouseEvent::RightButtonPressed, settings),
+            HookOutcome::default()
+        );
+        assert!(
+            state
+                .process_mouse(MouseEvent::Wheel(120), settings)
+                .suppress
+        );
+        assert_eq!(
+            state.take_replayed_mouse_event(),
+            Some(ReplayedMouseEvent::RightButtonReleased)
+        );
+
+        state.reset_gestures();
+
         assert_eq!(
             state.process_mouse(MouseEvent::RightButtonReleased, settings),
             HookOutcome {

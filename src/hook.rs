@@ -1,6 +1,6 @@
 use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, Key, KeyEvent, KeyTransition, Modifiers,
-    MouseEvent, ReplayedKeyEvent,
+    MouseEvent, ReplayedKeyEvent, ReplayedMouseEvent,
 };
 use std::cell::RefCell;
 use std::sync::mpsc::{self, SyncSender};
@@ -14,11 +14,12 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyboardLayout, GetKeyboardState, INPUT, INPUT_0, INPUT_KEYBOARD,
-    KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, SendInput, ToUnicodeEx,
-    VIRTUAL_KEY, VK_0, VK_1, VK_9, VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F5,
-    VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN,
-    VK_MENU, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD9, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
-    VK_RSHIFT, VK_RWIN, VK_SNAPSHOT, VK_TAB, VK_UP,
+    INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput, ToUnicodeEx, VIRTUAL_KEY, VK_0, VK_1, VK_9,
+    VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9,
+    VK_HOME, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD1,
+    VK_NUMPAD9, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SNAPSHOT,
+    VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
@@ -401,25 +402,36 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
 }
 
 fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> {
+    let data = unsafe {
+        // SAFETY: for a nonnegative low-level mouse hook code, Windows guarantees lParam points to
+        // an MSLLHOOKSTRUCT for the callback duration.
+        (lparam.0 as *const MSLLHOOKSTRUCT).as_ref()
+    }?;
+    if is_own_replayed_input(data.dwExtraInfo) {
+        return None;
+    }
     let event = match u32::try_from(wparam.0).ok()? {
         WM_RBUTTONDOWN => MouseEvent::RightButtonPressed,
         WM_RBUTTONUP => MouseEvent::RightButtonReleased,
-        WM_MOUSEWHEEL => {
-            let data = unsafe {
-                // SAFETY: for a nonnegative low-level mouse hook code and WM_MOUSEWHEEL, Windows
-                // guarantees lParam points to an MSLLHOOKSTRUCT for the callback duration.
-                (lparam.0 as *const MSLLHOOKSTRUCT).as_ref()
-            }?;
-            MouseEvent::Wheel((data.mouseData >> 16) as i16)
-        }
+        WM_MOUSEWHEEL => MouseEvent::Wheel((data.mouseData >> 16) as i16),
         _ => return None,
     };
-    process_with_context(|context| {
+    let (mut outcome, replayed_mouse_event) = process_with_context(|context| {
         context
             .state
             .set_overlay_active(context.overlay_active.load(Ordering::Acquire));
-        context.state.process_mouse(event, context.settings)
-    })
+        let outcome = context.state.process_mouse(event, context.settings);
+        let replayed_mouse_event = context.state.take_replayed_mouse_event();
+        (outcome, replayed_mouse_event)
+    })?;
+    if !replay_mouse_event(replayed_mouse_event, &mut outcome) {
+        record_callback_error(HOOK_ERROR_REPLAY_INPUT);
+        let _abandoned =
+            process_with_context(|context| context.state.abandon_right_button_gesture());
+        reset_context();
+        outcome = HookOutcome::default();
+    }
+    Some(outcome)
 }
 
 fn process_with_context<T>(process: impl FnOnce(&mut HookContext) -> T) -> Option<T> {
@@ -552,7 +564,7 @@ fn report_callback_errors() {
     let pending = process_with_context(|context| core::mem::take(&mut context.pending_errors))
         .unwrap_or_default();
     if pending & HOOK_ERROR_REPLAY_INPUT != 0 {
-        eprintln!("Could not replay a Windows-key sequence from the input hook");
+        eprintln!("Could not replay a suppressed input sequence from the input hook");
     }
     if pending & HOOK_ERROR_POST_ACTION != 0 {
         eprintln!("Could not post an input action from the input hook");
@@ -589,6 +601,25 @@ fn replayed_key_event_to_input(event: ReplayedKeyEvent) -> INPUT {
             ki: KEYBDINPUT {
                 wVk: VIRTUAL_KEY(virtual_key),
                 wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: REPLAYED_INPUT_MARKER,
+            },
+        },
+    }
+}
+
+fn replayed_mouse_event_to_input(event: ReplayedMouseEvent) -> INPUT {
+    let flags = match event {
+        ReplayedMouseEvent::RightButtonReleased => MOUSEEVENTF_RIGHTUP,
+    };
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: REPLAYED_INPUT_MARKER,
@@ -641,6 +672,34 @@ fn replay_key_events_with(
             return false;
         }
         sent += inserted;
+    }
+    true
+}
+
+fn replay_mouse_event(event: Option<ReplayedMouseEvent>, outcome: &mut HookOutcome) -> bool {
+    replay_mouse_event_with(event, outcome, |inputs, input_size| unsafe {
+        // SAFETY: `replay_mouse_event_with` passes only initialized INPUT records, and
+        // SendInput copies the records synchronously without retaining the borrowed slice.
+        SendInput(inputs, input_size)
+    })
+}
+
+fn replay_mouse_event_with(
+    event: Option<ReplayedMouseEvent>,
+    outcome: &mut HookOutcome,
+    sender: impl FnOnce(&[INPUT], i32) -> u32,
+) -> bool {
+    let Some(event) = event else {
+        return true;
+    };
+    let inputs = [replayed_mouse_event_to_input(event)];
+    let Ok(input_size) = i32::try_from(core::mem::size_of::<INPUT>()) else {
+        outcome.suppress = false;
+        return false;
+    };
+    if sender(&inputs, input_size) != 1 {
+        outcome.suppress = false;
+        return false;
     }
     true
 }
@@ -761,6 +820,40 @@ mod tests {
             assert_eq!(keyboard.dwFlags.contains(KEYEVENTF_KEYUP), expected_key_up);
             assert_eq!(keyboard.dwExtraInfo, REPLAYED_INPUT_MARKER);
         }
+    }
+
+    #[test]
+    fn replayed_right_button_release_is_tagged_mouse_input() {
+        let input = replayed_mouse_event_to_input(ReplayedMouseEvent::RightButtonReleased);
+        assert_eq!(input.r#type, INPUT_MOUSE);
+        let mouse = unsafe {
+            // SAFETY: `replayed_mouse_event_to_input` initializes the mouse union member and marks
+            // the enclosing INPUT as INPUT_MOUSE.
+            input.Anonymous.mi
+        };
+        assert_eq!(mouse.dwFlags, MOUSEEVENTF_RIGHTUP);
+        assert_eq!(mouse.dwExtraInfo, REPLAYED_INPUT_MARKER);
+    }
+
+    #[test]
+    fn failed_right_button_release_replay_forwards_the_wheel_and_resets_suppression() {
+        let mut outcome = HookOutcome::default();
+        outcome.suppress = true;
+        let replayed = replay_mouse_event_with(
+            Some(ReplayedMouseEvent::RightButtonReleased),
+            &mut outcome,
+            |inputs, input_size| {
+                assert_eq!(inputs.len(), 1);
+                assert_eq!(
+                    input_size,
+                    i32::try_from(core::mem::size_of::<INPUT>()).unwrap_or_default()
+                );
+                0
+            },
+        );
+
+        assert!(!replayed);
+        assert!(!outcome.suppress);
     }
 
     #[test]
