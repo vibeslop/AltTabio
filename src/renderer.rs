@@ -247,12 +247,6 @@ impl Renderer {
             GetDpiForWindow(hwnd)
         };
         let scale = layout_scale(window_dpi);
-        let target_dpi = f32::from(layout_dpi(window_dpi));
-        unsafe {
-            // SAFETY: the target is valid on this UI thread and both DPI values are finite and
-            // positive, keeping its logical coordinate space synchronized with the live window.
-            resources.target.SetDpi(target_dpi, target_dpi);
-        }
         let draw_result = draw_switcher(
             resources,
             text,
@@ -1354,7 +1348,8 @@ mod tests {
         const DPI: u32 = 120;
         const CLIENT_PIXEL_WIDTH: i32 = 1_125;
         const CLIENT_PIXEL_HEIGHT: i32 = 210;
-        let logical_scale = 1.0 / layout_scale(DPI);
+        let scale = layout_scale(DPI);
+        let logical_scale = 1.0 / scale;
         let client_width = CLIENT_PIXEL_WIDTH as f32 * logical_scale;
         let client_height = CLIENT_PIXEL_HEIGHT as f32 * logical_scale;
 
@@ -1362,12 +1357,14 @@ mod tests {
             for pixel_x in 0..CLIENT_PIXEL_WIDTH {
                 let expected = expected_hit(
                     switcher,
-                    client_width,
-                    client_height,
-                    pixel_x as f32 * logical_scale,
-                    pixel_y as f32 * logical_scale,
+                    (client_width, client_height),
+                    (
+                        pixel_x as f32 * logical_scale,
+                        pixel_y as f32 * logical_scale,
+                    ),
                     compact_list,
                     expected_visible_start,
+                    scale,
                 );
                 let actual = hit_test_task_list_pixels(
                     switcher,
@@ -1390,15 +1387,16 @@ mod tests {
     )]
     fn expected_hit(
         switcher: &Switcher,
-        client_width: f32,
-        client_height: f32,
-        x: f32,
-        y: f32,
+        client_size: (f32, f32),
+        point: (f32, f32),
         compact_list: bool,
         visible_start: usize,
+        scale: f32,
     ) -> Option<TaskListHit> {
+        let (client_width, client_height) = client_size;
+        let (x, y) = point;
         let layout = for_compact_list(compact_list);
-        let list_width = layout.list_width(client_width, layout_scale(120));
+        let list_width = layout.list_width(client_width, scale);
         let list_top = layout.list_top();
         if x < layout.outer_padding || x >= list_width || y < list_top {
             return None;

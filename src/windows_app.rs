@@ -352,38 +352,6 @@ struct AppHost {
     state: RefCell<App>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DisplayGeometryChange {
-    Dpi,
-    Topology,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OverlayGeometryRefresh {
-    None,
-    Content,
-    CursorMonitor,
-}
-
-const fn display_geometry_change(message: u32) -> Option<DisplayGeometryChange> {
-    match message {
-        WM_DPICHANGED => Some(DisplayGeometryChange::Dpi),
-        WM_DISPLAYCHANGE => Some(DisplayGeometryChange::Topology),
-        _ => None,
-    }
-}
-
-const fn overlay_geometry_refresh(
-    change: DisplayGeometryChange,
-    overlay_visible: bool,
-) -> OverlayGeometryRefresh {
-    match change {
-        DisplayGeometryChange::Dpi => OverlayGeometryRefresh::Content,
-        DisplayGeometryChange::Topology if overlay_visible => OverlayGeometryRefresh::CursorMonitor,
-        DisplayGeometryChange::Topology => OverlayGeometryRefresh::None,
-    }
-}
-
 impl AppHost {
     fn new(state: App) -> Self {
         Self {
@@ -486,13 +454,7 @@ impl App {
 
     fn initialize(&mut self, hwnd: HWND, install_hooks: bool) -> std::result::Result<(), String> {
         self.hwnd = hwnd;
-        if self.dwm_preview && self.settings.appearance.preview {
-            self.preview = Some(DwmPreview::new(
-                hwnd,
-                self.settings.appearance.full_desktop_preview,
-                self.settings.appearance.compact_list,
-            ));
-        }
+        self.recreate_preview();
         if install_hooks {
             let instance = module_instance().map_err(|error| {
                 format!("Could not resolve the executable module for the tray icon: {error}")
@@ -528,14 +490,15 @@ impl App {
             self.handle_close_refresh_timer();
             return Some(LRESULT(0));
         }
-        if let Some(change) = display_geometry_change(message) {
-            match change {
-                DisplayGeometryChange::Dpi => self.handle_dpi_changed(lparam),
-                DisplayGeometryChange::Topology => self.handle_display_changed(),
-            }
-            return Some(LRESULT(0));
-        }
         match message {
+            WM_DPICHANGED => {
+                self.handle_dpi_changed(lparam);
+                Some(LRESULT(0))
+            }
+            WM_DISPLAYCHANGE => {
+                self.handle_display_changed();
+                Some(LRESULT(0))
+            }
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 self.handle_focused_key(wparam.0, lparam);
                 Some(LRESULT(0))
@@ -700,7 +663,6 @@ impl App {
             }
         }
 
-        self.preview = None;
         self.settings = settings;
         self.session
             .update_settings(switcher_session_settings(&self.settings));
@@ -717,13 +679,7 @@ impl App {
         if let Err(error) = self.refresh_theme() {
             self.show_error(&format!("Could not update the overlay theme. {error}"));
         }
-        if self.dwm_preview && self.settings.appearance.preview {
-            self.preview = Some(DwmPreview::new(
-                self.hwnd,
-                self.settings.appearance.full_desktop_preview,
-                self.settings.appearance.compact_list,
-            ));
-        }
+        self.recreate_preview();
         self.request_redraw();
     }
 
@@ -1071,25 +1027,25 @@ impl App {
                 eprintln!("Could not apply the DPI change: {error}");
             }
         }
-        self.refresh_display_geometry(DisplayGeometryChange::Dpi);
+        self.refresh_display_content();
     }
 
     fn handle_display_changed(&mut self) {
-        self.refresh_display_geometry(DisplayGeometryChange::Topology);
-    }
-
-    fn refresh_display_geometry(&mut self, change: DisplayGeometryChange) {
         self.recreate_preview();
-        let refresh = overlay_geometry_refresh(change, self.is_visible());
-        if refresh == OverlayGeometryRefresh::CursorMonitor
-            && let Err(error) = position_on_cursor_monitor(self.hwnd)
-        {
+        if !self.is_visible() {
+            return;
+        }
+        if let Err(error) = position_on_cursor_monitor(self.hwnd) {
             eprintln!("Could not reposition the overlay after the display changed: {error}");
         }
-        if refresh != OverlayGeometryRefresh::None {
-            self.sync_content_size();
-            self.request_redraw();
-        }
+        self.sync_content_size();
+        self.request_redraw();
+    }
+
+    fn refresh_display_content(&mut self) {
+        self.recreate_preview();
+        self.sync_content_size();
+        self.request_redraw();
     }
 
     fn recreate_preview(&mut self) {
@@ -2361,30 +2317,6 @@ mod tests {
                 right: 4_000,
                 bottom: 1_137,
             }
-        );
-    }
-
-    #[test]
-    fn display_topology_change_invalidates_cached_geometry() {
-        assert_eq!(
-            display_geometry_change(WM_DISPLAYCHANGE),
-            Some(DisplayGeometryChange::Topology)
-        );
-        assert_eq!(
-            display_geometry_change(WM_DPICHANGED),
-            Some(DisplayGeometryChange::Dpi)
-        );
-        assert_eq!(
-            overlay_geometry_refresh(DisplayGeometryChange::Topology, true),
-            OverlayGeometryRefresh::CursorMonitor
-        );
-        assert_eq!(
-            overlay_geometry_refresh(DisplayGeometryChange::Topology, false),
-            OverlayGeometryRefresh::None
-        );
-        assert_eq!(
-            overlay_geometry_refresh(DisplayGeometryChange::Dpi, true),
-            OverlayGeometryRefresh::Content
         );
     }
 
