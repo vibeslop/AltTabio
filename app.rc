@@ -39,8 +39,8 @@ IDI_TRAY_VIOLET ICON "assets/icons/violet/AltTabio-violet-tray.ico"
 #endif
 
 1 VERSIONINFO
- FILEVERSION 1,0,1,0
- PRODUCTVERSION 1,0,1,0
+ FILEVERSION 1,0,2,0
+ PRODUCTVERSION 1,0,2,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -53,12 +53,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "VibeSlop\0"
             VALUE "FileDescription", "AltTabio Windows switcher\0"
-            VALUE "FileVersion", "1.0.1\0"
+            VALUE "FileVersion", "1.0.2\0"
             VALUE "InternalName", "AltTabio\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 VibeSlop\0"
             VALUE "OriginalFilename", "AltTabio.exe\0"
             VALUE "ProductName", "AltTabio\0"
-            VALUE "ProductVersion", "1.0.1\0"
+            VALUE "ProductVersion", "1.0.2\0"
         END
     END
     BLOCK "VarFileInfo"
