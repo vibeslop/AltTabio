@@ -156,7 +156,7 @@ impl SwitcherSession {
         if let Some(delta) = selection_delta {
             self.switcher.select_next(delta);
         }
-        self.visible = self.switcher.visible_task_count() != 0;
+        self.visible = !self.switcher.is_empty();
     }
 
     #[must_use]
@@ -176,6 +176,13 @@ impl SwitcherSession {
 
     pub fn update_settings(&mut self, settings: SwitcherSessionSettings) {
         self.settings = settings;
+    }
+
+    pub fn refresh_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
+        self.switcher.set_tasks(tasks);
+        if self.switcher.is_empty() {
+            self.visible = false;
+        }
     }
 
     pub fn set_context_menu_open(&mut self, open: bool) {
@@ -298,6 +305,10 @@ impl SwitcherSession {
 }
 
 impl Switcher {
+    fn is_empty(&self) -> bool {
+        self.all_tasks.is_empty()
+    }
+
     pub fn set_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
         self.all_tasks.clear();
         self.all_tasks.extend(tasks);
@@ -548,6 +559,41 @@ mod tests {
             SwitcherEffect::Activate(20)
         );
         assert!(!session.is_visible());
+    }
+
+    #[test]
+    fn refreshing_the_last_task_away_dismisses_the_session() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open([SwitchTask::new(1, 10, "Last window", "app")], None);
+        assert!(session.is_visible());
+
+        session.refresh_tasks([]);
+
+        assert!(!session.is_visible());
+    }
+
+    #[test]
+    fn refreshing_tasks_keeps_an_unmatched_search_session_open() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(tasks(), None);
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('q')),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().visible_task_count(), 0);
+
+        session.refresh_tasks(tasks());
+
+        assert!(session.is_visible());
+        assert_eq!(session.switcher().visible_task_count(), 0);
     }
 
     #[test]

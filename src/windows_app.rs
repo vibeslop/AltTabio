@@ -848,7 +848,7 @@ impl App {
         match enumerate_switchable_windows(&self.settings) {
             Ok(tasks) => {
                 let close_refresh_target = close_refresh_target_after_enumeration(request, &tasks);
-                self.session.switcher_mut().set_tasks(tasks);
+                self.session.refresh_tasks(tasks);
                 if let Some(window_handle) = close_refresh_target {
                     self.schedule_close_refresh(window_handle);
                 }
@@ -856,7 +856,11 @@ impl App {
             Err(error) => eprintln!("Could not refresh windows after {command:?}: {error}"),
         }
         self.close_button.reset();
-        self.request_redraw();
+        if self.session.is_visible() {
+            self.request_redraw();
+        } else {
+            self.hide_overlay();
+        }
     }
 
     fn schedule_close_refresh(&mut self, window_handle: isize) {
@@ -885,7 +889,7 @@ impl App {
         let keep_refreshing = match enumerate_switchable_windows(&self.settings) {
             Ok(tasks) => {
                 let keep_refreshing = self.close_refresh_tracker.reconcile(&tasks);
-                self.session.switcher_mut().set_tasks(tasks);
+                self.session.refresh_tasks(tasks);
                 keep_refreshing
             }
             Err(error) => {
@@ -902,7 +906,11 @@ impl App {
                 eprintln!("Could not stop the close refresh timer: {error}");
             }
         }
-        self.request_redraw();
+        if self.session.is_visible() {
+            self.request_redraw();
+        } else {
+            self.hide_overlay();
+        }
     }
 
     fn handle_mouse_move(&mut self, lparam: LPARAM) {
