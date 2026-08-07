@@ -240,6 +240,39 @@ mod tests {
     }
 
     #[test]
+    fn desktop_layout_recomputes_after_landscape_to_portrait_transition() {
+        let before = calculate(
+            Rect::new(0.0, 0.0, 960.0, 540.0),
+            Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            Rect::new(200.0, 100.0, 1000.0, 800.0),
+            Size::new(1000.0, 800.0),
+            None,
+        );
+        let after = calculate(
+            Rect::new(0.0, 0.0, 540.0, 960.0),
+            Rect::new(0.0, 0.0, 1080.0, 1920.0),
+            Rect::new(100.0, 400.0, 800.0, 1000.0),
+            Size::new(800.0, 1000.0),
+            None,
+        );
+
+        assert_eq!(
+            before.desktop_destination,
+            Rect::new(0.0, 0.0, 960.0, 540.0)
+        );
+        assert_eq!(
+            before.window_destination,
+            Rect::new(100.0, 50.0, 500.0, 400.0)
+        );
+        assert_eq!(after.desktop_destination, Rect::new(0.0, 0.0, 540.0, 960.0));
+        assert_eq!(
+            after.window_destination,
+            Rect::new(50.0, 200.0, 400.0, 500.0)
+        );
+        assert_eq!(after.window_source, Rect::new(0.0, 0.0, 800.0, 1000.0));
+    }
+
+    #[test]
     fn minimized_window_uses_restored_placement_when_current_bounds_are_off_desktop() {
         let layout = calculate(
             Rect::new(0.0, 0.0, 960.0, 540.0),

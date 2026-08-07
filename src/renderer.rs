@@ -39,6 +39,7 @@ struct TextFormats {
 
 struct RenderResources {
     target: ID2D1HwndRenderTarget,
+    metrics: RenderTargetMetrics,
     background_color: D2D1_COLOR_F,
     window_border_brush: ID2D1SolidColorBrush,
     preview_background_brush: ID2D1SolidColorBrush,
@@ -50,6 +51,47 @@ struct RenderResources {
     secondary_brush: ID2D1SolidColorBrush,
     number_brush: ID2D1SolidColorBrush,
     divider_brush: ID2D1SolidColorBrush,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RenderTargetMetrics {
+    pixel_width: u32,
+    pixel_height: u32,
+    dpi: u16,
+}
+
+impl RenderTargetMetrics {
+    fn for_window(hwnd: HWND, pixel_width: u32, pixel_height: u32) -> Self {
+        let window_dpi = unsafe {
+            // SAFETY: hwnd is the live overlay window and the call returns a scalar DPI value.
+            GetDpiForWindow(hwnd)
+        };
+        Self {
+            pixel_width,
+            pixel_height,
+            dpi: layout_dpi(window_dpi),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenderTargetUpdate {
+    Unchanged,
+    Resize,
+    Recreate,
+}
+
+const fn render_target_update(
+    current: RenderTargetMetrics,
+    next: RenderTargetMetrics,
+) -> RenderTargetUpdate {
+    if current.dpi != next.dpi {
+        RenderTargetUpdate::Recreate
+    } else if current.pixel_width != next.pixel_width || current.pixel_height != next.pixel_height {
+        RenderTargetUpdate::Resize
+    } else {
+        RenderTargetUpdate::Unchanged
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -148,12 +190,34 @@ impl Renderer {
         }
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
-        if let Some(resources) = &self.resources {
-            unsafe {
-                // SAFETY: the render target is valid and the size contains no borrowed pointers.
-                resources.target.Resize(&D2D_SIZE_U { width, height })?;
+    pub fn resize(&mut self, hwnd: HWND, width: u32, height: u32) -> Result<()> {
+        let next = RenderTargetMetrics::for_window(hwnd, width, height);
+        let update = self
+            .resources
+            .as_ref()
+            .map(|resources| render_target_update(resources.metrics, next));
+        match update {
+            Some(RenderTargetUpdate::Recreate) => self.resources = None,
+            Some(RenderTargetUpdate::Resize) => {
+                let resize_result = if let Some(resources) = &mut self.resources {
+                    let result = unsafe {
+                        // SAFETY: the render target is valid and the size contains no borrowed
+                        // pointers.
+                        resources.target.Resize(&D2D_SIZE_U { width, height })
+                    };
+                    if result.is_ok() {
+                        resources.metrics = next;
+                    }
+                    result
+                } else {
+                    Ok(())
+                };
+                if resize_result.is_err() {
+                    self.resources = None;
+                }
+                resize_result?;
             }
+            Some(RenderTargetUpdate::Unchanged) | None => {}
         }
         Ok(())
     }
@@ -320,7 +384,12 @@ impl Renderer {
             // SAFETY: `hwnd` is a live top-level window owned by this UI thread.
             GetDpiForWindow(hwnd)
         };
-        let dpi = f32::from(layout_dpi(window_dpi));
+        let metrics = RenderTargetMetrics {
+            pixel_width: width,
+            pixel_height: height,
+            dpi: layout_dpi(window_dpi),
+        };
+        let dpi = f32::from(metrics.dpi);
         let render_properties = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             dpiX: dpi,
@@ -341,6 +410,7 @@ impl Renderer {
         let palette = self.theme.palette();
 
         Ok(RenderResources {
+            metrics,
             background_color: color_from_rgb8(palette.background),
             window_border_brush: create_brush(&target, color_from_rgb8(palette.window_border))?,
             preview_background_brush: create_brush(&target, windows_desktop_color())?,
@@ -837,6 +907,48 @@ mod tests {
     use super::*;
     use alttabio::settings::Settings;
     use alttabio::switcher::SwitchTask;
+
+    #[test]
+    fn display_reconnect_recreates_target_when_dpi_changes_with_the_bounds() {
+        let before = RenderTargetMetrics {
+            pixel_width: 2_400,
+            pixel_height: 1_350,
+            dpi: 168,
+        };
+        let after = RenderTargetMetrics {
+            pixel_width: 2_048,
+            pixel_height: 1_152,
+            dpi: 144,
+        };
+
+        assert_eq!(
+            render_target_update(before, after),
+            RenderTargetUpdate::Recreate
+        );
+    }
+
+    #[test]
+    fn orientation_change_resizes_target_when_dpi_is_unchanged() {
+        let landscape = RenderTargetMetrics {
+            pixel_width: 1_200,
+            pixel_height: 675,
+            dpi: 144,
+        };
+        let portrait = RenderTargetMetrics {
+            pixel_width: 675,
+            pixel_height: 1_200,
+            dpi: 144,
+        };
+
+        assert_eq!(
+            render_target_update(landscape, portrait),
+            RenderTargetUpdate::Resize
+        );
+        assert_eq!(
+            render_target_update(portrait, portrait),
+            RenderTargetUpdate::Unchanged
+        );
+    }
 
     #[test]
     fn title_uses_the_full_row_when_app_names_are_hidden() {

@@ -57,9 +57,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
     SendMessageTimeoutW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, ShowWindowAsync, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY,
-    WM_DPICHANGED, WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
     WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_POPUP, WS_THICKFRAME,
 };
@@ -352,6 +352,38 @@ struct AppHost {
     state: RefCell<App>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayGeometryChange {
+    Dpi,
+    Topology,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OverlayGeometryRefresh {
+    None,
+    Content,
+    CursorMonitor,
+}
+
+const fn display_geometry_change(message: u32) -> Option<DisplayGeometryChange> {
+    match message {
+        WM_DPICHANGED => Some(DisplayGeometryChange::Dpi),
+        WM_DISPLAYCHANGE => Some(DisplayGeometryChange::Topology),
+        _ => None,
+    }
+}
+
+const fn overlay_geometry_refresh(
+    change: DisplayGeometryChange,
+    overlay_visible: bool,
+) -> OverlayGeometryRefresh {
+    match change {
+        DisplayGeometryChange::Dpi => OverlayGeometryRefresh::Content,
+        DisplayGeometryChange::Topology if overlay_visible => OverlayGeometryRefresh::CursorMonitor,
+        DisplayGeometryChange::Topology => OverlayGeometryRefresh::None,
+    }
+}
+
 impl AppHost {
     fn new(state: App) -> Self {
         Self {
@@ -496,6 +528,13 @@ impl App {
             self.handle_close_refresh_timer();
             return Some(LRESULT(0));
         }
+        if let Some(change) = display_geometry_change(message) {
+            match change {
+                DisplayGeometryChange::Dpi => self.handle_dpi_changed(lparam),
+                DisplayGeometryChange::Topology => self.handle_display_changed(),
+            }
+            return Some(LRESULT(0));
+        }
         match message {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 self.handle_focused_key(wparam.0, lparam);
@@ -540,10 +579,6 @@ impl App {
                 let width = u32::from(low_word_isize(lparam.0));
                 let height = u32::from(high_word_isize(lparam.0));
                 self.resize_content(width, height);
-                Some(LRESULT(0))
-            }
-            WM_DPICHANGED => {
-                self.handle_dpi_changed(lparam);
                 Some(LRESULT(0))
             }
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
@@ -693,7 +728,7 @@ impl App {
     }
 
     fn resize_content(&mut self, width: u32, height: u32) {
-        if let Err(error) = self.renderer.resize(width, height) {
+        if let Err(error) = self.renderer.resize(self.hwnd, width, height) {
             eprintln!("Could not resize the Direct2D target: {error}");
         }
         if let Some(preview) = &mut self.preview
@@ -1028,8 +1063,36 @@ impl App {
                 eprintln!("Could not apply the DPI change: {error}");
             }
         }
-        self.sync_content_size();
-        self.request_redraw();
+        self.refresh_display_geometry(DisplayGeometryChange::Dpi);
+    }
+
+    fn handle_display_changed(&mut self) {
+        self.refresh_display_geometry(DisplayGeometryChange::Topology);
+    }
+
+    fn refresh_display_geometry(&mut self, change: DisplayGeometryChange) {
+        self.recreate_preview();
+        let refresh = overlay_geometry_refresh(change, self.is_visible());
+        if refresh == OverlayGeometryRefresh::CursorMonitor
+            && let Err(error) = position_on_cursor_monitor(self.hwnd)
+        {
+            eprintln!("Could not reposition the overlay after the display changed: {error}");
+        }
+        if refresh != OverlayGeometryRefresh::None {
+            self.sync_content_size();
+            self.request_redraw();
+        }
+    }
+
+    fn recreate_preview(&mut self) {
+        self.preview = None;
+        if self.dwm_preview && self.settings.appearance.preview {
+            self.preview = Some(DwmPreview::new(
+                self.hwnd,
+                self.settings.appearance.full_desktop_preview,
+                self.settings.appearance.compact_list,
+            ));
+        }
     }
 
     fn show_overlay(&mut self, selection_delta: Option<i32>) {
@@ -2289,6 +2352,48 @@ mod tests {
                 top: 262,
                 right: 4_000,
                 bottom: 1_137,
+            }
+        );
+    }
+
+    #[test]
+    fn display_topology_change_invalidates_cached_geometry() {
+        assert_eq!(
+            display_geometry_change(WM_DISPLAYCHANGE),
+            Some(DisplayGeometryChange::Topology)
+        );
+        assert_eq!(
+            display_geometry_change(WM_DPICHANGED),
+            Some(DisplayGeometryChange::Dpi)
+        );
+        assert_eq!(
+            overlay_geometry_refresh(DisplayGeometryChange::Topology, true),
+            OverlayGeometryRefresh::CursorMonitor
+        );
+        assert_eq!(
+            overlay_geometry_refresh(DisplayGeometryChange::Topology, false),
+            OverlayGeometryRefresh::None
+        );
+        assert_eq!(
+            overlay_geometry_refresh(DisplayGeometryChange::Dpi, true),
+            OverlayGeometryRefresh::Content
+        );
+    }
+
+    #[test]
+    fn portrait_topology_uses_current_work_area_instead_of_landscape_bounds() {
+        assert_eq!(
+            overlay_bounds(RECT {
+                left: 0,
+                top: 0,
+                right: 1_080,
+                bottom: 1_920,
+            }),
+            RECT {
+                left: 202,
+                top: 360,
+                right: 877,
+                bottom: 1_560,
             }
         );
     }
