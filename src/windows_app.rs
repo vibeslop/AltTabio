@@ -474,6 +474,18 @@ impl App {
     }
 
     fn handle_message(&mut self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        if let Some(result) = self
+            .tray
+            .as_ref()
+            .and_then(|tray| tray.restore_for_message(message))
+        {
+            if let Err(error) = result {
+                eprintln!(
+                    "Could not restore the AltTabio tray icon after Explorer restarted: {error}"
+                );
+            }
+            return Some(LRESULT(0));
+        }
         if message == WM_HOOK_ACTION {
             if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
                 && let Some(action) = decode_action(wparam, lparam)

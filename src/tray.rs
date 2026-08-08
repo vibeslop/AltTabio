@@ -10,12 +10,16 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_SEPARATOR, MF_STRING,
-    SetForegroundWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN,
-    TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    RegisterWindowMessageW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 2;
+
+const fn is_recreation_message(message: u32, registered_message: u32) -> bool {
+    registered_message != 0 && message == registered_message
+}
 
 const SHOW_COMMAND: usize = 1;
 const SETTINGS_COMMAND: usize = 2;
@@ -36,6 +40,7 @@ pub struct TrayIcon {
     data: NOTIFYICONDATAW,
     menu: HMENU,
     instance: HINSTANCE,
+    recreation_message: u32,
     theme: ResolvedTheme,
     dark_mode_api: Option<DarkModeApi>,
 }
@@ -47,6 +52,13 @@ impl TrayIcon {
         theme: ResolvedTheme,
         icon: IconColor,
     ) -> Result<Self> {
+        let recreation_message = unsafe {
+            // SAFETY: the message name is a static null-terminated UTF-16 string.
+            RegisterWindowMessageW(w!("TaskbarCreated"))
+        };
+        if recreation_message == 0 {
+            return Err(Error::from_thread());
+        }
         let icon = app_icon::load_tray(instance, icon)?;
         let dark_mode_api = match DarkModeApi::load(theme == ResolvedTheme::Dark) {
             Ok(api) => Some(api),
@@ -90,18 +102,15 @@ impl TrayIcon {
             szTip: tip,
             ..NOTIFYICONDATAW::default()
         };
-        let added = unsafe {
-            // SAFETY: data is fully initialized and remains alive for the synchronous shell call.
-            Shell_NotifyIconW(NIM_ADD, &raw const data).as_bool()
-        };
-        if !added {
+        if let Err(error) = add_icon(&data) {
             destroy_menu(menu);
-            return Err(Error::from_thread());
+            return Err(error);
         }
         Ok(Self {
             data,
             menu,
             instance,
+            recreation_message,
             theme,
             dark_mode_api,
         })
@@ -147,6 +156,10 @@ impl TrayIcon {
         }
     }
 
+    pub fn restore_for_message(&self, message: u32) -> Option<Result<()>> {
+        is_recreation_message(message, self.recreation_message).then(|| add_icon(&self.data))
+    }
+
     pub fn set_icon(&mut self, icon: IconColor) -> Result<()> {
         let loaded = app_icon::load_tray(self.instance, icon)?;
         let previous = self.data.hIcon;
@@ -162,6 +175,18 @@ impl TrayIcon {
             self.data.hIcon = previous;
             Err(Error::from_thread())
         }
+    }
+}
+
+fn add_icon(data: &NOTIFYICONDATAW) -> Result<()> {
+    let added = unsafe {
+        // SAFETY: data is fully initialized and remains alive for the synchronous shell call.
+        Shell_NotifyIconW(NIM_ADD, data).as_bool()
+    };
+    if added {
+        Ok(())
+    } else {
+        Err(Error::from_thread())
     }
 }
 
@@ -260,6 +285,21 @@ mod tests {
         assert_eq!(action_for_command(ABOUT_COMMAND), TrayAction::About);
         assert_eq!(action_for_command(EXIT_COMMAND), TrayAction::Exit);
         assert_eq!(action_for_command(0), TrayAction::None);
+    }
+
+    #[test]
+    fn taskbar_created_message_requests_tray_icon_restoration() {
+        let taskbar_created_message = 0xC123;
+
+        assert!(is_recreation_message(
+            taskbar_created_message,
+            taskbar_created_message
+        ));
+        assert!(!is_recreation_message(
+            WM_TRAY_CALLBACK,
+            taskbar_created_message
+        ));
+        assert!(!is_recreation_message(0, 0));
     }
 
     #[test]
