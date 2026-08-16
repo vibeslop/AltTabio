@@ -15,7 +15,7 @@
 ## Build gotchas
 
 - Close AltTabio before compiling or testing — a running instance locks build artifacts.
-- After completing a Rust change, confirm committed `HEAD` builds with `cargo build --release --quiet`. Start the new executable only when runtime verification is part of the task or explicitly requested.
+- After finishing any Rust change, always run `cargo build --release --quiet` before considering the work done. Write the executable to this repo's `target\release\AltTabio.exe` — if `CARGO_TARGET_DIR` points at a sandbox cache, override it so the file the user runs actually updates. Start the new executable only when runtime verification is part of the task or explicitly requested.
 
 ## Git
 
