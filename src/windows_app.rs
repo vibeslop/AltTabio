@@ -12,7 +12,7 @@ use crate::window_commands::{
 };
 use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, is_remote_desktop_client,
-    overlay_key_action,
+    is_remote_desktop_session, overlay_key_action, window_fills_monitor,
 };
 use alttabio::settings::{Settings, Theme};
 use alttabio::switcher::{
@@ -25,7 +25,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use windows::Win32::Foundation::{
     CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
@@ -51,15 +51,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_SYSTEM_FOREGROUND, EnumWindows,
-    GCLP_HICON, GCLP_HICONSM, GW_OWNER, GWL_EXSTYLE, GWLP_USERDATA, GetClassLongPtrW,
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetLastActivePopup, GetMessageW,
-    GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_OBJECT_LOCATIONCHANGE,
+    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
+    EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT, GCLP_HICON, GCLP_HICONSM, GW_OWNER,
+    GWL_EXSTYLE, GWLP_USERDATA, GetAncestor, GetClassLongPtrW, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetLastActivePopup, GetMessageW, GetShellWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, ICON_SMALL2, IDC_ARROW, IsIconic,
-    IsWindowVisible, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage,
+    IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE,
+    SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage,
     WINEVENT_OUTOFCONTEXT, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
     WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
@@ -80,6 +82,9 @@ const CLOSE_REFRESH_DELAY_MS: u32 = 250;
 const CLOSE_REFRESH_ATTEMPTS: u8 = 20;
 
 static FOREGROUND_NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);
+static FOREGROUND_CHECK_QUEUED: AtomicBool = AtomicBool::new(false);
+static FOREGROUND_WIDTH: AtomicI32 = AtomicI32::new(0);
+static FOREGROUND_HEIGHT: AtomicI32 = AtomicI32::new(0);
 
 pub fn run(
     preview_mode: bool,
@@ -352,7 +357,7 @@ struct App {
     settings_store: SettingsStore,
     settings_dialog_open: bool,
     about_dialog_open: bool,
-    foreground_event_hook: Option<HWINEVENTHOOK>,
+    foreground_event_hooks: Vec<HWINEVENTHOOK>,
 }
 
 struct AppHost {
@@ -456,7 +461,7 @@ impl App {
             settings_store,
             settings_dialog_open: false,
             about_dialog_open: false,
-            foreground_event_hook: None,
+            foreground_event_hooks: Vec::new(),
         })
     }
 
@@ -478,8 +483,8 @@ impl App {
             );
             self.hooks = Some(HookThread::start(hwnd, hook_settings(&self.settings))?);
             FOREGROUND_NOTIFY_HWND.store(hwnd.0 as isize, Ordering::Release);
-            match install_foreground_event_hook() {
-                Ok(hook) => self.foreground_event_hook = Some(hook),
+            match install_foreground_event_hooks() {
+                Ok(hooks) => self.foreground_event_hooks = hooks,
                 Err(error) => {
                     eprintln!("Could not watch Remote Desktop windows to forward Alt+Tab: {error}");
                 }
@@ -628,7 +633,8 @@ impl App {
     }
 
     fn handle_foreground_check(&mut self) {
-        let focused = foreground_is_remote_desktop_client(self.hwnd);
+        FOREGROUND_CHECK_QUEUED.store(false, Ordering::Release);
+        let focused = foreground_is_remote_desktop_session(self.hwnd);
         if focused && self.is_visible() {
             self.hide_overlay();
         }
@@ -770,7 +776,7 @@ impl App {
 
     fn shutdown(&mut self) {
         FOREGROUND_NOTIFY_HWND.store(0, Ordering::Release);
-        if let Some(hook) = self.foreground_event_hook.take() {
+        for hook in self.foreground_event_hooks.drain(..) {
             unhook_foreground_event(hook);
         }
         if let Some(preview) = &mut self.preview {
@@ -1392,7 +1398,7 @@ fn show_error_for_window(owner: HWND, message: &str) {
     }
 }
 
-fn foreground_is_remote_desktop_client(overlay: HWND) -> bool {
+fn foreground_is_remote_desktop_session(overlay: HWND) -> bool {
     let hwnd = unsafe {
         // SAFETY: GetForegroundWindow has no pointer preconditions.
         GetForegroundWindow()
@@ -1407,28 +1413,86 @@ fn foreground_is_remote_desktop_client(overlay: HWND) -> bool {
         GetWindowThreadProcessId(hwnd, Some(&raw mut process_id));
     }
     let (executable_stem, _) = process_details(process_id);
-    is_remote_desktop_client(&class_name, &executable_stem)
+    is_remote_desktop_session(
+        is_remote_desktop_client(&class_name, &executable_stem),
+        is_maximized_or_fullscreen(hwnd),
+    )
 }
 
-fn install_foreground_event_hook() -> std::result::Result<HWINEVENTHOOK, String> {
-    let hook = unsafe {
-        // SAFETY: `foreground_event_proc` has the required ABI, is panic-contained, and only posts
-        // a message to the overlay HWND stored in FOREGROUND_NOTIFY_HWND. The hook is removed
-        // during App::shutdown before that HWND is destroyed.
-        SetWinEventHook(
-            EVENT_SYSTEM_FOREGROUND,
-            EVENT_SYSTEM_FOREGROUND,
-            None,
-            Some(foreground_event_proc),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT,
-        )
-    };
-    if hook.is_invalid() {
-        return Err(Error::from_thread().to_string());
+fn is_maximized_or_fullscreen(hwnd: HWND) -> bool {
+    if unsafe {
+        // SAFETY: hwnd is the live foreground window.
+        IsZoomed(hwnd)
     }
-    Ok(hook)
+    .as_bool()
+    {
+        return true;
+    }
+    let mut window = RECT::default();
+    if unsafe {
+        // SAFETY: `window` is writable and hwnd is a live top-level window.
+        GetWindowRect(hwnd, &raw mut window)
+    }
+    .is_err()
+    {
+        return false;
+    }
+    let monitor = unsafe {
+        // SAFETY: hwnd is live and nearest-monitor fallback is requested.
+        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+    };
+    let mut monitor_info = MONITORINFO {
+        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or_default(),
+        ..MONITORINFO::default()
+    };
+    let success = unsafe {
+        // SAFETY: `monitor_info` is writable with a correct cbSize.
+        GetMonitorInfoW(monitor, &raw mut monitor_info)
+    };
+    success.as_bool()
+        && window_fills_monitor(
+            [window.left, window.top, window.right, window.bottom],
+            [
+                monitor_info.rcMonitor.left,
+                monitor_info.rcMonitor.top,
+                monitor_info.rcMonitor.right,
+                monitor_info.rcMonitor.bottom,
+            ],
+        )
+}
+
+fn install_foreground_event_hooks() -> std::result::Result<Vec<HWINEVENTHOOK>, String> {
+    const RANGES: [(u32, u32); 4] = [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+        (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND),
+        (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+        (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
+    ];
+    let mut hooks = Vec::new();
+    for (min_event, max_event) in RANGES {
+        let hook = unsafe {
+            // SAFETY: `foreground_event_proc` has the required ABI, is panic-contained, and only
+            // posts a message to the overlay HWND stored in FOREGROUND_NOTIFY_HWND. The hooks are
+            // removed during App::shutdown before that HWND is destroyed.
+            SetWinEventHook(
+                min_event,
+                max_event,
+                None,
+                Some(foreground_event_proc),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            )
+        };
+        if hook.is_invalid() {
+            for installed in hooks.drain(..) {
+                unhook_foreground_event(installed);
+            }
+            return Err(Error::from_thread().to_string());
+        }
+        hooks.push(hook);
+    }
+    Ok(hooks)
 }
 
 fn unhook_foreground_event(hook: HWINEVENTHOOK) {
@@ -1446,25 +1510,79 @@ fn unhook_foreground_event(hook: HWINEVENTHOOK) {
 
 unsafe extern "system" fn foreground_event_proc(
     _hook: HWINEVENTHOOK,
-    _event: u32,
-    _hwnd: HWND,
+    event: u32,
+    hwnd: HWND,
     _object: i32,
     _child: i32,
     _thread: u32,
     _time: u32,
 ) {
     let _ = catch_unwind(|| {
-        let target = FOREGROUND_NOTIFY_HWND.load(Ordering::Acquire);
-        if target == 0 {
+        if !should_request_foreground_check(event, hwnd) {
             return;
         }
-        let hwnd = HWND(target as *mut c_void);
-        unsafe {
-            // SAFETY: `hwnd` is the overlay window published before the winevent hook is installed
-            // and cleared before shutdown unhooks it. PostMessageW copies the integer payloads.
-            let _posted = PostMessageW(Some(hwnd), WM_FOREGROUND_CHECK, WPARAM(0), LPARAM(0));
-        }
+        request_foreground_check();
     });
+}
+
+fn should_request_foreground_check(event: u32, hwnd: HWND) -> bool {
+    match event {
+        EVENT_SYSTEM_FOREGROUND
+        | EVENT_SYSTEM_MOVESIZEEND
+        | EVENT_SYSTEM_MINIMIZESTART
+        | EVENT_SYSTEM_MINIMIZEEND => true,
+        EVENT_OBJECT_LOCATIONCHANGE => foreground_root_resized(hwnd),
+        _ => false,
+    }
+}
+
+fn foreground_root_resized(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let root = unsafe {
+        // SAFETY: hwnd is supplied by the winevent callback; GA_ROOT walks to the top-level owner.
+        GetAncestor(hwnd, GA_ROOT)
+    };
+    let foreground = unsafe {
+        // SAFETY: GetForegroundWindow has no pointer preconditions.
+        GetForegroundWindow()
+    };
+    if root.0.is_null() || root != foreground {
+        return false;
+    }
+    let mut window = RECT::default();
+    if unsafe {
+        // SAFETY: `window` is writable and root is the live foreground top-level window.
+        GetWindowRect(root, &raw mut window)
+    }
+    .is_err()
+    {
+        return false;
+    }
+    let width = window.right.saturating_sub(window.left);
+    let height = window.bottom.saturating_sub(window.top);
+    let previous_width = FOREGROUND_WIDTH.swap(width, Ordering::Relaxed);
+    let previous_height = FOREGROUND_HEIGHT.swap(height, Ordering::Relaxed);
+    previous_width != width || previous_height != height
+}
+
+fn request_foreground_check() {
+    let target = FOREGROUND_NOTIFY_HWND.load(Ordering::Acquire);
+    if target == 0 {
+        return;
+    }
+    if FOREGROUND_CHECK_QUEUED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let hwnd = HWND(target as *mut c_void);
+    unsafe {
+        // SAFETY: `hwnd` is the overlay window published before the winevent hook is installed
+        // and cleared before shutdown unhooks it. PostMessageW copies the integer payloads.
+        if PostMessageW(Some(hwnd), WM_FOREGROUND_CHECK, WPARAM(0), LPARAM(0)).is_err() {
+            FOREGROUND_CHECK_QUEUED.store(false, Ordering::Release);
+        }
+    }
 }
 
 fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

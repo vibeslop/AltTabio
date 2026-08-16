@@ -56,6 +56,19 @@ pub fn is_remote_desktop_client(class_name: &str, executable_stem: &str) -> bool
             .any(|executable| executable.eq_ignore_ascii_case(executable_stem))
 }
 
+#[must_use]
+pub fn is_remote_desktop_session(is_client: bool, maximized_or_fullscreen: bool) -> bool {
+    is_client && maximized_or_fullscreen
+}
+
+#[must_use]
+pub fn window_fills_monitor(window: [i32; 4], monitor: [i32; 4]) -> bool {
+    window[0] <= monitor[0]
+        && window[1] <= monitor[1]
+        && window[2] >= monitor[2]
+        && window[3] >= monitor[3]
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Modifiers {
     pub alt: bool,
@@ -1299,6 +1312,34 @@ mod tests {
         assert!(is_remote_desktop_client("Chrome_WidgetWin_1", "mstsc"));
         assert!(is_remote_desktop_client("Chrome_WidgetWin_1", "msrdc"));
         assert!(!is_remote_desktop_client("Chrome_WidgetWin_1", "chrome"));
+    }
+
+    #[test]
+    fn windowed_remote_desktop_keeps_alt_tab_replacement() {
+        assert!(!is_remote_desktop_session(true, false));
+        assert!(is_remote_desktop_session(true, true));
+        assert!(!is_remote_desktop_session(false, true));
+        assert!(!window_fills_monitor(
+            [100, 100, 900, 700],
+            [0, 0, 1920, 1080]
+        ));
+        assert!(window_fills_monitor([0, 0, 1920, 1080], [0, 0, 1920, 1080]));
+
+        let settings =
+            HookSettings::default().for_foreground(is_remote_desktop_session(true, false));
+        let mut state = HookState::default();
+        assert!(
+            state
+                .process_key(KeyEvent::pressed(Key::LeftAlt, ALT), settings)
+                .suppress
+        );
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings),
+            HookOutcome {
+                suppress: true,
+                actions: [Some(InputAction::Switch(1)), None],
+            }
+        );
     }
 
     #[test]
