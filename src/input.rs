@@ -25,6 +25,37 @@ impl Default for HookSettings {
     }
 }
 
+impl HookSettings {
+    #[must_use]
+    pub fn for_foreground(self, remote_desktop_client: bool) -> Self {
+        if !remote_desktop_client {
+            return self;
+        }
+        Self {
+            replace_alt_tab: false,
+            replace_win_tab: false,
+            ..self
+        }
+    }
+}
+
+#[must_use]
+pub fn is_remote_desktop_client(class_name: &str, executable_stem: &str) -> bool {
+    const WINDOW_CLASSES: &[&str] = &[
+        "TscShellContainerClass",
+        "IHWindowClass",
+        "UIMainClass",
+        "TSSHELLWND",
+    ];
+    const EXECUTABLES: &[&str] = &["mstsc", "msrdc", "msrdcw"];
+    WINDOW_CLASSES
+        .iter()
+        .any(|class| class.eq_ignore_ascii_case(class_name))
+        || EXECUTABLES
+            .iter()
+            .any(|executable| executable.eq_ignore_ascii_case(executable_stem))
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Modifiers {
     pub alt: bool,
@@ -1227,6 +1258,47 @@ mod tests {
             HookOutcome::default()
         );
         assert_eq!(state.take_replayed_key_events(), [None; 3]);
+    }
+
+    #[test]
+    fn remote_desktop_foreground_disables_windows_key_replacement() {
+        let settings = HookSettings::default().for_foreground(true);
+        assert!(!settings.replace_alt_tab);
+        assert!(!settings.replace_win_tab);
+        assert!(settings.right_button_wheel_switching);
+        assert!(
+            HookSettings::default()
+                .for_foreground(false)
+                .replace_alt_tab
+        );
+    }
+
+    #[test]
+    fn remote_desktop_passthrough_forwards_alt_tab_instead_of_opening_the_switcher() {
+        let mut state = HookState::default();
+        let settings = HookSettings::default().for_foreground(true);
+
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(Key::LeftAlt, ALT), settings),
+            HookOutcome::default()
+        );
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings),
+            HookOutcome::default()
+        );
+        assert_eq!(state.take_replayed_key_events(), [None; 3]);
+    }
+
+    #[test]
+    fn remote_desktop_clients_are_detected_by_window_class_or_executable() {
+        assert!(is_remote_desktop_client(
+            "TscShellContainerClass",
+            "explorer"
+        ));
+        assert!(is_remote_desktop_client("IHWindowClass", "notepad"));
+        assert!(is_remote_desktop_client("Chrome_WidgetWin_1", "mstsc"));
+        assert!(is_remote_desktop_client("Chrome_WidgetWin_1", "msrdc"));
+        assert!(!is_remote_desktop_client("Chrome_WidgetWin_1", "chrome"));
     }
 
     #[test]

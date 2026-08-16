@@ -11,7 +11,8 @@ use crate::window_commands::{
     execute as execute_window_command, show_menu as show_window_command_menu,
 };
 use alttabio::input::{
-    HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
+    HookSettings, InputAction, OverlayKeyEvent, WindowCommand, is_remote_desktop_client,
+    overlay_key_action,
 };
 use alttabio::settings::{Settings, Theme};
 use alttabio::switcher::{
@@ -24,6 +25,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Foundation::{
     CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
@@ -42,26 +44,27 @@ use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetActiveWindow, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
     TrackMouseEvent, VK_BACK, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GCLP_HICON, GCLP_HICONSM,
-    GW_OWNER, GWL_EXSTYLE, GWLP_USERDATA, GetClassLongPtrW, GetClassNameW, GetCursorPos,
-    GetForegroundWindow, GetLastActivePopup, GetMessageW, GetShellWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, ICON_BIG,
-    ICON_SMALL, ICON_SMALL2, IDC_ARROW, IsIconic, IsWindowVisible, KillTimer, LoadCursorW,
-    MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
-    SendMessageTimeoutW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, ShowWindowAsync, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE,
-    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
-    WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP, WS_THICKFRAME,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_SYSTEM_FOREGROUND, EnumWindows,
+    GCLP_HICON, GCLP_HICONSM, GW_OWNER, GWL_EXSTYLE, GWLP_USERDATA, GetClassLongPtrW,
+    GetClassNameW, GetCursorPos, GetForegroundWindow, GetLastActivePopup, GetMessageW,
+    GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, ICON_SMALL2, IDC_ARROW, IsIconic,
+    IsWindowVisible, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOW,
+    SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage,
+    WINEVENT_OUTOFCONTEXT, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
 };
 use windows::core::{BOOL, Error, PCWSTR, PWSTR, Result, w};
 
@@ -70,10 +73,13 @@ const WINDOW_TITLE: PCWSTR = w!("AltTabio");
 const WM_SHOW_SETTINGS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 3;
 const WM_DESTROY_APP: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
 const WM_SHOW_ABOUT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5;
+const WM_FOREGROUND_CHECK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 6;
 const WM_MOUSE_LEAVE: u32 = 0x02A3;
 const CLOSE_REFRESH_TIMER_ID: usize = 1;
 const CLOSE_REFRESH_DELAY_MS: u32 = 250;
 const CLOSE_REFRESH_ATTEMPTS: u8 = 20;
+
+static FOREGROUND_NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);
 
 pub fn run(
     preview_mode: bool,
@@ -346,6 +352,7 @@ struct App {
     settings_store: SettingsStore,
     settings_dialog_open: bool,
     about_dialog_open: bool,
+    foreground_event_hook: Option<HWINEVENTHOOK>,
 }
 
 struct AppHost {
@@ -449,6 +456,7 @@ impl App {
             settings_store,
             settings_dialog_open: false,
             about_dialog_open: false,
+            foreground_event_hook: None,
         })
     }
 
@@ -469,38 +477,21 @@ impl App {
                 .map_err(|error| format!("Could not create the tray icon: {error}"))?,
             );
             self.hooks = Some(HookThread::start(hwnd, hook_settings(&self.settings))?);
+            FOREGROUND_NOTIFY_HWND.store(hwnd.0 as isize, Ordering::Release);
+            match install_foreground_event_hook() {
+                Ok(hook) => self.foreground_event_hook = Some(hook),
+                Err(error) => {
+                    eprintln!("Could not watch Remote Desktop windows to forward Alt+Tab: {error}");
+                }
+            }
+            self.handle_foreground_check();
         }
         Ok(())
     }
 
     fn handle_message(&mut self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        if let Some(result) = self
-            .tray
-            .as_ref()
-            .and_then(|tray| tray.restore_for_message(message))
-        {
-            if let Err(error) = result {
-                eprintln!(
-                    "Could not restore the AltTabio tray icon after Explorer restarted: {error}"
-                );
-            }
-            return Some(LRESULT(0));
-        }
-        if message == WM_HOOK_ACTION {
-            if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
-                && let Some(action) = decode_action(wparam, lparam)
-            {
-                self.handle_input_action(action);
-            }
-            return Some(LRESULT(0));
-        }
-        if message == WM_TRAY_CALLBACK {
-            self.handle_tray_message(lparam);
-            return Some(LRESULT(0));
-        }
-        if message == WM_TIMER && wparam.0 == CLOSE_REFRESH_TIMER_ID {
-            self.handle_close_refresh_timer();
-            return Some(LRESULT(0));
+        if let Some(result) = self.handle_posted_message(message, wparam, lparam) {
+            return Some(result);
         }
         match message {
             WM_DPICHANGED => {
@@ -573,6 +564,49 @@ impl App {
         }
     }
 
+    fn handle_posted_message(
+        &mut self,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        if let Some(result) = self
+            .tray
+            .as_ref()
+            .and_then(|tray| tray.restore_for_message(message))
+        {
+            if let Err(error) = result {
+                eprintln!(
+                    "Could not restore the AltTabio tray icon after Explorer restarted: {error}"
+                );
+            }
+            return Some(LRESULT(0));
+        }
+        match message {
+            WM_HOOK_ACTION => {
+                if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
+                    && let Some(action) = decode_action(wparam, lparam)
+                {
+                    self.handle_input_action(action);
+                }
+                Some(LRESULT(0))
+            }
+            WM_TRAY_CALLBACK => {
+                self.handle_tray_message(lparam);
+                Some(LRESULT(0))
+            }
+            WM_FOREGROUND_CHECK => {
+                self.handle_foreground_check();
+                Some(LRESULT(0))
+            }
+            WM_TIMER if wparam.0 == CLOSE_REFRESH_TIMER_ID => {
+                self.handle_close_refresh_timer();
+                Some(LRESULT(0))
+            }
+            _ => None,
+        }
+    }
+
     fn handle_tray_message(&mut self, lparam: LPARAM) {
         let message = u32::try_from(lparam.0).unwrap_or_default();
         let action = match message {
@@ -590,6 +624,19 @@ impl App {
             TrayAction::About => self.request_modal_dialog(WM_SHOW_ABOUT, "About"),
             TrayAction::Exit => self.request_close("the tray"),
             TrayAction::None => {}
+        }
+    }
+
+    fn handle_foreground_check(&mut self) {
+        let focused = foreground_is_remote_desktop_client(self.hwnd);
+        if focused && self.is_visible() {
+            self.hide_overlay();
+        }
+        let Some(hooks) = self.hooks.as_ref() else {
+            return;
+        };
+        if let Err(error) = hooks.set_remote_desktop_client_focused(focused) {
+            eprintln!("{error}");
         }
     }
 
@@ -722,6 +769,10 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        FOREGROUND_NOTIFY_HWND.store(0, Ordering::Release);
+        if let Some(hook) = self.foreground_event_hook.take() {
+            unhook_foreground_event(hook);
+        }
         if let Some(preview) = &mut self.preview {
             preview.clear();
         }
@@ -1339,6 +1390,81 @@ fn show_error_for_window(owner: HWND, message: &str) {
             MB_OK | MB_ICONERROR,
         );
     }
+}
+
+fn foreground_is_remote_desktop_client(overlay: HWND) -> bool {
+    let hwnd = unsafe {
+        // SAFETY: GetForegroundWindow has no pointer preconditions.
+        GetForegroundWindow()
+    };
+    if hwnd.0.is_null() || hwnd == overlay {
+        return false;
+    }
+    let class_name = window_class_name(hwnd);
+    let mut process_id = 0_u32;
+    unsafe {
+        // SAFETY: process_id is writable and hwnd is the live foreground window.
+        GetWindowThreadProcessId(hwnd, Some(&raw mut process_id));
+    }
+    let (executable_stem, _) = process_details(process_id);
+    is_remote_desktop_client(&class_name, &executable_stem)
+}
+
+fn install_foreground_event_hook() -> std::result::Result<HWINEVENTHOOK, String> {
+    let hook = unsafe {
+        // SAFETY: `foreground_event_proc` has the required ABI, is panic-contained, and only posts
+        // a message to the overlay HWND stored in FOREGROUND_NOTIFY_HWND. The hook is removed
+        // during App::shutdown before that HWND is destroyed.
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
+    if hook.is_invalid() {
+        return Err(Error::from_thread().to_string());
+    }
+    Ok(hook)
+}
+
+fn unhook_foreground_event(hook: HWINEVENTHOOK) {
+    let result = unsafe {
+        // SAFETY: `hook` was returned by SetWinEventHook on this UI thread and is removed once.
+        UnhookWinEvent(hook)
+    };
+    if !result.as_bool() {
+        eprintln!(
+            "Could not remove the Remote Desktop foreground watcher: {}",
+            Error::from_thread()
+        );
+    }
+}
+
+unsafe extern "system" fn foreground_event_proc(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    let _ = catch_unwind(|| {
+        let target = FOREGROUND_NOTIFY_HWND.load(Ordering::Acquire);
+        if target == 0 {
+            return;
+        }
+        let hwnd = HWND(target as *mut c_void);
+        unsafe {
+            // SAFETY: `hwnd` is the overlay window published before the winevent hook is installed
+            // and cleared before shutdown unhooks it. PostMessageW copies the integer payloads.
+            let _posted = PostMessageW(Some(hwnd), WM_FOREGROUND_CHECK, WPARAM(0), LPARAM(0));
+        }
+    });
 }
 
 fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

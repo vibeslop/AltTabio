@@ -60,6 +60,7 @@ struct HookContext {
     settings: HookSettings,
     search_active: Arc<AtomicBool>,
     overlay_active: Arc<AtomicBool>,
+    remote_desktop_client: Arc<AtomicBool>,
     target_thread_id: u32,
     hook_thread_id: u32,
     pending_errors: u8,
@@ -93,6 +94,7 @@ pub struct HookThread {
     join_handle: Option<JoinHandle<()>>,
     search_active: Arc<AtomicBool>,
     overlay_active: Arc<AtomicBool>,
+    remote_desktop_client: Arc<AtomicBool>,
 }
 
 impl HookThread {
@@ -112,6 +114,8 @@ impl HookThread {
         let hook_search_active = Arc::clone(&search_active);
         let overlay_active = Arc::new(AtomicBool::new(false));
         let hook_overlay_active = Arc::clone(&overlay_active);
+        let remote_desktop_client = Arc::new(AtomicBool::new(false));
+        let hook_remote_desktop_client = Arc::clone(&remote_desktop_client);
         let (sender, receiver) = mpsc::sync_channel(1);
         let join_handle = thread::Builder::new()
             .name("alttabio-hooks".to_owned())
@@ -123,6 +127,7 @@ impl HookThread {
                     settings,
                     hook_search_active,
                     hook_overlay_active,
+                    hook_remote_desktop_client,
                     &sender,
                 ) && sender.send(Err(error)).is_err()
                 {
@@ -137,6 +142,7 @@ impl HookThread {
                 join_handle: Some(join_handle),
                 search_active,
                 overlay_active,
+                remote_desktop_client,
             }),
             Ok(Err(error)) => {
                 report_join_error(join_handle.join(), "after setup failed");
@@ -155,6 +161,14 @@ impl HookThread {
 
     pub fn set_overlay_active(&self, active: bool) {
         self.overlay_active.store(active, Ordering::Release);
+    }
+
+    pub fn set_remote_desktop_client_focused(&self, focused: bool) -> Result<(), String> {
+        let was_focused = self.remote_desktop_client.swap(focused, Ordering::Release);
+        if was_focused == focused {
+            return Ok(());
+        }
+        self.reset_gestures()
     }
 
     pub fn reset_gestures(&self) -> Result<(), String> {
@@ -218,6 +232,7 @@ fn run_hook_thread(
     settings: HookSettings,
     search_active: Arc<AtomicBool>,
     overlay_active: Arc<AtomicBool>,
+    remote_desktop_client: Arc<AtomicBool>,
     ready: &SyncSender<Result<u32, String>>,
 ) -> Result<(), String> {
     let thread_id = unsafe {
@@ -238,6 +253,7 @@ fn run_hook_thread(
             settings,
             search_active,
             overlay_active,
+            remote_desktop_client,
             target_thread_id,
             hook_thread_id: thread_id,
             pending_errors: 0,
@@ -376,7 +392,9 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         context
             .state
             .set_overlay_active(context.overlay_active.load(Ordering::Acquire));
-        let mut settings = context.settings;
+        let mut settings = context
+            .settings
+            .for_foreground(context.remote_desktop_client.load(Ordering::Acquire));
         settings.search_active = search_active;
         let text = if search_active && transition == KeyTransition::Pressed {
             translate_search_character(data, context.target_thread_id)
@@ -908,6 +926,7 @@ mod tests {
             settings: HookSettings::default(),
             search_active: Arc::clone(&search_active),
             overlay_active: Arc::clone(&overlay_active),
+            remote_desktop_client: Arc::new(AtomicBool::new(false)),
             target_thread_id: 0,
             hook_thread_id: 0,
             pending_errors: 0,
