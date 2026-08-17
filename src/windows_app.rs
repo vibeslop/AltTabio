@@ -50,23 +50,24 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     TrackMouseEvent, VK_BACK, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_OBJECT_LOCATIONCHANGE,
-    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
-    EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT, GCLP_HICON, GCLP_HICONSM, GW_OWNER,
-    GWL_EXSTYLE, GWLP_USERDATA, GetAncestor, GetClassLongPtrW, GetClassNameW, GetCursorPos,
-    GetForegroundWindow, GetLastActivePopup, GetMessageW, GetShellWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, ICON_SMALL2, IDC_ARROW, IsIconic,
-    IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE,
-    SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage,
-    WINEVENT_OUTOFCONTEXT, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
-    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
+    BringWindowToTop, CHILDID_SELF, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_OBJECT_DESTROY,
+    EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND,
+    EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND, EnumWindows,
+    GA_ROOT, GCLP_HICON, GCLP_HICONSM, GW_OWNER, GWL_EXSTYLE, GWLP_USERDATA, GetAncestor,
+    GetClassLongPtrW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetLastActivePopup,
+    GetMessageW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, ICON_SMALL2, IDC_ARROW,
+    IsIconic, IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG,
+    MessageBoxW, OBJID_WINDOW, PostMessageW, PostQuitMessage, RegisterClassExW, SMTO_ABORTIFHUNG,
+    SMTO_BLOCK, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
+    TranslateMessage, WINEVENT_OUTOFCONTEXT, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
+    WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP, WS_THICKFRAME,
 };
 use windows::core::{BOOL, Error, PCWSTR, PWSTR, Result, w};
 
@@ -76,12 +77,13 @@ const WM_SHOW_SETTINGS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 
 const WM_DESTROY_APP: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
 const WM_SHOW_ABOUT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5;
 const WM_FOREGROUND_CHECK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 6;
+const WM_LISTED_WINDOW_REFRESH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 7;
 const WM_MOUSE_LEAVE: u32 = 0x02A3;
 const CLOSE_REFRESH_TIMER_ID: usize = 1;
 const CLOSE_REFRESH_DELAY_MS: u32 = 250;
 const CLOSE_REFRESH_ATTEMPTS: u8 = 20;
 
-static FOREGROUND_NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);
+static WIN_EVENT_NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);
 static FOREGROUND_CHECK_QUEUED: AtomicBool = AtomicBool::new(false);
 static FOREGROUND_WIDTH: AtomicI32 = AtomicI32::new(0);
 static FOREGROUND_HEIGHT: AtomicI32 = AtomicI32::new(0);
@@ -351,13 +353,14 @@ struct App {
     mouse_leave_tracked: bool,
     close_button: CloseButtonInteraction,
     close_refresh_tracker: CloseRefreshTracker,
+    deferred_listed_refreshes: Vec<isize>,
     exit_when_hidden: bool,
     dwm_preview: bool,
     settings: Settings,
     settings_store: SettingsStore,
     settings_dialog_open: bool,
     about_dialog_open: bool,
-    foreground_event_hooks: Vec<HWINEVENTHOOK>,
+    win_event_hooks: Vec<HWINEVENTHOOK>,
 }
 
 struct AppHost {
@@ -455,13 +458,14 @@ impl App {
             mouse_leave_tracked: false,
             close_button: CloseButtonInteraction::default(),
             close_refresh_tracker: CloseRefreshTracker::default(),
+            deferred_listed_refreshes: Vec::new(),
             exit_when_hidden,
             dwm_preview,
             settings,
             settings_store,
             settings_dialog_open: false,
             about_dialog_open: false,
-            foreground_event_hooks: Vec::new(),
+            win_event_hooks: Vec::new(),
         })
     }
 
@@ -482,11 +486,11 @@ impl App {
                 .map_err(|error| format!("Could not create the tray icon: {error}"))?,
             );
             self.hooks = Some(HookThread::start(hwnd, hook_settings(&self.settings))?);
-            FOREGROUND_NOTIFY_HWND.store(hwnd.0 as isize, Ordering::Release);
-            match install_foreground_event_hooks() {
-                Ok(hooks) => self.foreground_event_hooks = hooks,
+            WIN_EVENT_NOTIFY_HWND.store(hwnd.0 as isize, Ordering::Release);
+            match install_win_event_hooks() {
+                Ok(hooks) => self.win_event_hooks = hooks,
                 Err(error) => {
-                    eprintln!("Could not watch Remote Desktop windows to forward Alt+Tab: {error}");
+                    eprintln!("Could not watch window events: {error}");
                 }
             }
             self.handle_foreground_check();
@@ -602,6 +606,10 @@ impl App {
             }
             WM_FOREGROUND_CHECK => {
                 self.handle_foreground_check();
+                Some(LRESULT(0))
+            }
+            WM_LISTED_WINDOW_REFRESH => {
+                self.handle_listed_window_refresh(HWND(lparam.0 as *mut c_void));
                 Some(LRESULT(0))
             }
             WM_TIMER if wparam.0 == CLOSE_REFRESH_TIMER_ID => {
@@ -775,9 +783,9 @@ impl App {
     }
 
     fn shutdown(&mut self) {
-        FOREGROUND_NOTIFY_HWND.store(0, Ordering::Release);
-        for hook in self.foreground_event_hooks.drain(..) {
-            unhook_foreground_event(hook);
+        WIN_EVENT_NOTIFY_HWND.store(0, Ordering::Release);
+        for hook in self.win_event_hooks.drain(..) {
+            unhook_win_event(hook);
         }
         if let Some(preview) = &mut self.preview {
             preview.clear();
@@ -881,11 +889,7 @@ impl App {
             Err(error) => eprintln!("Could not refresh windows after {command:?}: {error}"),
         }
         self.close_button.reset();
-        if self.session.is_visible() {
-            self.request_redraw();
-        } else {
-            self.hide_overlay();
-        }
+        self.sync_overlay_after_task_refresh();
     }
 
     fn schedule_close_refresh(&mut self, window_handle: isize) {
@@ -911,6 +915,9 @@ impl App {
     }
 
     fn handle_close_refresh_timer(&mut self) {
+        if self.session.context_menu_open() {
+            return;
+        }
         let keep_refreshing = match enumerate_switchable_windows(&self.settings) {
             Ok(tasks) => {
                 let keep_refreshing = self.close_refresh_tracker.reconcile(&tasks);
@@ -931,6 +938,51 @@ impl App {
                 eprintln!("Could not stop the close refresh timer: {error}");
             }
         }
+        self.sync_overlay_after_task_refresh();
+    }
+
+    fn handle_listed_window_refresh(&mut self, hwnd: HWND) {
+        let window_handle = hwnd.0 as isize;
+        match listed_window_refresh_action(
+            self.session.is_visible(),
+            self.session
+                .switcher()
+                .contains_window_handle(window_handle),
+            self.session.context_menu_open(),
+        ) {
+            ListedWindowRefreshAction::Ignore => return,
+            ListedWindowRefreshAction::Defer => {
+                if !self.deferred_listed_refreshes.contains(&window_handle) {
+                    self.deferred_listed_refreshes.push(window_handle);
+                }
+                return;
+            }
+            ListedWindowRefreshAction::RefreshNow => {}
+        }
+        match enumerate_switchable_windows(&self.settings) {
+            Ok(tasks) => {
+                let retry = close_refresh_target_if_still_listed(window_handle, &tasks);
+                self.session.refresh_tasks(tasks);
+                if let Some(window_handle) = retry {
+                    self.schedule_close_refresh(window_handle);
+                }
+            }
+            Err(error) => {
+                eprintln!("Could not refresh windows after an external close: {error}");
+                self.schedule_close_refresh(window_handle);
+            }
+        }
+        self.sync_overlay_after_task_refresh();
+    }
+
+    fn flush_deferred_listed_window_refreshes(&mut self) {
+        let deferred = std::mem::take(&mut self.deferred_listed_refreshes);
+        for window_handle in deferred {
+            self.handle_listed_window_refresh(HWND(window_handle as *mut c_void));
+        }
+    }
+
+    fn sync_overlay_after_task_refresh(&mut self) {
         if self.session.is_visible() {
             self.request_redraw();
         } else {
@@ -1064,6 +1116,7 @@ impl App {
         if let Some(command) = command {
             self.handle_input_action(InputAction::WindowCommand(command));
         }
+        self.flush_deferred_listed_window_refreshes();
     }
 
     fn handle_dpi_changed(&mut self, lparam: LPARAM) {
@@ -1162,6 +1215,7 @@ impl App {
     }
 
     fn hide_overlay(&mut self) {
+        self.deferred_listed_refreshes.clear();
         self.session.hide();
         self.set_hook_search_active(false);
         self.reset_hook_gestures();
@@ -1461,24 +1515,26 @@ fn is_maximized_or_fullscreen(hwnd: HWND) -> bool {
         )
 }
 
-fn install_foreground_event_hooks() -> std::result::Result<Vec<HWINEVENTHOOK>, String> {
-    const RANGES: [(u32, u32); 4] = [
+fn install_win_event_hooks() -> std::result::Result<Vec<HWINEVENTHOOK>, String> {
+    const RANGES: [(u32, u32); 6] = [
         (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
         (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND),
         (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
         (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
+        (EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY),
+        (EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE),
     ];
     let mut hooks = Vec::new();
     for (min_event, max_event) in RANGES {
         let hook = unsafe {
-            // SAFETY: `foreground_event_proc` has the required ABI, is panic-contained, and only
-            // posts a message to the overlay HWND stored in FOREGROUND_NOTIFY_HWND. The hooks are
-            // removed during App::shutdown before that HWND is destroyed.
+            // SAFETY: `win_event_proc` has the required ABI, is panic-contained, and only posts a
+            // message to the overlay HWND stored in WIN_EVENT_NOTIFY_HWND. The hooks are removed
+            // during App::shutdown before that HWND is destroyed.
             SetWinEventHook(
                 min_event,
                 max_event,
                 None,
-                Some(foreground_event_proc),
+                Some(win_event_proc),
                 0,
                 0,
                 WINEVENT_OUTOFCONTEXT,
@@ -1486,7 +1542,7 @@ fn install_foreground_event_hooks() -> std::result::Result<Vec<HWINEVENTHOOK>, S
         };
         if hook.is_invalid() {
             for installed in hooks.drain(..) {
-                unhook_foreground_event(installed);
+                unhook_win_event(installed);
             }
             return Err(Error::from_thread().to_string());
         }
@@ -1495,33 +1551,36 @@ fn install_foreground_event_hooks() -> std::result::Result<Vec<HWINEVENTHOOK>, S
     Ok(hooks)
 }
 
-fn unhook_foreground_event(hook: HWINEVENTHOOK) {
+fn unhook_win_event(hook: HWINEVENTHOOK) {
     let result = unsafe {
         // SAFETY: `hook` was returned by SetWinEventHook on this UI thread and is removed once.
         UnhookWinEvent(hook)
     };
     if !result.as_bool() {
         eprintln!(
-            "Could not remove the Remote Desktop foreground watcher: {}",
+            "Could not remove the window event watcher: {}",
             Error::from_thread()
         );
     }
 }
 
-unsafe extern "system" fn foreground_event_proc(
+unsafe extern "system" fn win_event_proc(
     _hook: HWINEVENTHOOK,
     event: u32,
     hwnd: HWND,
-    _object: i32,
-    _child: i32,
+    object: i32,
+    child: i32,
     _thread: u32,
     _time: u32,
 ) {
     let _ = catch_unwind(|| {
-        if !should_request_foreground_check(event, hwnd) {
+        if should_request_listed_window_refresh(event, hwnd, object, child) {
+            request_listed_window_refresh(hwnd);
             return;
         }
-        request_foreground_check();
+        if should_request_foreground_check(event, hwnd) {
+            request_foreground_check();
+        }
     });
 }
 
@@ -1568,7 +1627,7 @@ fn foreground_root_resized(hwnd: HWND) -> bool {
 }
 
 fn request_foreground_check() {
-    let target = FOREGROUND_NOTIFY_HWND.load(Ordering::Acquire);
+    let target = WIN_EVENT_NOTIFY_HWND.load(Ordering::Acquire);
     if target == 0 {
         return;
     }
@@ -1582,6 +1641,25 @@ fn request_foreground_check() {
         if PostMessageW(Some(hwnd), WM_FOREGROUND_CHECK, WPARAM(0), LPARAM(0)).is_err() {
             FOREGROUND_CHECK_QUEUED.store(false, Ordering::Release);
         }
+    }
+}
+
+fn request_listed_window_refresh(hwnd: HWND) {
+    let target = WIN_EVENT_NOTIFY_HWND.load(Ordering::Acquire);
+    if target == 0 {
+        return;
+    }
+    let overlay = HWND(target as *mut c_void);
+    unsafe {
+        // SAFETY: `overlay` is the overlay window published before the winevent hook is installed
+        // and cleared before shutdown unhooks it. LPARAM copies the affected HWND integer. A failed
+        // post cannot be reported from this callback.
+        let _ = PostMessageW(
+            Some(overlay),
+            WM_LISTED_WINDOW_REFRESH,
+            WPARAM(0),
+            LPARAM(hwnd.0 as isize),
+        );
     }
 }
 
@@ -2262,15 +2340,51 @@ const fn key_was_previously_down(lparam: LPARAM) -> bool {
     lparam.0 & previous_key_state_mask != 0
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ListedWindowRefreshAction {
+    Ignore,
+    Defer,
+    RefreshNow,
+}
+
+fn listed_window_refresh_action(
+    session_visible: bool,
+    window_is_listed: bool,
+    context_menu_open: bool,
+) -> ListedWindowRefreshAction {
+    if !session_visible || !window_is_listed {
+        ListedWindowRefreshAction::Ignore
+    } else if context_menu_open {
+        ListedWindowRefreshAction::Defer
+    } else {
+        ListedWindowRefreshAction::RefreshNow
+    }
+}
+
+fn should_request_listed_window_refresh(event: u32, hwnd: HWND, object: i32, child: i32) -> bool {
+    !hwnd.0.is_null()
+        && matches!(event, EVENT_OBJECT_HIDE | EVENT_OBJECT_DESTROY)
+        && object == OBJID_WINDOW.0
+        && i32::try_from(CHILDID_SELF).is_ok_and(|child_self| child == child_self)
+}
+
+fn close_refresh_target_if_still_listed(
+    window_handle: isize,
+    tasks: &[SwitchTask],
+) -> Option<isize> {
+    tasks
+        .iter()
+        .any(|task| task.window_handle == window_handle)
+        .then_some(window_handle)
+}
+
 fn close_refresh_target_after_enumeration(
     request: WindowCommandRequest,
     tasks: &[SwitchTask],
 ) -> Option<isize> {
-    (request.command == WindowCommand::Close
-        && tasks
-            .iter()
-            .any(|task| task.window_handle == request.window_handle))
-    .then_some(request.window_handle)
+    (request.command == WindowCommand::Close)
+        .then(|| close_refresh_target_if_still_listed(request.window_handle, tasks))
+        .flatten()
 }
 
 fn mouse_coordinates(lparam: LPARAM) -> (i32, i32) {
@@ -2325,6 +2439,130 @@ fn null_terminated(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{EVENT_OBJECT_SHOW, OBJID_CLIENT};
+
+    fn listed_window_hwnd() -> HWND {
+        HWND(0x100usize as *mut c_void)
+    }
+
+    fn window_self_ids() -> (i32, i32) {
+        (
+            OBJID_WINDOW.0,
+            i32::try_from(CHILDID_SELF).unwrap_or_default(),
+        )
+    }
+
+    #[test]
+    fn window_hide_and_destroy_request_listed_refresh() {
+        let hwnd = listed_window_hwnd();
+        let (object, child) = window_self_ids();
+
+        assert!(should_request_listed_window_refresh(
+            EVENT_OBJECT_HIDE,
+            hwnd,
+            object,
+            child
+        ));
+        assert!(should_request_listed_window_refresh(
+            EVENT_OBJECT_DESTROY,
+            hwnd,
+            object,
+            child
+        ));
+    }
+
+    #[test]
+    fn child_object_show_and_unrelated_events_do_not_request_listed_refresh() {
+        let hwnd = listed_window_hwnd();
+        let (object, child) = window_self_ids();
+
+        assert!(!should_request_listed_window_refresh(
+            EVENT_OBJECT_HIDE,
+            hwnd,
+            OBJID_CLIENT.0,
+            child
+        ));
+        assert!(!should_request_listed_window_refresh(
+            EVENT_OBJECT_DESTROY,
+            hwnd,
+            object,
+            1
+        ));
+        assert!(!should_request_listed_window_refresh(
+            EVENT_OBJECT_SHOW,
+            hwnd,
+            object,
+            child
+        ));
+        assert!(!should_request_listed_window_refresh(
+            EVENT_SYSTEM_FOREGROUND,
+            hwnd,
+            object,
+            child
+        ));
+        assert!(!should_request_listed_window_refresh(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            hwnd,
+            object,
+            child
+        ));
+        assert!(!should_request_listed_window_refresh(
+            EVENT_OBJECT_HIDE,
+            HWND::default(),
+            object,
+            child
+        ));
+    }
+
+    #[test]
+    fn hidden_sessions_and_unlisted_windows_ignore_lifecycle_events() {
+        assert_eq!(
+            listed_window_refresh_action(false, true, false),
+            ListedWindowRefreshAction::Ignore
+        );
+        assert_eq!(
+            listed_window_refresh_action(true, false, false),
+            ListedWindowRefreshAction::Ignore
+        );
+        assert_eq!(
+            listed_window_refresh_action(false, false, false),
+            ListedWindowRefreshAction::Ignore
+        );
+        assert_eq!(
+            listed_window_refresh_action(true, false, true),
+            ListedWindowRefreshAction::Ignore
+        );
+        assert_eq!(
+            listed_window_refresh_action(true, true, false),
+            ListedWindowRefreshAction::RefreshNow
+        );
+        assert_eq!(
+            listed_window_refresh_action(true, true, true),
+            ListedWindowRefreshAction::Defer
+        );
+    }
+
+    #[test]
+    fn external_close_skips_follow_up_when_the_hwnd_is_already_gone() {
+        let remaining = [SwitchTask::new(1, 10, "Browser", "browser")];
+
+        assert_eq!(close_refresh_target_if_still_listed(20, &remaining), None);
+    }
+
+    #[test]
+    fn external_close_retries_while_the_hwnd_remains_listed() {
+        let stale = [
+            SwitchTask::new(1, 10, "Browser", "browser"),
+            SwitchTask::new(2, 20, "Closing", "editor"),
+        ];
+        assert_eq!(close_refresh_target_if_still_listed(20, &stale), Some(20));
+
+        let mut tracker = CloseRefreshTracker::default();
+        assert!(tracker.track(20));
+        assert!(tracker.reconcile(&stale));
+        assert!(!tracker.reconcile(&[SwitchTask::new(1, 10, "Browser", "browser")]));
+        assert!(tracker.pending.is_empty());
+    }
 
     #[test]
     fn own_visible_dialogs_are_not_excluded_from_switching() {

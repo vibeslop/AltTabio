@@ -189,6 +189,11 @@ impl SwitcherSession {
         self.context_menu_open = open;
     }
 
+    #[must_use]
+    pub const fn context_menu_open(&self) -> bool {
+        self.context_menu_open
+    }
+
     pub fn hide(&mut self) {
         self.visible = false;
     }
@@ -340,6 +345,13 @@ impl Switcher {
         if self.filter.pop().is_some() {
             self.apply_filter();
         }
+    }
+
+    #[must_use]
+    pub fn contains_window_handle(&self, window_handle: isize) -> bool {
+        self.all_tasks
+            .iter()
+            .any(|task| task.window_handle == window_handle)
     }
 
     pub fn visible_tasks(&self) -> impl Iterator<Item = &SwitchTask> {
@@ -570,10 +582,63 @@ mod tests {
         });
         session.open([SwitchTask::new(1, 10, "Last window", "app")], None);
         assert!(session.is_visible());
+        assert!(session.search_active());
 
         session.refresh_tasks([]);
 
         assert!(!session.is_visible());
+        assert!(!session.search_active());
+    }
+
+    #[test]
+    fn refreshing_a_non_last_task_keeps_the_remaining_list_usable() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "Keep", "keep"),
+                SwitchTask::new(2, 20, "Closing", "closing"),
+            ],
+            None,
+        );
+
+        session.refresh_tasks([SwitchTask::new(1, 10, "Keep", "keep")]);
+
+        assert!(session.is_visible());
+        assert_eq!(session.switcher().visible_task_count(), 1);
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(10)
+        );
+        assert_eq!(
+            session.handle_input(InputAction::Navigate(1)),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn switcher_still_lists_search_filtered_windows() {
+        let mut switcher = Switcher::default();
+        switcher.set_tasks(tasks());
+        switcher.set_filter("q");
+
+        assert_eq!(switcher.visible_task_count(), 0);
+        assert!(switcher.contains_window_handle(10));
+        assert!(switcher.contains_window_handle(20));
+        assert!(!switcher.contains_window_handle(99));
     }
 
     #[test]
