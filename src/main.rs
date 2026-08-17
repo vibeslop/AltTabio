@@ -14,6 +14,7 @@ mod settings_io;
 mod single_instance;
 mod startup;
 mod tray;
+mod win_events;
 mod window_commands;
 mod windows_app;
 

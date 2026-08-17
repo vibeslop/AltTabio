@@ -179,7 +179,7 @@ impl SwitcherSession {
     }
 
     pub fn refresh_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
-        self.switcher.set_tasks(tasks);
+        self.switcher.refresh_tasks(tasks);
         if self.switcher.is_empty() {
             self.visible = false;
         }
@@ -315,9 +315,21 @@ impl Switcher {
     }
 
     pub fn set_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
+        self.replace_tasks(tasks);
+        self.select_first();
+    }
+
+    pub fn refresh_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
+        let selected_handle = self.selected_task().map(|task| task.window_handle);
+        let selected_index = self.selected_visible_index;
+        self.replace_tasks(tasks);
+        self.restore_selection(selected_handle, selected_index);
+    }
+
+    fn replace_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
         self.all_tasks.clear();
         self.all_tasks.extend(tasks);
-        self.apply_filter();
+        self.rebuild_visible_indices();
     }
 
     #[must_use]
@@ -473,6 +485,33 @@ impl Switcher {
         self.select_first();
     }
 
+    fn restore_selection(
+        &mut self,
+        window_handle: Option<isize>,
+        previous_visible_index: Option<usize>,
+    ) {
+        if self.visible_indices.is_empty() {
+            self.selected_visible_index = None;
+            return;
+        }
+        if let Some(window_handle) = window_handle
+            && let Some(index) = self.visible_index_for_handle(window_handle)
+        {
+            self.selected_visible_index = Some(index);
+            return;
+        }
+        let last = self.visible_indices.len().saturating_sub(1);
+        self.selected_visible_index = Some(previous_visible_index.unwrap_or(0).min(last));
+    }
+
+    fn visible_index_for_handle(&self, window_handle: isize) -> Option<usize> {
+        self.visible_indices.iter().position(|task_index| {
+            self.all_tasks
+                .get(*task_index)
+                .is_some_and(|task| task.window_handle == window_handle)
+        })
+    }
+
     fn rebuild_visible_indices(&mut self) {
         let normalized = self.filter.trim().to_lowercase();
         self.visible_indices.clear();
@@ -626,6 +665,175 @@ mod tests {
                 .selected_task()
                 .map(|task| task.window_handle),
             Some(10)
+        );
+    }
+
+    #[test]
+    fn refresh_keeps_the_selected_window_handle() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "First", "first"),
+                SwitchTask::new(2, 20, "Second", "second"),
+                SwitchTask::new(3, 30, "Third", "third"),
+            ],
+            None,
+        );
+        session.switcher_mut().select_visible_position(2);
+
+        session.refresh_tasks([
+            SwitchTask::new(1, 10, "First", "first"),
+            SwitchTask::new(2, 20, "Second renamed", "second"),
+            SwitchTask::new(3, 30, "Third", "third"),
+        ]);
+
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(20)
+        );
+        assert_eq!(session.switcher().selected_visible_index(), Some(1));
+    }
+
+    #[test]
+    fn refresh_selects_the_neighbor_when_the_selected_window_disappears() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "First", "first"),
+                SwitchTask::new(2, 20, "Closing", "second"),
+                SwitchTask::new(3, 30, "Third", "third"),
+            ],
+            None,
+        );
+        session.switcher_mut().select_visible_position(2);
+
+        session.refresh_tasks([
+            SwitchTask::new(1, 10, "First", "first"),
+            SwitchTask::new(2, 30, "Third", "third"),
+        ]);
+
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(30)
+        );
+        assert_eq!(session.switcher().selected_visible_index(), Some(1));
+    }
+
+    #[test]
+    fn refresh_clamps_to_the_last_visible_task_when_the_last_selection_disappears() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "First", "first"),
+                SwitchTask::new(2, 20, "Last", "second"),
+            ],
+            None,
+        );
+        session.switcher_mut().select_visible_position(2);
+
+        session.refresh_tasks([SwitchTask::new(1, 10, "First", "first")]);
+
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(10)
+        );
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+    }
+
+    #[test]
+    fn refresh_keeps_a_filtered_selection_by_window_handle() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "Keep notes", "notes"),
+                SwitchTask::new(2, 20, "Keep editor", "editor"),
+                SwitchTask::new(3, 30, "Other", "browser"),
+            ],
+            None,
+        );
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('k')),
+            SwitcherEffect::Redraw
+        );
+        session.switcher_mut().select_visible_position(2);
+
+        session.refresh_tasks([
+            SwitchTask::new(1, 10, "Keep notes", "notes"),
+            SwitchTask::new(2, 20, "Keep editor", "editor"),
+            SwitchTask::new(3, 30, "Other", "browser"),
+        ]);
+
+        assert_eq!(session.switcher().filter(), "k");
+        assert_eq!(session.switcher().visible_task_count(), 2);
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn refresh_falls_back_when_a_filtered_selection_disappears() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "Keep notes", "notes"),
+                SwitchTask::new(2, 20, "Keep editor", "editor"),
+                SwitchTask::new(3, 30, "Keep terminal", "terminal"),
+                SwitchTask::new(4, 40, "Other", "browser"),
+            ],
+            None,
+        );
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('k')),
+            SwitcherEffect::Redraw
+        );
+        session.switcher_mut().select_visible_position(2);
+
+        session.refresh_tasks([
+            SwitchTask::new(1, 10, "Keep notes", "notes"),
+            SwitchTask::new(2, 30, "Keep terminal", "terminal"),
+            SwitchTask::new(3, 40, "Other", "browser"),
+        ]);
+
+        assert_eq!(session.switcher().visible_task_count(), 2);
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(30)
         );
     }
 
@@ -880,6 +1088,29 @@ mod tests {
         );
 
         switcher.backspace_filter();
+        assert_eq!(switcher.visible_task_count(), 2);
+        assert_eq!(
+            switcher.selected_task().map(|task| task.window_handle),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn typing_a_filter_selects_the_first_matching_result() {
+        let mut switcher = Switcher::default();
+        switcher.set_tasks([
+            SwitchTask::new(1, 10, "Keep notes", "notes"),
+            SwitchTask::new(2, 20, "Keep editor", "editor"),
+            SwitchTask::new(3, 30, "Other", "browser"),
+        ]);
+        assert!(switcher.select_visible_position(2));
+        assert_eq!(
+            switcher.selected_task().map(|task| task.window_handle),
+            Some(20)
+        );
+
+        switcher.append_filter_character('k');
+
         assert_eq!(switcher.visible_task_count(), 2);
         assert_eq!(
             switcher.selected_task().map(|task| task.window_handle),

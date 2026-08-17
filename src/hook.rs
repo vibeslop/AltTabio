@@ -2,6 +2,7 @@ use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, Key, KeyEvent, KeyTransition, Modifiers,
     MouseEvent, ReplayedKeyEvent, ReplayedMouseEvent,
 };
+use alttabio::passthrough::PassthroughPolicy;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{
@@ -60,7 +61,7 @@ struct HookContext {
     settings: HookSettings,
     search_active: Arc<AtomicBool>,
     overlay_active: Arc<AtomicBool>,
-    remote_desktop_client: Arc<AtomicBool>,
+    remote_desktop_passthrough: Arc<AtomicBool>,
     target_thread_id: u32,
     hook_thread_id: u32,
     pending_errors: u8,
@@ -94,7 +95,7 @@ pub struct HookThread {
     join_handle: Option<JoinHandle<()>>,
     search_active: Arc<AtomicBool>,
     overlay_active: Arc<AtomicBool>,
-    remote_desktop_client: Arc<AtomicBool>,
+    remote_desktop_passthrough: Arc<AtomicBool>,
 }
 
 impl HookThread {
@@ -114,8 +115,10 @@ impl HookThread {
         let hook_search_active = Arc::clone(&search_active);
         let overlay_active = Arc::new(AtomicBool::new(false));
         let hook_overlay_active = Arc::clone(&overlay_active);
-        let remote_desktop_client = Arc::new(AtomicBool::new(false));
-        let hook_remote_desktop_client = Arc::clone(&remote_desktop_client);
+        let remote_desktop_passthrough = Arc::new(AtomicBool::new(
+            PassthroughPolicy::INITIAL.bypasses_local_switching(),
+        ));
+        let hook_remote_desktop_passthrough = Arc::clone(&remote_desktop_passthrough);
         let (sender, receiver) = mpsc::sync_channel(1);
         let join_handle = thread::Builder::new()
             .name("alttabio-hooks".to_owned())
@@ -127,7 +130,7 @@ impl HookThread {
                     settings,
                     hook_search_active,
                     hook_overlay_active,
-                    hook_remote_desktop_client,
+                    hook_remote_desktop_passthrough,
                     &sender,
                 ) && sender.send(Err(error)).is_err()
                 {
@@ -142,7 +145,7 @@ impl HookThread {
                 join_handle: Some(join_handle),
                 search_active,
                 overlay_active,
-                remote_desktop_client,
+                remote_desktop_passthrough,
             }),
             Ok(Err(error)) => {
                 report_join_error(join_handle.join(), "after setup failed");
@@ -163,9 +166,12 @@ impl HookThread {
         self.overlay_active.store(active, Ordering::Release);
     }
 
-    pub fn set_remote_desktop_client_focused(&self, focused: bool) -> Result<(), String> {
-        let was_focused = self.remote_desktop_client.swap(focused, Ordering::Release);
-        if was_focused == focused {
+    pub fn set_remote_desktop_passthrough(&self, policy: PassthroughPolicy) -> Result<(), String> {
+        let bypass = policy.bypasses_local_switching();
+        let was_bypass = self
+            .remote_desktop_passthrough
+            .swap(bypass, Ordering::Release);
+        if was_bypass == bypass {
             return Ok(());
         }
         self.reset_gestures()
@@ -232,7 +238,7 @@ fn run_hook_thread(
     settings: HookSettings,
     search_active: Arc<AtomicBool>,
     overlay_active: Arc<AtomicBool>,
-    remote_desktop_client: Arc<AtomicBool>,
+    remote_desktop_passthrough: Arc<AtomicBool>,
     ready: &SyncSender<Result<u32, String>>,
 ) -> Result<(), String> {
     let thread_id = unsafe {
@@ -253,7 +259,7 @@ fn run_hook_thread(
             settings,
             search_active,
             overlay_active,
-            remote_desktop_client,
+            remote_desktop_passthrough,
             target_thread_id,
             hook_thread_id: thread_id,
             pending_errors: 0,
@@ -392,9 +398,10 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         context
             .state
             .set_overlay_active(context.overlay_active.load(Ordering::Acquire));
-        let mut settings = context
-            .settings
-            .for_foreground(context.remote_desktop_client.load(Ordering::Acquire));
+        let mut settings = PassthroughPolicy::from_bypass_flag(
+            context.remote_desktop_passthrough.load(Ordering::Acquire),
+        )
+        .apply(context.settings);
         settings.search_active = search_active;
         let text = if search_active && transition == KeyTransition::Pressed {
             translate_search_character(data, context.target_thread_id)
@@ -926,7 +933,7 @@ mod tests {
             settings: HookSettings::default(),
             search_active: Arc::clone(&search_active),
             overlay_active: Arc::clone(&overlay_active),
-            remote_desktop_client: Arc::new(AtomicBool::new(false)),
+            remote_desktop_passthrough: Arc::new(AtomicBool::new(false)),
             target_thread_id: 0,
             hook_thread_id: 0,
             pending_errors: 0,

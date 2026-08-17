@@ -25,50 +25,6 @@ impl Default for HookSettings {
     }
 }
 
-impl HookSettings {
-    #[must_use]
-    pub fn for_foreground(self, remote_desktop_client: bool) -> Self {
-        if !remote_desktop_client {
-            return self;
-        }
-        Self {
-            replace_alt_tab: false,
-            replace_win_tab: false,
-            ..self
-        }
-    }
-}
-
-#[must_use]
-pub fn is_remote_desktop_client(class_name: &str, executable_stem: &str) -> bool {
-    const WINDOW_CLASSES: &[&str] = &[
-        "TscShellContainerClass",
-        "IHWindowClass",
-        "UIMainClass",
-        "TSSHELLWND",
-    ];
-    const EXECUTABLES: &[&str] = &["mstsc", "msrdc", "msrdcw"];
-    WINDOW_CLASSES
-        .iter()
-        .any(|class| class.eq_ignore_ascii_case(class_name))
-        || EXECUTABLES
-            .iter()
-            .any(|executable| executable.eq_ignore_ascii_case(executable_stem))
-}
-
-#[must_use]
-pub fn is_remote_desktop_session(is_client: bool, maximized_or_fullscreen: bool) -> bool {
-    is_client && maximized_or_fullscreen
-}
-
-#[must_use]
-pub fn window_fills_monitor(window: [i32; 4], monitor: [i32; 4]) -> bool {
-    window[0] <= monitor[0]
-        && window[1] <= monitor[1]
-        && window[2] >= monitor[2]
-        && window[3] >= monitor[3]
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Modifiers {
     pub alt: bool,
@@ -1274,22 +1230,10 @@ mod tests {
     }
 
     #[test]
-    fn remote_desktop_foreground_disables_windows_key_replacement() {
-        let settings = HookSettings::default().for_foreground(true);
-        assert!(!settings.replace_alt_tab);
-        assert!(!settings.replace_win_tab);
-        assert!(settings.right_button_wheel_switching);
-        assert!(
-            HookSettings::default()
-                .for_foreground(false)
-                .replace_alt_tab
-        );
-    }
-
-    #[test]
     fn remote_desktop_passthrough_forwards_alt_tab_instead_of_opening_the_switcher() {
         let mut state = HookState::default();
-        let settings = HookSettings::default().for_foreground(true);
+        let settings = crate::passthrough::PassthroughPolicy::RemoteDesktopFullscreen
+            .apply(HookSettings::default());
 
         assert_eq!(
             state.process_key(KeyEvent::pressed(Key::LeftAlt, ALT), settings),
@@ -1303,30 +1247,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_desktop_clients_are_detected_by_window_class_or_executable() {
-        assert!(is_remote_desktop_client(
-            "TscShellContainerClass",
-            "explorer"
-        ));
-        assert!(is_remote_desktop_client("IHWindowClass", "notepad"));
-        assert!(is_remote_desktop_client("Chrome_WidgetWin_1", "mstsc"));
-        assert!(is_remote_desktop_client("Chrome_WidgetWin_1", "msrdc"));
-        assert!(!is_remote_desktop_client("Chrome_WidgetWin_1", "chrome"));
-    }
-
-    #[test]
     fn windowed_remote_desktop_keeps_alt_tab_replacement() {
-        assert!(!is_remote_desktop_session(true, false));
-        assert!(is_remote_desktop_session(true, true));
-        assert!(!is_remote_desktop_session(false, true));
-        assert!(!window_fills_monitor(
-            [100, 100, 900, 700],
-            [0, 0, 1920, 1080]
-        ));
-        assert!(window_fills_monitor([0, 0, 1920, 1080], [0, 0, 1920, 1080]));
-
-        let settings =
-            HookSettings::default().for_foreground(is_remote_desktop_session(true, false));
+        let settings = crate::passthrough::PassthroughPolicy::from_foreground(true, false)
+            .apply(HookSettings::default());
         let mut state = HookState::default();
         assert!(
             state
