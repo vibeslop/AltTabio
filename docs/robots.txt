@@ -1,0 +1,91 @@
+# AltTabio public product site. Index freely.
+# Machine-readable product notes:
+#   https://vibeslop.github.io/AltTabio/llms.txt
+#   https://vibeslop.github.io/AltTabio/llms-full.txt
+#   https://vibeslop.github.io/AltTabio/product.md
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: GoogleOther
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: cohere-ai
+Allow: /
+
+User-agent: YouBot
+Allow: /
+
+User-agent: DuckAssistBot
+Allow: /
+
+User-agent: Meta-ExternalAgent
+Allow: /
+
+User-agent: FacebookBot
+Allow: /
+
+User-agent: GrokBot
+Allow: /
+
+User-agent: xAI-Bot
+Allow: /
+
+User-agent: xAI-Grok
+Allow: /
+
+User-agent: Grok-DeepSearch
+Allow: /
+
+User-agent: *
+Allow: /
+
+Sitemap: https://vibeslop.github.io/AltTabio/sitemap.xml

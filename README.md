@@ -1,6 +1,9 @@
 # AltTabio
 
-AltTabio is an open-source application for 64-bit Windows, inspired by Alt+Tab Terminator.
+**Website:** [https://vibeslop.github.io/AltTabio/](https://vibeslop.github.io/AltTabio/)
+**Download:** [GitHub Releases](https://github.com/vibeslop/AltTabio/releases/latest)
+
+AltTabio is a free, open-source **Alt+Tab replacement** and window switcher for 64-bit Windows 10 and Windows 11. It shows a numbered list of open windows, a live preview of the selected window, and typed search. No ads, no account, no telemetry.
 
 It was created because Alt+Tab Terminator has had a critical issue for years that causes Alt+Tab to stop working correctly. The issue was reported, but never fixed.
 
