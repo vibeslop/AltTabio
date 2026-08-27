@@ -283,10 +283,15 @@ svg{ display:block; }
 a{ color:inherit; }
 ::selection{ background:color-mix(in srgb, var(--accent) 28%, transparent); }
 .skip{
-  position:absolute; left:12px; top:-40px; z-index:100;
-  background:var(--accent); color:#fff; padding:8px 12px; border-radius:var(--radius-sm); font-weight:600;
+  position:absolute; left:12px; top:0; z-index:100;
+  width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); clip-path:inset(50%); white-space:nowrap; border:0;
+  background:var(--accent); color:#fff; font-weight:600;
 }
-.skip:focus{ top:12px; }
+.skip:focus, .skip:focus-visible{
+  width:auto; height:auto; margin:0; padding:8px 12px; top:12px;
+  clip:auto; clip-path:none; overflow:visible; border-radius:var(--radius-sm);
+}
 
 .wrap{ width:min(var(--maxw), calc(100% - 48px)); margin-inline:auto; }
 @media (max-width:767px){ .wrap{ width:min(var(--maxw), calc(100% - 32px)); } }
