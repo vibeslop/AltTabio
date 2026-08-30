@@ -248,6 +248,7 @@
   --ink-3: oklch(0.520 0.020 260);
   --accent: oklch(0.632 0.158 249);
   --accent-deep: oklch(0.505 0.134 250);
+  --accent-fill: oklch(0.505 0.134 250);
   --accent-soft: oklch(0.945 0.028 249);
   --on-accent: oklch(0.995 0.004 249);
   --kbd-face: oklch(0.985 0.004 260);
@@ -294,6 +295,7 @@
   --ink-3: oklch(0.680 0.016 260);
   --accent: oklch(0.720 0.118 249);
   --accent-deep: oklch(0.800 0.090 249);
+  --accent-fill: oklch(0.720 0.118 249);
   --accent-soft: oklch(0.280 0.040 249);
   --on-accent: oklch(0.180 0.020 249);
   --kbd-face: oklch(0.250 0.016 260);
@@ -378,7 +380,7 @@ button, a, summary{ touch-action:manipulation; }
 }
 .ph{ width:18px; height:18px; flex:none; overflow:visible; pointer-events:none; }
 .btn svg{ width:18px; height:18px; flex:none; pointer-events:none; }
-.btn-primary{ color:var(--on-accent); background:var(--accent); }
+.btn-primary{ color:var(--on-accent); background:var(--accent-fill); }
 .btn-quiet{ color:var(--ink); background:var(--gray-2); }
 .btn:active{ transform:scale(0.96); }
 .icon-btn{
@@ -394,7 +396,7 @@ button, a, summary{ touch-action:manipulation; }
 .icon-btn:active{ transform:scale(0.96); }
 :where(a,button,summary):focus-visible{ outline:2px solid var(--ink); outline-offset:3px; }
 @media (hover: hover) and (pointer: fine){
-  .btn-primary:hover{ background:color-mix(in oklch, var(--accent) 85%, black); box-shadow:var(--elevation-raised-hover); transform:translateY(-1px); }
+  .btn-primary:hover{ background:color-mix(in oklch, var(--accent-fill) 85%, black); box-shadow:var(--elevation-raised-hover); transform:translateY(-1px); }
   .btn-quiet:hover, .icon-btn:hover{ box-shadow:var(--elevation-raised-hover); transform:translateY(-1px); }
   .navlinks a:hover{ color:var(--ink); background:color-mix(in oklch, var(--ink) 6%, transparent); }
   .footlinks a:hover{ color:var(--ink); text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:from-font; }
@@ -456,7 +458,7 @@ button, a, summary{ touch-action:manipulation; }
   .site-header.is-open .menu-download{
     display:inline-flex !important; width:100%; margin-top:10px;
     padding:12px 20px; color:var(--on-accent); justify-content:center;
-    background:var(--accent);
+    background:var(--accent-fill);
   }
 }
 
@@ -522,7 +524,6 @@ section{ padding-top:clamp(72px, 8vw, 112px); scroll-margin-top:calc(var(--nav) 
 .moment-follow{
   grid-template-columns:minmax(16rem,0.8fr) minmax(0,1.2fr);
 }
-.moment-wide{ grid-template-columns:1fr; }
 .moment-copy h3{ font-size:clamp(1.25rem, 1rem + 0.8vw, 1.55rem); }
 .moment-copy p{ color:var(--ink-2); margin-top:10px; max-width:46ch; text-wrap:pretty; }
 .moment-shot{
@@ -535,11 +536,9 @@ section{ padding-top:clamp(72px, 8vw, 112px); scroll-margin-top:calc(var(--nav) 
 .moment-shot img{
   width:100%; height:auto; border-radius:8px;
 }
-.moment-lead .moment-shot img, .moment-follow .moment-shot img{ aspect-ratio:1600/1066; object-fit:cover; }
-.moment-wide .moment-shot img{ aspect-ratio:1400/934; object-fit:cover; object-position:center 42%; }
-.moment-wide .moment-copy{ max-width:36rem; }
+.moment-lead .moment-shot img, .moment-follow .moment-shot img{ aspect-ratio:1400/934; object-fit:cover; }
 @media (max-width:767px){
-  .moment-lead, .moment-follow, .moment-wide{
+  .moment-lead, .moment-follow{
     grid-template-columns:1fr;
   }
 }
@@ -594,8 +593,8 @@ kbd{
     0 2px 0 oklch(0 0 0 / 0.35);
 }
 kbd.accent{
-  color:var(--on-accent); background:var(--accent);
-  box-shadow:0 2px 0 color-mix(in oklch, var(--accent) 70%, black);
+  color:var(--on-accent); background:var(--accent-fill);
+  box-shadow:0 2px 0 color-mix(in oklch, var(--accent-fill) 70%, black);
 }
 
 .keysbox{
@@ -860,34 +859,25 @@ footer{
       <div class="wrap">
         <div class="sec-copy">
           <h2>Hold Alt, tap Tab. Same habit, clearer overlay.</h2>
-          <p class="lede">Windows still shows a strip of tiny thumbnails. AltTabio keeps the shortcut and gives you a list you can read.</p>
+          <p class="lede">Windows still shows a strip of tiny thumbnails. AltTabio keeps the shortcut and gives you a list you can read, with a live preview of the selected window.</p>
         </div>
         <div class="moments">
           <article class="moment moment-lead">
             <div class="moment-shot">
-              <img src="images/hero-switcher.webp" width="1600" height="1066" alt="Live preview of a trip itinerary Word document beside the AltTabio window list." decoding="async" />
+              <img src="images/search-switcher.webp" width="1400" height="934" alt="AltTabio filtered to windows matching a typed search, with a live preview of flight results in Chrome." loading="lazy" decoding="async" />
             </div>
-            <div class="moment-copy">
-              <h3>See it before you switch</h3>
-              <p>A live preview shows the actual window before you let go of Alt, so you stop landing on the wrong document.</p>
-            </div>
-          </article>
-          <article class="moment moment-follow">
             <div class="moment-copy">
               <h3>Type to find it</h3>
               <p>Start typing. A few letters is enough. The list shrinks to matching titles and app names.</p>
             </div>
-            <div class="moment-shot">
-              <img src="images/search-switcher.webp" width="1400" height="934" alt="AltTabio filtered to windows matching a typed search, with a live preview of flight results in Chrome." loading="lazy" decoding="async" />
-            </div>
           </article>
-          <article class="moment moment-wide">
-            <div class="moment-shot">
-              <img src="images/dual-monitors.webp" width="1400" height="934" alt="Two monitors on a desk: a spreadsheet on the left screen and a news site on the right." loading="lazy" decoding="async" />
-            </div>
+          <article class="moment moment-follow">
             <div class="moment-copy">
               <h3>Great with two screens</h3>
               <p>Limit the list to the monitor you are looking at, or keep every window in one place.</p>
+            </div>
+            <div class="moment-shot">
+              <img src="images/dual-monitors.webp" width="1400" height="934" alt="Two monitors on a desk: a spreadsheet on the left screen and a news site on the right." loading="lazy" decoding="async" />
             </div>
           </article>
         </div>
