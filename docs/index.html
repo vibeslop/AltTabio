@@ -10,8 +10,8 @@
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
 <meta name="googlebot" content="index, follow, max-image-preview:large" />
 <meta name="bingbot" content="index, follow" />
-<meta name="theme-color" content="#f2f3f6" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#12141a" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f1f4f7" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#151b22" media="(prefers-color-scheme: dark)" />
 <meta name="color-scheme" content="light dark" />
 <link rel="canonical" href="https://vibeslop.github.io/AltTabio/" />
 <link rel="alternate" type="text/markdown" title="AltTabio product notes" href="https://vibeslop.github.io/AltTabio/product.md" />
@@ -36,8 +36,8 @@
 <meta name="twitter:description" content="Search open windows as you type, jump with number keys, confirm with a live preview. Free and open source." />
 <meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
 <link rel="preload" href="fonts/outfit-latin-400.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="fonts/outfit-latin-500.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="fonts/outfit-latin-600.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="preload" as="image" href="images/hero-switcher.webp" type="image/webp" fetchpriority="high" />
 <script>
 (function () {
   try {
@@ -51,13 +51,12 @@
   }
   try {
     if (sessionStorage.getItem("alttabio-intro")) {
-      document.documentElement.classList.add("skip-intro");
+      document.documentElement.setAttribute("data-skip-intro", "");
     } else {
       sessionStorage.setItem("alttabio-intro", "1");
-      document.documentElement.classList.add("play-intro");
     }
   } catch (e) {
-    document.documentElement.classList.add("skip-intro");
+    document.documentElement.setAttribute("data-skip-intro", "");
   }
 })();
 </script>
@@ -86,7 +85,7 @@
         "url": "https://vibeslop.github.io/AltTabio/images/hero-switcher.webp"
       },
       "inLanguage": "en",
-      "dateModified": "2026-08-30"
+      "dateModified": "2026-08-31"
     },
     {
       "@type": "SoftwareApplication",
@@ -221,6 +220,14 @@
         },
         {
           "@type": "Question",
+          "name": "Is the overlay on this page the real app?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. It is a replica in the browser so you can try typed search and number keys. Live previews of your actual windows need the Windows download."
+          }
+        },
+        {
+          "@type": "Question",
           "name": "Is AltTabio an Alt+Tab Terminator alternative?",
           "acceptedAnswer": {
             "@type": "Answer",
@@ -239,455 +246,743 @@
 
 :root{
   color-scheme: light;
-  --bg: oklch(0.964 0.004 271);
-  --bg-2: oklch(0.934 0.007 269);
-  --surface: oklch(1 0 0);
-  --ink: oklch(0.230 0.018 260);
-  --ink-2: oklch(0.420 0.022 260);
-  --ink-3: oklch(0.520 0.020 260);
-  --line: oklch(0.230 0.018 260 / 0.08);
-  --line-2: oklch(0.230 0.018 260 / 0.12);
-  --accent: oklch(0.632 0.158 249);
-  --accent-fill: oklch(0.505 0.134 250);
-  --accent-deep: oklch(0.505 0.134 250);
-  --accent-soft: oklch(0.945 0.028 249);
-  --on-accent: oklch(0.995 0.004 249);
-  --kbd-face: oklch(0.985 0.004 260);
-  --image-line: oklch(0 0 0 / 0.1);
-  --shadow:
-    0 0 0 1px oklch(0.230 0.018 260 / 0.06),
-    0 1px 2px oklch(0.230 0.018 260 / 0.05),
-    0 18px 40px -20px oklch(0.230 0.018 260 / 0.22);
-  --radius:12px;
-  --radius-sm:8px;
-  --maxw:1280px;
-  --nav:64px;
-  --z-nav:40;
-  --sans:"Outfit", "Segoe UI", system-ui, sans-serif;
+  --gray-1: oklch(0.985 0.004 249);
+  --gray-2: oklch(0.965 0.005 249);
+  --gray-3: oklch(0.935 0.008 249);
+  --gray-5: oklch(0.48 0.02 249);
+  --gray-7: oklch(0.4 0.022 249);
+  --gray-8: oklch(0.23 0.018 249);
+  --bg: var(--gray-2);
+  --bg-2: var(--gray-3);
+  --surface: oklch(0.995 0.002 249);
+  --ink: var(--gray-8);
+  --ink-2: var(--gray-7);
+  --ink-3: var(--gray-5);
+  --line: oklch(0.23 0.018 249 / 0.08);
+  --line-strong: oklch(0.23 0.018 249 / 0.14);
+  --accent: oklch(0.50 0.15 249);
+  --accent-deep: oklch(0.44 0.134 249);
+  --accent-soft: oklch(0.94 0.025 249);
+  --on-accent: oklch(1 0 0);
+  --kbd-face: var(--gray-1);
+  --focus: var(--gray-8);
+  --stage: oklch(0.165 0.016 249);
+  --still-paper: oklch(0.94 0.012 249);
+  --elevation:
+    0 0 0 1px oklch(0 0 0 / 0.05),
+    0 1px 3px oklch(0 0 0 / 0.05),
+    0 4px 10px -4px oklch(0 0 0 / 0.05);
+  --elevation-hover:
+    0 0 0 1px oklch(0 0 0 / 0.07),
+    0 1px 3px oklch(0 0 0 / 0.07),
+    0 4px 10px -4px oklch(0 0 0 / 0.08);
+  --image-outline: oklch(0 0 0 / 0.1);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --maxw: 1280px;
+  --section-space: clamp(5rem, 9vw, 8rem);
+  --nav: 64px;
+  --z-nav: 40;
+  --z-skip: 50;
+  --border-hairline: 1px;
+  --sans: "Outfit", "Segoe UI", system-ui, sans-serif;
+  --text-caption: 0.8125rem;
+  --text-small: 0.875rem;
+  --text-body: 1rem;
+  --text-lede: 1.125rem;
+  --text-subhead: 1.25rem;
+  --sw-bg: rgb(243, 243, 243);
+  --sw-border: rgb(154, 154, 154);
+  --sw-preview-border: rgb(166, 166, 166);
+  --sw-selected: rgb(204, 228, 247);
+  --sw-primary: rgb(26, 26, 26);
+  --sw-secondary: rgb(92, 92, 92);
+  --sw-number: rgb(51, 95, 135);
+  --sw-divider: rgb(208, 208, 208);
+  --sw-preview-wash: rgb(232, 234, 238);
 }
 [data-theme="dark"]{
   color-scheme: dark;
-  --bg: oklch(0.192 0.014 260);
-  --bg-2: oklch(0.228 0.016 260);
-  --surface: oklch(0.244 0.018 266);
-  --ink: oklch(0.950 0.006 260);
-  --ink-2: oklch(0.780 0.018 260);
-  --ink-3: oklch(0.680 0.016 260);
-  --line: oklch(0.268 0.018 260);
-  --line-2: oklch(0.320 0.018 260);
-  --accent: oklch(0.720 0.118 249);
-  --accent-fill: oklch(0.720 0.118 249);
-  --accent-deep: oklch(0.800 0.090 249);
-  --accent-soft: oklch(0.280 0.040 249);
-  --on-accent: oklch(0.180 0.020 249);
-  --kbd-face: oklch(0.250 0.016 260);
-  --image-line: oklch(1 0 0 / 0.1);
-  --shadow: 0 0 0 1px oklch(1 0 0 / 0.09);
+  --gray-1: oklch(0.22 0.016 249);
+  --gray-2: oklch(0.245 0.018 249);
+  --gray-3: oklch(0.27 0.02 249);
+  --gray-5: oklch(0.86 0.016 249);
+  --gray-7: oklch(0.9 0.012 249);
+  --gray-8: oklch(0.985 0.004 249);
+  --bg: var(--gray-1);
+  --bg-2: var(--gray-2);
+  --surface: var(--gray-3);
+  --ink: var(--gray-8);
+  --ink-2: var(--gray-7);
+  --ink-3: var(--gray-5);
+  --line: oklch(0.34 0.016 249);
+  --line-strong: oklch(0.4 0.018 249);
+  --accent: oklch(0.55 0.118 249);
+  --accent-deep: oklch(0.86 0.07 249);
+  --accent-soft: oklch(0.3 0.04 249);
+  --on-accent: oklch(1 0 0);
+  --kbd-face: var(--gray-1);
+  --focus: var(--gray-8);
+  --stage: oklch(0.165 0.016 249);
+  --elevation: 0 0 0 1px var(--line);
+  --elevation-hover: 0 0 0 1px var(--line-strong);
+  --image-outline: var(--line);
+  --sw-bg: rgb(14, 16, 20);
+  --sw-border: rgb(97, 97, 100);
+  --sw-preview-border: rgb(107, 110, 117);
+  --sw-selected: rgb(46, 87, 148);
+  --sw-primary: rgb(240, 242, 247);
+  --sw-secondary: rgb(153, 163, 179);
+  --sw-number: rgb(194, 209, 235);
+  --sw-divider: rgb(64, 71, 84);
+  --sw-preview-wash: rgb(28, 32, 40);
 }
-@media (prefers-reduced-transparency: reduce){
-  .site-header{ background:var(--bg) !important; backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
+@media only screen and (min-device-pixel-ratio: 2),
+  only screen and (min-resolution: 192dpi){
+  :root{ --border-hairline: 0.5px; }
 }
 
-*,*::before,*::after{ box-sizing:border-box; }
-html{ -webkit-text-size-adjust:100%; scroll-behavior:smooth; }
-@media (prefers-reduced-motion: reduce){ html{ scroll-behavior:auto; } }
+*,*::before,*::after{ box-sizing: border-box; }
+html{
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  font-synthesis: none;
+  font-optical-sizing: auto;
+}
+@media (prefers-reduced-motion: reduce){ html{ scroll-behavior: auto; } }
 body{
-  margin:0; background:var(--bg); color:var(--ink);
-  font-family:var(--sans); font-size:17px; font-weight:400; line-height:1.6;
-  font-synthesis:none;
-  overflow-wrap:break-word;
-  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
-  text-rendering:optimizeLegibility;
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--text-body);
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
-img{ max-width:100%; display:block; }
-.hero-visual img, .cell .shot img{
-  outline:1px solid var(--image-line);
-  outline-offset:-1px;
+img{
+  max-width: 100%; display: block;
+  outline: 1px solid var(--image-outline); outline-offset: -1px;
 }
-img{ max-width:100%; display:block; }
-svg{ display:block; }
-a{ color:inherit; }
-::selection{ background:color-mix(in srgb, var(--accent) 28%, transparent); }
+svg{ display: block; }
+a{
+  color: inherit;
+  text-decoration-thickness: from-font;
+  text-underline-position: from-font;
+  text-decoration-skip-ink: auto;
+  touch-action: manipulation;
+}
+::selection{ background: color-mix(in oklch, var(--accent) 28%, transparent); color: var(--ink); }
+::placeholder{ color: var(--ink-3); opacity: 1; }
+input{ caret-color: var(--accent); touch-action: manipulation; }
 .skip{
-  position:absolute; left:12px; top:0; z-index:100;
-  width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
-  clip:rect(0,0,0,0); clip-path:inset(50%); white-space:nowrap; border:0;
-  background:var(--accent); color:#fff; font-weight:600;
+  position: absolute; left: 12px; top: 0; z-index: var(--z-skip);
+  width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); clip-path: inset(50%); white-space: nowrap; border: 0;
+  background: var(--ink); color: var(--bg); font-weight: 600;
 }
 .skip:focus, .skip:focus-visible{
-  width:auto; height:auto; margin:0; padding:8px 12px; top:12px;
-  clip:auto; clip-path:none; overflow:visible; border-radius:var(--radius-sm);
+  width: auto; height: auto; min-height: 44px; margin: 0; padding: 10px 14px; top: 12px;
+  clip: auto; clip-path: none; overflow: visible; border-radius: var(--radius-sm);
 }
 
-.wrap{ width:min(var(--maxw), calc(100% - 48px)); margin-inline:auto; }
-@media (max-width:767px){ .wrap{ width:min(var(--maxw), calc(100% - 32px)); } }
+.wrap{ width: min(var(--maxw), calc(100% - 48px)); margin-inline: auto; }
+@media (max-width: 767px){ .wrap{ width: min(var(--maxw), calc(100% - 32px)); } }
 
-h1,h2,h3{ margin:0; font-weight:600; letter-spacing:-.02em; line-height:1.1; text-wrap:balance; }
-h1{ font-size:clamp(2.1rem, 1.15rem + 2.6vw, 3.45rem); line-height:1.08; }
-h2{ font-size:clamp(1.7rem, 1.25rem + 1.6vw, 2.5rem); }
-h3{ font-size:1.12rem; line-height:1.25; }
-p{ margin:0; }
-.lede{ color:var(--ink-2); font-size:1.05rem; line-height:1.55; max-width:42ch; text-wrap:pretty; }
+h1,h2,h3{
+  margin: 0; font-weight: 600; letter-spacing: -.02em; line-height: 1.1;
+  text-wrap: balance; font-kerning: auto;
+}
+h1{ font-size: clamp(2.1rem, 1.15rem + 2.6vw, 3.45rem); line-height: 1.08; }
+h2{ font-size: clamp(1.7rem, 1.25rem + 1.6vw, 2.5rem); }
+h3{ font-size: var(--text-lede); line-height: 1.2; }
+p{ margin: 0; }
+.lede{
+  color: var(--ink-2); font-size: var(--text-lede); line-height: 1.55; max-width: 65ch;
+  text-wrap: pretty;
+}
 
-button, a, summary{ touch-action:manipulation; }
 .btn{
-  display:inline-flex; align-items:center; justify-content:center; gap:8px;
-  font-family:var(--sans); font-size:.95rem; font-weight:600; letter-spacing:-.01em;
-  text-decoration:none; white-space:nowrap; cursor:pointer;
-  padding:12px 20px; border-radius:var(--radius); border:1px solid transparent;
-  transition-property:transform, background-color, box-shadow, border-color, color;
-  transition-duration:150ms;
-  transition-timing-function:ease-out;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--sans); font-size: var(--text-body); font-weight: 600; letter-spacing: -.01em;
+  text-decoration: none; white-space: nowrap; cursor: pointer; user-select: none;
+  padding: 12px 20px; border-radius: var(--radius); border: 1px solid transparent;
+  touch-action: manipulation;
+  transition-property: transform, background-color, box-shadow, border-color, color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
 }
-.ph{ width:18px; height:18px; flex:none; overflow:visible; }
-.btn svg{ width:18px; height:18px; flex:none; }
+.btn:has(svg){ padding-inline-start: 18px; }
+.ph{ width: 18px; height: 18px; flex: none; overflow: visible; }
+.btn svg{ width: 18px; height: 18px; flex: none; }
 .btn-primary{
-  color:var(--on-accent); background:var(--accent-fill);
-  box-shadow:var(--shadow);
+  color: var(--on-accent); background: var(--accent);
+  border-color: color-mix(in oklch, var(--accent-deep) 55%, var(--accent));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.22), 0 8px 20px -10px color-mix(in oklch, var(--accent) 70%, transparent);
 }
 .btn-quiet{
-  color:var(--ink); background:var(--surface);
-  box-shadow:var(--shadow);
+  color: var(--ink); background: var(--surface);
+  box-shadow: var(--elevation);
 }
-.btn-primary:active, .btn-quiet:active, .icon-btn:active{ transform:scale(.96); }
 .icon-btn{
-  position:relative;
-  width:40px; height:40px; border-radius:var(--radius); border:0;
-  background:var(--surface); color:var(--ink); cursor:pointer; display:grid; place-items:center; padding:0;
-  box-shadow:var(--shadow);
+  width: 44px; height: 44px; border-radius: var(--radius);
+  border: 0;
+  background: var(--surface); color: var(--ink); cursor: pointer;
+  display: grid; place-items: center; padding: 0; user-select: none;
+  touch-action: manipulation;
+  box-shadow: var(--elevation);
+  transition-property: box-shadow, background-color, transform;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
 }
-.icon-btn::before{ content:""; position:absolute; inset:-2px; }
-.icon-btn svg{ width:18px; height:18px; pointer-events:none; }
-:where(a,button,summary):focus-visible{ outline:2px solid var(--ink); outline-offset:3px; }
+.icon-btn svg{ width: 18px; height: 18px; }
 @media (hover: hover) and (pointer: fine){
-  .btn-primary:hover{ background:color-mix(in oklch, var(--accent-fill) 85%, black); transform:translateY(-1px); }
-  .btn-quiet:hover{ transform:translateY(-1px); }
-  .icon-btn:hover{ box-shadow:0 0 0 1px color-mix(in oklch, var(--accent) 40%, transparent), var(--shadow); }
-  .navlinks a:hover{ color:var(--ink); background:color-mix(in oklch, var(--ink) 5%, transparent); }
-  .footlinks a:hover{ color:var(--ink); text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:from-font; }
-  .faq summary:hover{ color:var(--accent-deep); }
-  .keysbox summary:hover{ background:color-mix(in oklch, var(--accent) 7%, transparent); }
-  .sw:hover{ transform:translateY(-2px); }
+  .btn-primary:hover{ background: color-mix(in oklch, var(--accent) 85%, black); transform: translateY(-1px); }
+  .btn-quiet:hover{ box-shadow: var(--elevation-hover); transform: translateY(-1px); }
+  .icon-btn:hover{ box-shadow: var(--elevation-hover); }
+  .navlinks a:hover{ color: var(--ink); background: color-mix(in oklch, var(--ink) 6%, transparent); }
+  .demo-caption input:hover{ border-color: var(--ink-3); }
+  .sw:hover{ box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.35), var(--elevation-hover); }
+}
+.btn:active, .icon-btn:active{ transform: scale(0.97); }
+:where(a,button,summary,input):focus-visible{
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
 }
 
 .site-header{
-  position:sticky; top:0; z-index:var(--z-nav); height:var(--nav);
-  background:color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter:blur(14px) saturate(140%);
-  -webkit-backdrop-filter:blur(14px) saturate(140%);
-  border-bottom:1px solid transparent;
+  position: sticky; top: 0; z-index: var(--z-nav); height: var(--nav);
+  max-height: min(var(--nav), 20dvh);
+  background: color-mix(in oklch, var(--bg) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border-bottom: var(--border-hairline) solid transparent;
 }
-.site-header.stuck{ border-bottom-color:var(--line); }
+.site-header.stuck{ border-bottom-color: var(--line); }
 .nav{
-  display:flex; align-items:center; height:var(--nav); gap:12px;
-  flex-wrap:nowrap;
+  display: flex; align-items: center; height: var(--nav); gap: 12px;
+  flex-wrap: nowrap;
 }
-.brand{ display:flex; align-items:center; gap:10px; text-decoration:none; font-weight:600; font-size:1.05rem; margin-right:auto; flex:none; }
-.brand .mark{ width:26px; height:26px; color:var(--accent); flex:none; overflow:visible; }
-.navlinks{ display:flex; gap:2px; flex-wrap:nowrap; }
+.brand{
+  display: flex; align-items: center; gap: 10px; text-decoration: none;
+  font-weight: 600; font-size: var(--text-lede); margin-inline-end: auto; flex: none;
+  min-height: 44px;
+}
+.brand .mark{ width: 26px; height: 26px; color: var(--accent); flex: none; overflow: visible; }
+.navlinks{ display: flex; gap: 2px; flex-wrap: nowrap; }
 .navlinks a{
-  font-size:.9rem; font-weight:500; color:var(--ink-2); text-decoration:none;
-  padding:8px 11px; border-radius:10px; white-space:nowrap;
+  display: inline-flex; align-items: center;
+  font-size: var(--text-small); font-weight: 500; color: var(--ink-2); text-decoration: none;
+  padding: 8px 11px; min-height: 44px; border-radius: 10px; white-space: nowrap; user-select: none;
 }
-.nav-tools{ display:flex; align-items:center; gap:12px; flex:none; }
-.nav .btn{ padding:9px 16px; flex:none; }
-.icon-btn{ flex:none; }
-.menu-btn{ display:none; }
-.menu-download{ display:none !important; }
-@media (max-width:1179px){
-  .navlinks{ display:none; }
-  .menu-btn{ display:grid; }
-  .site-header.is-open{ height:auto; }
+.nav-tools{ display: flex; align-items: center; gap: 12px; flex: none; }
+.nav .btn{ padding: 9px 16px; flex: none; }
+.icon-btn{ flex: none; }
+.menu-btn{ display: none; }
+.menu-download{ display: none !important; }
+@media (max-width: 959px){
+  .navlinks{ display: none; }
+  .menu-btn{ display: grid; }
+  .site-header.is-open{ height: auto; max-height: none; }
   .site-header.is-open .nav{
-    height:auto; flex-wrap:wrap; align-items:center; padding-bottom:10px;
+    height: auto; flex-wrap: wrap; align-items: center; padding-bottom: 10px;
   }
-  .site-header.is-open .brand{ order:1; }
-  .site-header.is-open .nav-tools{ order:2; }
+  .site-header.is-open .brand{ order: 1; }
+  .site-header.is-open .nav-tools{ order: 2; }
   .site-header.is-open .navlinks{
-    display:flex; flex-direction:column; align-items:stretch; gap:2px;
-    flex:1 0 100%; order:3;
-    margin-top:8px; padding-top:8px; border-top:1px solid var(--line);
+    display: flex; flex-direction: column; align-items: stretch; gap: 2px;
+    flex: 1 0 100%; order: 3;
+    margin-top: 8px; padding-top: 8px; border-top: var(--border-hairline) solid var(--line);
   }
-  .site-header.is-open .navlinks a{ padding:12px 8px; }
+  .site-header.is-open .navlinks a{ display: flex; padding: 12px 8px; }
 }
-@media (min-width:700px) and (max-width:1179px){
-  .site-header.is-open .navlinks{
-    display:grid; grid-template-columns:1fr 1fr; gap:2px 24px;
-  }
-}
-@media (max-width:520px){
-  .nav-tools > a.btn{ display:none; }
-  .icon-btn{ width:36px; height:36px; }
+@media (max-width: 520px){
+  .nav-tools > a.btn{ display: none; }
   .site-header.is-open .menu-download{
-    display:inline-flex !important; width:100%; margin-top:10px;
-    padding:12px 20px; color:var(--on-accent); justify-content:center;
-    background:var(--accent-fill);
+    display: inline-flex !important; width: 100%; margin-top: 10px;
+    padding: 12px 20px; color: var(--on-accent); justify-content: center;
+    background: var(--accent);
+    border-color: color-mix(in oklch, var(--accent-deep) 55%, var(--accent));
   }
 }
 
 .hero{
-  display:grid; grid-template-columns:minmax(280px,.92fr) minmax(0,1.18fr);
-  gap:clamp(28px,4vw,56px); align-items:center;
-  padding:32px 0 40px;
+  display: grid; grid-template-columns: minmax(280px, .86fr) minmax(0, 1.24fr);
+  gap: clamp(28px, 4vw, 56px); align-items: center;
+  padding: clamp(48px, 6vw, 72px) 0 0;
 }
-.hero .lede{ margin-top:18px; }
-.cta{ display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; }
-.hero-visual{
-  position:relative; border-radius:calc(var(--radius) + 4px); overflow:hidden;
-  box-shadow:var(--shadow); background:var(--bg-2);
+.hero-copy{ display: flex; flex-direction: column; align-items: flex-start; gap: 18px; }
+.cta{ display: flex; flex-wrap: wrap; gap: 12px; }
+.switcher{
+  --sw-pad: 18px;
+  --sw-row-h: 44px;
+  --sw-row-gap: 2px;
+  --sw-list-min: 260px;
+  --sw-list-frac: 27%;
+  --sw-num-w: 30px;
+  --sw-ico-slot: 36px;
+  --sw-ico-size: 28px;
+  --sw-sel-r: 5px;
+  display: grid;
+  grid-template-columns: minmax(calc(var(--sw-list-min) + var(--sw-pad)), calc(var(--sw-list-frac) + var(--sw-pad))) minmax(0, 1fr);
+  min-height: calc(var(--sw-pad) * 2 + var(--sw-row-h) * 9 + var(--sw-row-gap) * 8);
+  border-radius: 10px;
+  background: var(--sw-bg); color: var(--sw-primary);
+  box-shadow: var(--elevation);
+  overflow: hidden;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px; line-height: 1.2;
 }
-.hero-visual img{ width:100%; height:auto; aspect-ratio:1600/1066; object-fit:cover; }
-@media (max-width:767px){
-  .hero{ grid-template-columns:1fr; padding:28px 0 32px; }
-  .hero .lede{ max-width:none; }
-  .cta{ flex-direction:column; align-items:stretch; }
-  .cta .btn{ width:100%; }
+.sw-list{
+  position: relative;
+  padding: var(--sw-pad);
+  min-width: 0;
+  display: flex; flex-direction: column; gap: 12px;
 }
-
-.facts{
-  display:grid; grid-template-columns:repeat(4,1fr); gap:0;
-  border:1px solid var(--line); border-radius:var(--radius); background:var(--surface);
-  overflow:hidden;
+.sw-list::after{
+  content: ""; position: absolute;
+  top: var(--sw-pad); bottom: var(--sw-pad); right: 0;
+  width: 1px; background: var(--sw-divider);
 }
-.facts div{
-  padding:16px 18px; color:var(--ink-2); font-size:.9rem; font-weight:500;
-  border-left:1px solid var(--line);
-  display:flex; align-items:center; gap:10px;
+.sw-rows{ display: flex; flex-direction: column; gap: var(--sw-row-gap); min-height: 0; }
+.sw-row{
+  display: grid;
+  grid-template-columns: var(--sw-num-w) var(--sw-ico-slot) minmax(0, 1fr);
+  align-items: center; gap: 0 3px;
+  height: var(--sw-row-h); padding: 0 8px 0 0; border-radius: var(--sw-sel-r);
+  cursor: pointer; border: 0; background: transparent; color: inherit;
+  text-align: start; width: 100%; font: inherit;
+  touch-action: manipulation;
 }
-.facts div:first-child{ border-left:0; }
-.facts svg, .facts .ph{ width:18px; height:18px; color:var(--accent-deep); flex:none; }
-.facts b{ color:var(--ink); font-weight:600; }
-@media (max-width:900px){
-  .facts{ grid-template-columns:1fr 1fr; }
-  .facts div:nth-child(2){ border-left:0; }
-  .facts div:nth-child(odd){ border-left:0; }
-  .facts div:nth-child(n+3){ border-top:1px solid var(--line); }
+.sw-row[hidden], .scene[hidden], .sw-empty[hidden]{ display: none; }
+.sw-row[aria-selected="true"]{ background: var(--sw-selected); }
+.sw-num{
+  font-variant-numeric: tabular-nums; color: var(--sw-number);
+  text-align: center; font-weight: 400;
 }
-@media (max-width:520px){
-  .facts{ grid-template-columns:1fr; }
-  .facts div{ border-left:0; border-top:1px solid var(--line); }
-  .facts div:first-child{ border-top:0; }
+.sw-ico{
+  width: var(--sw-ico-size); height: var(--sw-ico-size); margin-inline: auto; border-radius: 4px;
+  display: grid; place-items: center; color: oklch(1 0 0); font-size: 10px; font-weight: 600;
+  letter-spacing: 0; user-select: none; pointer-events: none;
 }
-
-section{ padding-top:clamp(72px, 8vw, 120px); scroll-margin-top:calc(var(--nav) + 12px); }
-.sec-copy{ max-width:36rem; margin-bottom:clamp(28px, 4vw, 48px); }
-.sec-copy .lede{ margin-top:14px; }
-
-.bento{
-  display:grid; gap:16px;
-  grid-template-columns:1.35fr .85fr .85fr;
-  grid-template-areas:
-    "preview search numbers"
-    "preview monitors close";
+.sw-text{ min-width: 0; }
+.sw-title{
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  color: var(--sw-primary);
 }
-.cell{
-  border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;
-  background:var(--surface); box-shadow:var(--shadow); min-width:0;
-  display:flex; flex-direction:column;
+.sw-empty{ color: var(--sw-secondary); font-size: 12px; }
+.switcher:has(#sw-empty:not([hidden])){
+  grid-template-columns: 1fr;
+  grid-template-rows: auto;
+  min-height: 0;
 }
-.cell.preview{ grid-area:preview; }
-.cell.search{ grid-area:search; }
-.cell.numbers{ grid-area:numbers; background:
-  linear-gradient(180deg, var(--accent-soft), var(--surface)); }
-.cell.monitors{ grid-area:monitors; }
-.cell.close{ grid-area:close; background:var(--bg-2); }
-.cell .shot{
-  position:relative; flex:1; min-height:168px; overflow:hidden; background:var(--bg-2);
+.switcher:has(#sw-empty:not([hidden])) .sw-preview{ display: none; }
+.switcher:has(#sw-empty:not([hidden])) .sw-list{ max-height: none; }
+.sw-preview{
+  position: relative; min-width: 0; min-height: 0; padding: var(--sw-pad);
+  display: grid;
+  background: var(--sw-preview-wash);
 }
-.cell .shot img{
-  position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;
+.scene{
+  min-width: 0; min-height: 0; width: 100%; height: 100%;
+  border-radius: 3px; overflow: hidden;
+  outline: 1px solid var(--sw-preview-border); outline-offset: -1px;
+  background: var(--sw-bg); color: var(--sw-primary);
+  display: flex; flex-direction: column;
+  user-select: none; pointer-events: none;
 }
-.cell.monitors .shot img{ object-position:center 42%; }
-.cell.preview .shot{ min-height:240px; }
-.cell .pad{ padding:20px 22px 22px; margin-top:auto; }
-.cell p{ color:var(--ink-2); font-size:.94rem; margin-top:8px; text-wrap:pretty; }
-.num-visual{
-  display:flex; align-items:center; background:transparent;
-  user-select:none; pointer-events:none;
+.scene-bar{
+  flex: none; height: 32px;
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center; gap: 8px;
+  padding-left: 8px;
+  font-size: 11px; font-weight: 400;
+  color: var(--sw-primary);
+  background: var(--sw-bg);
+  border-bottom: 1px solid var(--sw-divider);
 }
-.num-row{ display:flex; gap:8px; padding:8px 22px; }
-.num-row kbd{ font-size:1.15rem; padding:12px 14px; }
-.close-visual{
-  display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-end; gap:16px;
-  padding:24px 22px 12px; background:
-    radial-gradient(120% 90% at 100% 0%, color-mix(in oklch, var(--accent) 16%, transparent), transparent 58%),
-    var(--bg-2);
-  user-select:none; pointer-events:none;
+[data-theme="dark"] .scene-bar{ background: var(--sw-preview-wash); }
+.scene-ico{
+  width: 16px; height: 16px; border-radius: 2px;
+  display: grid; place-items: center; color: oklch(1 0 0); font-size: 8px; font-weight: 600;
 }
-.close-glyph{
-  width:48px; height:48px; border-radius:var(--radius);
-  display:grid; place-items:center;
-  background:var(--surface); border:1px solid var(--line); color:var(--accent-deep);
+.scene-name{
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-.close-glyph svg{ width:22px; height:22px; }
-.close-visual .num-row{ padding:0; }
-@media (max-width:1100px){
-  .bento{
-    grid-template-columns:1fr 1fr;
-    grid-template-areas:
-      "preview preview"
-      "search numbers"
-      "monitors close";
+.scene-caption{ display: flex; align-self: stretch; }
+.scene-caption span{
+  width: 36px; display: grid; place-items: center; position: relative;
+}
+.cap-min::before{
+  content: ""; display: block; width: 10px; height: 1px; background: currentColor;
+}
+.cap-max::before{
+  content: ""; display: block; width: 8px; height: 8px; border: 1px solid currentColor; box-sizing: border-box;
+}
+.cap-close::before, .cap-close::after{
+  content: ""; position: absolute; width: 8px; height: 1px; background: currentColor;
+}
+.cap-close::before{ transform: rotate(45deg); }
+.cap-close::after{ transform: rotate(-45deg); }
+.scene-accent{ flex: none; height: 3px; }
+.scene-body{
+  flex: 1; min-height: 0; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.scene-line{
+  height: 8px; border-radius: 4px; flex: none;
+  background: color-mix(in srgb, var(--sw-primary) 12%, transparent);
+}
+.scene-line.wide{ width: 72%; }
+.scene-line.mid{ width: 54%; }
+.scene-line.narrow{ width: 38%; }
+.scene-grid{
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; flex: 1;
+}
+.scene-grid i{
+  display: block; background: color-mix(in srgb, var(--sw-primary) 8%, transparent); border-radius: 2px;
+}
+.scene-mail{ display: grid; gap: 6px; flex: 1; }
+.scene-mail b{
+  display: block; height: 28px; border-radius: 4px;
+  background: color-mix(in srgb, var(--sw-primary) 8%, transparent);
+}
+.scene-photo{
+  flex: 1; border-radius: 4px;
+  background:
+    linear-gradient(160deg, oklch(0.72 0.08 70), oklch(0.55 0.1 230) 55%, oklch(0.42 0.06 150));
+}
+.word .scene-ico, .word .scene-accent{ background: #185abd; }
+.chrome .scene-ico, .chrome .scene-accent{ background: #3c4043; }
+.excel .scene-ico, .excel .scene-accent{ background: #107c41; }
+.outlook .scene-ico, .outlook .scene-accent{ background: #0f4cbd; }
+.explorer .scene-ico, .explorer .scene-accent{ background: #c9a227; }
+.notepad .scene-ico, .notepad .scene-accent{ background: #5b6570; }
+.photos .scene-ico, .photos .scene-accent{ background: #2b6cb0; }
+.edge .scene-ico, .edge .scene-accent{ background: #1a4d8c; }
+.settings .scene-ico, .settings .scene-accent{ background: #52525b; }
+.demo{ margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.demo-caption{
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  color: var(--ink-2); font-size: var(--text-caption);
+}
+.demo-caption label{
+  display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--ink);
+  white-space: nowrap; flex: none;
+}
+.demo-caption input{
+  font: inherit; font-size: var(--text-body); font-weight: 400;
+  width: min(100%, 220px); height: 44px; padding: 0 12px;
+  border-radius: var(--radius-sm); border: var(--border-hairline) solid var(--line-strong);
+  background: var(--surface); color: var(--ink);
+}
+.demo-hint{ color: var(--ink-3); }
+.sr-only{
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+@media (max-width: 767px){
+  .hero{ grid-template-columns: 1fr; padding: 32px 0 0; }
+  .cta{ flex-direction: column; align-items: stretch; }
+  .cta .btn{ width: 100%; }
+  .switcher{
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 242px) minmax(168px, 1fr);
+    min-height: 0;
   }
-  .cell.preview .shot{ min-height:200px; }
+  .sw-list{ max-height: 242px; overflow: auto; }
+  .sw-list::after{ top: auto; bottom: 0; left: var(--sw-pad); right: var(--sw-pad); width: auto; height: 1px; }
+  .sw-preview{ min-height: 168px; }
+  .demo-caption{ flex-direction: column; align-items: stretch; }
+  .demo-caption input{ width: 100%; }
+  .demo-caption label{ width: 100%; flex-wrap: wrap; }
 }
-@media (max-width:767px){
-  .bento{ grid-template-columns:1fr; grid-template-areas:"preview" "search" "numbers" "monitors" "close"; }
-  .cell.preview .shot{ min-height:180px; }
+
+section{ padding-top: var(--section-space); scroll-margin-top: calc(var(--nav) + 12px); }
+.sec-copy{ max-width: 36rem; margin-bottom: clamp(20px, 2.5vw, 32px); display: flex; flex-direction: column; gap: 12px; }
+
+#how .wrap{
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: clamp(24px, 3vw, 40px);
 }
+#how .sec-copy{ margin-bottom: 0; align-items: center; }
+#how .lede{ max-width: 42ch; }
+
+.proof{ display: flex; flex-direction: column; gap: 14px; min-width: 0; width: 100%; }
+.shot{
+  border-radius: var(--radius); overflow: hidden; box-shadow: var(--elevation);
+  background: var(--bg-2);
+}
+.shot img{
+  width: 100%; height: auto; aspect-ratio: 1600/1066; object-fit: cover;
+  border-radius: inherit;
+}
+.shot-copy{
+  color: var(--ink-2); font-size: var(--text-small); max-width: 65ch; text-wrap: pretty;
+}
+#how .shot-copy{ margin-inline: auto; }
 
 kbd{
-  display:inline-block; font-family:var(--sans); font-size:.8rem; font-weight:600; line-height:1;
-  padding:7px 10px; border-radius:var(--radius-sm); color:var(--ink); white-space:nowrap;
-  background:linear-gradient(180deg, var(--surface), var(--kbd-face));
-  border:1px solid var(--line-2);
-  box-shadow:0 2px 0 var(--line);
+  display: inline-block; font-family: var(--sans); font-size: var(--text-caption); font-weight: 600; line-height: 1;
+  padding: 7px 10px; border-radius: var(--radius-sm); color: var(--ink); white-space: nowrap;
+  user-select: none;
+  background: linear-gradient(180deg, var(--surface), var(--kbd-face));
+  border: var(--border-hairline) solid var(--line-strong);
+  box-shadow: 0 2px 0 var(--line-strong);
 }
 kbd.accent{
-  color:var(--on-accent); background:var(--accent-fill); border-color:transparent;
-  box-shadow:0 2px 0 color-mix(in oklch, var(--accent-fill) 70%, black);
+  color: var(--on-accent); background: var(--accent); border-color: var(--accent-deep);
+  box-shadow: 0 2px 0 color-mix(in oklch, var(--accent-deep) 80%, oklch(0 0 0));
+}
+
+/* Height is native details. Only opacity and the caret move, so the
+   animation stays on transform/opacity. allow-discrete lets the close fade finish. */
+details::details-content{
+  opacity: 0;
+  content-visibility: hidden;
+  transition-property: opacity, content-visibility;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  transition-behavior: allow-discrete;
+}
+details[open]::details-content{
+  opacity: 1;
+  content-visibility: visible;
+  transition-duration: 220ms;
+}
+@starting-style{
+  details[open]::details-content{ opacity: 0; }
+}
+details summary svg{
+  transition-property: transform;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+details[open] summary svg{
+  transform: rotate(180deg);
+  transition-duration: 220ms;
 }
 
 .keysbox{
-  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
-  box-shadow:var(--shadow); overflow:hidden;
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--elevation); overflow: hidden;
 }
 .primary-keys{
-  display:grid; grid-template-columns:repeat(5,1fr); gap:18px;
-  padding:32px 24px; background:var(--bg-2);
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px 28px;
+  padding: 24px; background: var(--surface);
 }
-.pk{ display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
-.pk .combo{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.pk .plus{ color:var(--ink-3); font-weight:600; }
-.pk .what{ font-size:.88rem; color:var(--ink-2); }
-.keysbox details{ border-top:1px solid var(--line); }
+.pk{ display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.pk .combo{ display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pk .plus{ color: var(--ink-3); font-weight: 600; }
+.pk .what{ font-size: var(--text-caption); color: var(--ink-2); }
+.keysbox details{ border-top: var(--border-hairline) solid var(--line); }
 .keysbox summary{
-  list-style:none; cursor:pointer; text-align:left; padding:16px 24px;
-  font-weight:600; font-size:.95rem; color:var(--accent-deep);
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  list-style: none; cursor: pointer; user-select: none; text-align: start; padding: 16px 28px;
+  font-weight: 600; font-size: var(--text-small); color: var(--accent-deep);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  touch-action: manipulation;
 }
-.keysbox summary::-webkit-details-marker, .keysbox summary::marker{ display:none; content:""; }
-.keysbox summary svg{ width:16px; height:16px; flex:none; pointer-events:none; transition:transform .2s ease; }
-.keysbox details[open] summary svg{ transform:rotate(180deg); }
+.keysbox summary::-webkit-details-marker, .keysbox summary::marker{ display: none; content: ""; }
+.keysbox summary svg{ width: 16px; height: 16px; flex: none; pointer-events: none; }
+@media (hover: hover) and (pointer: fine){
+  .keysbox summary:hover{ background: color-mix(in oklch, var(--accent) 7%, transparent); }
+}
 .allkeys{
-  display:grid; grid-template-columns:1fr 1fr; gap:8px 40px;
-  padding:4px 24px 24px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 40px;
+  padding: 4px 28px 24px;
+  min-height: 0; overflow: hidden;
 }
-.keyrow{ display:flex; align-items:center; gap:12px; padding:8px 0; }
-.keyrow .combo{ flex:none; display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
-.keyrow kbd{ font-size:.74rem; padding:5px 8px; }
-.keyrow .what{ color:var(--ink-2); font-size:.9rem; margin-left:auto; text-align:right; }
-@media (max-width:900px){ .primary-keys{ grid-template-columns:1fr 1fr; } }
-@media (max-width:767px){
-  .primary-keys{ grid-template-columns:1fr; }
-  .allkeys{ grid-template-columns:1fr; }
+.keyrow{ display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.keyrow .combo{ flex: none; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.keyrow kbd{ font-size: var(--text-caption); padding: 5px 8px; }
+.keyrow .what{ color: var(--ink-2); font-size: var(--text-small); margin-inline-start: auto; text-align: end; }
+@media (min-width: 1080px){ .primary-keys{ grid-template-columns: repeat(5, 1fr); } }
+@media (max-width: 767px){
+  .primary-keys{ grid-template-columns: 1fr; }
+  .allkeys{ grid-template-columns: 1fr; }
 }
 
-.custom{ display:grid; grid-template-columns:1fr minmax(280px,.86fr); gap:clamp(28px,5vw,72px); align-items:center; }
-.custom .lede{ margin-top:16px; max-width:46ch; }
-.custom ul{ margin:22px 0 0; padding:0; list-style:none; display:grid; gap:12px; }
-.custom li{ display:flex; gap:10px; align-items:flex-start; color:var(--ink-2); }
-.custom li svg{ flex:none; width:18px; height:18px; color:var(--accent-deep); margin-top:3px; }
+.custom{
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: clamp(24px, 3vw, 36px);
+}
+.custom .sec-copy{ margin-bottom: 0; align-items: center; }
+.custom .lede{ max-width: 36ch; }
 .specimen{
-  border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;
-  box-shadow:var(--shadow); background:var(--surface);
+  width: min(100%, 26rem);
+  border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--elevation); background: var(--surface);
 }
 .specimen .stagearea{
-  background:#0e1014; display:grid; place-items:center; padding:52px 20px;
+  background: var(--stage); display: grid; place-items: center; padding: 40px 24px;
 }
-.bigmark{ width:96px; height:96px; filter:drop-shadow(0 14px 24px rgb(0 0 0 / .55)); }
-.specimen .picker{ padding:20px 22px; }
-.swatches{ display:flex; flex-wrap:wrap; gap:10px; }
+.bigmark{ width: 96px; height: 96px; filter: drop-shadow(0 14px 24px oklch(0 0 0 / 0.55)); pointer-events: none; user-select: none; }
+.specimen .picker{ padding: 18px 20px 20px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.swatches{ display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
 .sw{
-  width:32px; height:32px; padding:0; border-radius:var(--radius-sm); cursor:pointer;
-  border:1px solid rgb(0 0 0 / .28);
-  box-shadow:inset 0 1px 0 rgb(255 255 255 / .35), 0 2px 4px color-mix(in srgb, var(--ink) 16%, transparent);
-  transition-property:transform, box-shadow;
-  transition-duration:150ms;
-  transition-timing-function:ease-out;
+  position: relative;
+  width: 32px; height: 32px; padding: 0; border-radius: var(--radius-sm); cursor: pointer;
+  border: 0;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.35), var(--elevation);
+  touch-action: manipulation;
+  transition-property: transform, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
 }
-.sw[aria-pressed="true"]{ box-shadow:0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
-.swname{ margin-top:13px; font-size:.88rem; color:var(--ink-3); }
-@media (max-width:767px){ .custom{ grid-template-columns:1fr; } }
-
-.honest .lede{ margin-top:14px; }
-.notes{ display:grid; gap:28px; max-width:none; grid-template-columns:1fr; }
-@media (min-width:900px){ .notes{ grid-template-columns:1fr 1fr; } }
-.note h3{ display:flex; align-items:center; gap:10px; margin-bottom:8px; font-size:1.05rem; }
-.note h3 svg{ width:18px; height:18px; color:var(--accent-deep); }
-.note p{ color:var(--ink-2); font-size:.95rem; }
-
-.glance{
-  margin-top:36px; display:grid; grid-template-columns:repeat(3,1fr); gap:20px 32px;
-  padding-top:28px; border-top:1px solid var(--line);
+.sw::before{
+  content: ""; position: absolute; inset: -6px;
 }
-.glance dt{ font-weight:600; font-size:.92rem; }
-.glance dd{ margin:4px 0 0; color:var(--ink-2); font-size:.92rem; }
-@media (max-width:767px){ .glance{ grid-template-columns:1fr; } }
+.sw:active{ transform: scale(0.97); }
+.sw[aria-pressed="true"]{ box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
+.swname{ font-size: var(--text-caption); color: var(--ink-3); }
 
-.steps{ display:grid; gap:0; }
-.step{ display:grid; grid-template-columns:7.5rem 1fr; gap:20px; padding:22px 0; }
-.step + .step{ border-top:1px solid var(--line); }
-.step h3{ font-size:1.2rem; }
-.step p{ color:var(--ink-2); margin-top:6px; }
+.steps{
+  display: grid; gap: 28px;
+}
+@media (min-width: 800px){
+  .steps{ grid-template-columns: repeat(3, 1fr); gap: 28px 32px; }
+}
+.step{
+  display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
+  min-width: 0;
+}
+.step-stage{
+  width: 100%;
+  aspect-ratio: 5 / 3;
+  background: var(--stage);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation);
+  display: grid; place-items: center;
+  isolation: isolate;
+  overflow: hidden;
+}
+.step-still{
+  width: 6.5rem; height: 6.5rem;
+  color: var(--still-paper);
+  overflow: visible;
+  pointer-events: none; user-select: none;
+  filter: drop-shadow(0 16px 22px oklch(0 0 0 / 0.5));
+  transition: transform 150ms ease-out;
+}
+.step-still.step-mark{ width: 6rem; height: 6rem; color: var(--accent); }
+@media (hover: hover) and (pointer: fine){
+  .step:hover .step-still{ transform: translateY(-4px); }
+  .step a:hover { color: var(--ink); }
+}
+.step:active .step-still{ transform: translateY(-4px); }
+.step h3{ font-size: var(--text-subhead); }
+.step p{ color: var(--ink-2); text-wrap: pretty; max-width: 36ch; }
+.step a { color: var(--accent-deep); text-underline-offset: 0.16em; }
 .step code{
-  font-family:ui-monospace, "Cascadia Mono", Consolas, monospace; font-size:.86em;
-  background:var(--bg-2); border:1px solid var(--line); border-radius:5px; padding:1px 6px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .86em;
+  background: var(--bg-2); border-radius: 5px; padding: 1px 6px;
+  box-shadow: 0 0 0 1px var(--line);
 }
-@media (max-width:767px){ .step{ grid-template-columns:1fr; gap:6px; } }
 
-.faq{ max-width:none; width:100%; }
-.faq details{
-  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
-  margin-bottom:10px; overflow:hidden;
+.faq{
+  max-width: 42rem; width: 100%; margin-inline: auto;
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--elevation); isolation: isolate;
 }
+#faq .wrap{ display: flex; flex-direction: column; align-items: stretch; }
+#faq .sec-copy{ max-width: 42rem; width: 100%; margin-inline: auto; }
+.faq details{ border-top: var(--border-hairline) solid var(--line); }
+.faq details:first-child{ border-top: 0; }
 .faq summary{
-  list-style:none; cursor:pointer; padding:18px 52px 18px 20px; position:relative;
-  font-weight:600; font-size:1.02rem;
+  list-style: none; cursor: pointer; user-select: none;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 18px 16px 20px; min-height: 52px;
+  font-weight: 600; font-size: var(--text-body); text-wrap: pretty;
+  transition-property: background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+  touch-action: manipulation;
 }
-.faq summary::-webkit-details-marker{ display:none; }
-.faq summary::after{
-  content:""; position:absolute; right:20px; top:50%; width:8px; height:8px;
-  border-right:2px solid var(--ink-3); border-bottom:2px solid var(--ink-3);
-  transform:translateY(-70%) rotate(45deg); transition:transform .2s ease;
+.faq details:first-child summary{
+  border-start-start-radius: var(--radius); border-start-end-radius: var(--radius);
 }
-.faq details[open] summary::after{ transform:translateY(-30%) rotate(-135deg); border-color:var(--accent-deep); }
-.faq .ans{ padding:0 20px 18px; color:var(--ink-2); font-size:.96rem; max-width:65ch; text-wrap:pretty; }
+.faq details:last-child:not([open]) summary{
+  border-end-start-radius: var(--radius); border-end-end-radius: var(--radius);
+}
+.faq details:last-child[open] .ans{
+  border-end-start-radius: var(--radius); border-end-end-radius: var(--radius);
+}
+.faq details[open] summary{ border-bottom: var(--border-hairline) solid var(--line); }
+.faq summary::-webkit-details-marker, .faq summary::marker{ display: none; content: ""; }
+.faq summary span{ min-width: 0; flex: 1; }
+.faq summary svg{
+  width: 16px; height: 16px; flex: none; color: var(--ink-3);
+  pointer-events: none; user-select: none;
+}
+@media (hover: hover) and (pointer: fine){
+  .faq summary:hover{ background: color-mix(in oklch, var(--ink) 5%, transparent); }
+}
+.faq summary:active{ background: color-mix(in oklch, var(--ink) 8%, transparent); }
+.faq .ans{
+  padding: 12px 52px 20px 20px; color: var(--ink-2);
+  font-size: var(--text-body); max-width: 65ch;
+  min-height: 0; overflow: hidden;
+}
+.faq .ans p{ text-wrap: pretty; }
 .faq code{
-  font-family:ui-monospace, "Cascadia Mono", Consolas, monospace; font-size:.86em;
-  background:var(--bg-2); border:1px solid var(--line); border-radius:5px; padding:1px 6px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .86em;
+  background: var(--bg-2); border-radius: 5px; padding: 1px 6px;
+  box-shadow: 0 0 0 1px var(--line);
 }
 
-.closing{ padding:clamp(72px, 9vw, 120px) 0 0; }
+.closing{ padding: var(--section-space) 0 0; }
 .closing-in{
-  padding:clamp(48px, 6vw, 72px); border:1px solid var(--line); border-radius:calc(var(--radius) + 4px);
-  background:var(--bg-2); box-shadow:var(--shadow);
-  display:flex; flex-direction:column; align-items:center; text-align:center;
+  padding: clamp(40px, 5vw, 64px); border-radius: calc(var(--radius) + 4px);
+  background: var(--bg-2); box-shadow: var(--elevation);
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px;
 }
-.closing h2{ max-width:16ch; }
-.closing .lede{ margin-top:14px; max-width:36ch; }
-.closing .cta{ justify-content:center; }
-.closing .fine{ margin-top:16px; font-size:.88rem; color:var(--ink-3); }
+.closing h2{ max-width: 16ch; }
+.closing .lede{ max-width: 36ch; }
+.closing .cta{ justify-content: center; }
+.closing .fine{ font-size: var(--text-caption); color: var(--ink-3); }
 
-footer{ margin-top:72px; border-top:1px solid var(--line); }
-.foot{ padding:36px 0 48px; display:flex; flex-wrap:wrap; gap:18px 40px; justify-content:space-between; }
-.colophon{ font-size:.86rem; color:var(--ink-3); line-height:1.7; max-width:52ch; margin-top:10px; }
-.footlinks{ display:flex; flex-wrap:wrap; gap:8px 20px; font-size:.9rem; }
-.footlinks a{ color:var(--ink-2); text-decoration:none; }
-
-.no-transitions, .no-transitions *{ transition:none !important; }
-
-@media (prefers-reduced-motion: no-preference){
-  .play-intro .hero-visual img{ animation:rise .8s cubic-bezier(.16,1,.3,1) both; }
+footer{
+  margin-top: var(--section-space); border-top: var(--border-hairline) solid var(--line);
+  padding-bottom: max(48px, env(safe-area-inset-bottom));
 }
-@keyframes rise{
-  from{ opacity:0; transform:translateY(12px); }
-  to{ opacity:1; transform:none; }
+.foot{ padding: 28px 0 0; display: flex; flex-wrap: wrap; gap: 16px 40px; justify-content: space-between; }
+.foot > div:first-child{ display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.foot .brand{ margin-inline-end: 0; }
+.foot .brand .mark{ width: 24px; height: 24px; }
+.colophon{ font-size: var(--text-caption); color: var(--ink-3); line-height: 1.6; max-width: 65ch; }
+.footlinks{ display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: var(--text-small); align-items: center; }
+.footlinks a{
+  display: inline-flex; align-items: center; min-height: 44px;
+  color: var(--ink-2); text-decoration: none;
+  text-decoration-thickness: from-font;
+  text-underline-position: from-font;
+  text-underline-offset: 0.16em;
+  text-decoration-skip-ink: auto;
 }
-.skip-intro .hero-visual img{ animation:none; }
+@media (hover: hover) and (pointer: fine){
+  .footlinks a:hover{ color: var(--ink); text-decoration: underline; }
+}
+
+html:not([data-skip-intro]) .switcher{
+  animation: intro 300ms cubic-bezier(0.32, 0.72, 0, 1) backwards;
+}
+@keyframes intro{
+  from{ transform: translateY(8px); }
+  to{ transform: none; }
+}
+.theme-switching, .theme-switching *{ transition: none !important; }
 @media (prefers-reduced-motion: reduce){
-  .btn, .sw, .icon-btn{ transition:none; }
-  .hero-visual img{ animation:none; }
+  html:not([data-skip-intro]) .switcher{ animation: none; }
+  .btn, .sw, .icon-btn, .faq summary, .step-still,
+  details::details-content, details[open]::details-content, details summary svg{ transition: none; }
+  .btn:active, .icon-btn:active, .sw:active, .step:hover .step-still, .step:active .step-still,
+  .btn-primary:hover, .btn-quiet:hover{ transform: none; }
+}
+@media (prefers-reduced-transparency: reduce){
+  .site-header{ background: var(--bg) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 }
 </style>
 </head>
@@ -696,23 +991,18 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
 
 <svg width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none" aria-hidden="true">
   <symbol id="mark" viewBox="0 0 64 64">
-    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="#6e737b" stroke-width="3"/>
-    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="#0d2137" stroke="currentColor" stroke-width="6"/>
+    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.554 0.014 249)" stroke-width="3"/>
+    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.244 0.05 249)" stroke="currentColor" stroke-width="6"/>
   </symbol>
   <symbol id="i-download" viewBox="0 0 256 256"><path fill="currentColor" d="M240,136v64a16,16,0,0,1-16,16H32a16,16,0,0,1-16-16V136a16,16,0,0,1,16-16H72a8,8,0,0,1,0,16H32v64H224V136H184a8,8,0,0,1,0-16h40A16,16,0,0,1,240,136Zm-117.66-2.34a8,8,0,0,0,11.32,0l48-48a8,8,0,0,0-11.32-11.32L136,108.69V24a8,8,0,0,0-16,0v84.69L85.66,74.34A8,8,0,0,0,74.34,85.66ZM200,168a12,12,0,1,0-12,12A12,12,0,0,0,200,168Z"/></symbol>
-  <symbol id="i-check" viewBox="0 0 256 256"><path fill="currentColor" d="M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z"/></symbol>
-  <symbol id="i-search" viewBox="0 0 256 256"><path fill="currentColor" d="M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"/></symbol>
-  <symbol id="i-keyboard" viewBox="0 0 256 256"><path fill="currentColor" d="M224,48H32A16,16,0,0,0,16,64V192a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V64A16,16,0,0,0,224,48Zm0,144H32V64H224V192Zm-16-64a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,128Zm0-32a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H200A8,8,0,0,1,208,96ZM72,160a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16h8A8,8,0,0,1,72,160Zm96,0a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,160Zm40,0a8,8,0,0,1-8,8h-8a8,8,0,0,1,0-16h8A8,8,0,0,1,208,160Z"/></symbol>
-  <symbol id="i-lock" viewBox="0 0 256 256"><path fill="currentColor" d="M128,112a28,28,0,0,0-8,54.83V184a8,8,0,0,0,16,0V166.83A28,28,0,0,0,128,112Zm0,40a12,12,0,1,1,12-12A12,12,0,0,1,128,152Zm80-72H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z"/></symbol>
-  <symbol id="i-bolt" viewBox="0 0 256 256"><path fill="currentColor" d="M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z"/></symbol>
   <symbol id="i-github" viewBox="0 0 256 256"><path fill="currentColor" d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
   <symbol id="i-sun" viewBox="0 0 256 256"><path fill="currentColor" d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
   <symbol id="i-moon" viewBox="0 0 256 256"><path fill="currentColor" d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
-  <symbol id="i-monitor" viewBox="0 0 256 256"><path fill="currentColor" d="M208,40H48A24,24,0,0,0,24,64V176a24,24,0,0,0,24,24H208a24,24,0,0,0,24-24V64A24,24,0,0,0,208,40Zm8,136a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V64a8,8,0,0,1,8-8H208a8,8,0,0,1,8,8Zm-48,48a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,224Z"/></symbol>
   <symbol id="i-x" viewBox="0 0 256 256"><path fill="currentColor" d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 256 256"><path fill="currentColor" d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z"/></symbol>
   <symbol id="i-caret" viewBox="0 0 256 256"><path fill="currentColor" d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"/></symbol>
-  <symbol id="i-windows" viewBox="0 0 256 256"><path fill="currentColor" d="M208,136H128a8,8,0,0,0-8,8v57.45a8,8,0,0,0,6.57,7.88l80,14.54A7.61,7.61,0,0,0,208,224a8,8,0,0,0,8-8V144A8,8,0,0,0,208,136Zm-8,70.41-64-11.63V152h64ZM96,136H32a8,8,0,0,0-8,8v40a8,8,0,0,0,6.57,7.87l64,11.64a8.54,8.54,0,0,0,1.43.13,8,8,0,0,0,8-8V144A8,8,0,0,0,96,136Zm-8,50.05-48-8.73V152H88ZM213.13,33.86a8,8,0,0,0-6.56-1.73l-80,14.55A8,8,0,0,0,120,54.55V112a8,8,0,0,0,8,8h80a8,8,0,0,0,8-8V40A8,8,0,0,0,213.13,33.86ZM200,104H136V61.22l64-11.63ZM101.13,54.22a8,8,0,0,0-6.56-1.73l-64,11.64A8,8,0,0,0,24,72v40a8,8,0,0,0,8,8H96a8,8,0,0,0,8-8V60.36A8,8,0,0,0,101.13,54.22ZM88,104H40V78.68L88,70Z"/></symbol>
-  <symbol id="i-list" viewBox="0 0 256 256"><path fill="currentColor" d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40A8,8,0,0,0,40,72ZM216,184H40a8,8,0,0,0,0,16H216A8,8,0,0,0,216,184Z"/></symbol>
+  <symbol id="i-file-zip" viewBox="0 0 256 256"><path fill="currentColor" d="M184,144H168a8,8,0,0,0-8,8v55.73a8.17,8.17,0,0,0,7.47,8.25,8,8,0,0,0,8.53-8v-8h7.4c15.24,0,28.14-11.92,28.59-27.15A28,28,0,0,0,184,144Zm-.35,40H176V160h8A12,12,0,0,1,196,173.16,12.25,12.25,0,0,1,183.65,184ZM136,152v55.73a8.17,8.17,0,0,1-7.47,8.25,8,8,0,0,1-8.53-8V152.27a8.17,8.17,0,0,1,7.47-8.25A8,8,0,0,1,136,152ZM96,208.53A8.17,8.17,0,0,1,87.73,216H56.23a8.27,8.27,0,0,1-6-2.5A8,8,0,0,1,49.05,204l25.16-44H56.27A8.17,8.17,0,0,1,48,152.53,8,8,0,0,1,56,144H87.77a8.27,8.27,0,0,1,6,2.5A8,8,0,0,1,95,156L69.79,200H88A8,8,0,0,1,96,208.53ZM213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40v76a4,4,0,0,0,4,4H212a4,4,0,0,0,4-4V88A8,8,0,0,0,213.66,82.34ZM152,88V44l44,44Z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 256 256"><path fill="currentColor" d="M216,72H131.31L104,44.69A15.88,15.88,0,0,0,92.69,40H40A16,16,0,0,0,24,56V200.62A15.41,15.41,0,0,0,39.39,216h177.5A15.13,15.13,0,0,0,232,200.89V88A16,16,0,0,0,216,72ZM40,56H92.69l16,16H40Z"/></symbol>
 </svg>
 
 <div id="top-sentinel" aria-hidden="true"></div>
@@ -724,10 +1014,8 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
     </a>
     <nav class="navlinks" id="navlinks" aria-label="Page">
       <a href="#how">How it works</a>
-      <a href="#personalize">Personalize</a>
-      <a href="#honest">Free &amp; private</a>
       <a href="#install">Install</a>
-      <a href="#faq">FAQ</a>
+      <a href="#faq">Questions</a>
       <a class="btn btn-primary menu-download" href="https://github.com/vibeslop/AltTabio/releases/latest">Download for Windows</a>
     </nav>
     <div class="nav-tools">
@@ -746,97 +1034,199 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
   <article id="top">
     <section class="hero wrap">
       <div class="hero-copy">
-        <h1>Find the right window instantly.</h1>
-        <p class="lede">A free Alt+Tab replacement for Windows with a live preview and search that starts when you type.</p>
+        <h1>See the window before you switch</h1>
+        <p class="lede">A numbered list, a live preview, and search as you type. Free for 64-bit Windows.</p>
         <div class="cta">
           <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest">
             <svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-download"/></svg>
             Download for Windows
           </a>
-          <a class="btn btn-quiet" href="#how">See how it works</a>
+          <a class="btn btn-quiet" href="#how">How it works</a>
         </div>
       </div>
-      <div class="hero-visual">
-        <img
-          src="images/hero-switcher.webp"
-          width="1600"
-          height="1066"
-          alt="AltTabio on Windows 11: numbered list of open apps on the left, live Word document preview on the right."
-          fetchpriority="high"
-          decoding="async"
-        />
-      </div>
+      <figure class="demo">
+        <div class="switcher" id="switcher">
+          <div class="sw-list">
+            <div class="sw-rows" id="sw-rows" role="listbox" aria-label="Open windows">
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-word" data-app="word" data-search="1 italy trip itinerary docx word" aria-selected="true">
+                <span class="sw-num">1</span>
+                <span class="sw-ico" style="background:#185abd" aria-hidden="true">W</span>
+                <span class="sw-text"><span class="sw-title">Italy trip itinerary.docx</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-chrome" data-app="chrome" data-search="2 flights to rome chrome google" aria-selected="false">
+                <span class="sw-num">2</span>
+                <span class="sw-ico" style="background:#3c4043" aria-hidden="true">C</span>
+                <span class="sw-text"><span class="sw-title">Flights to Rome</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-excel" data-app="excel" data-search="3 hotels in florence xlsx excel" aria-selected="false">
+                <span class="sw-num">3</span>
+                <span class="sw-ico" style="background:#107c41" aria-hidden="true">X</span>
+                <span class="sw-text"><span class="sw-title">Hotels in Florence.xlsx</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-outlook" data-app="outlook" data-search="4 nonna reply inbox outlook mail" aria-selected="false">
+                <span class="sw-num">4</span>
+                <span class="sw-ico" style="background:#0f4cbd" aria-hidden="true">O</span>
+                <span class="sw-text"><span class="sw-title">Nonna's reply</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-explorer" data-app="explorer" data-search="5 passport scans downloads explorer files" aria-selected="false">
+                <span class="sw-num">5</span>
+                <span class="sw-ico" style="background:#c9a227" aria-hidden="true">E</span>
+                <span class="sw-text"><span class="sw-title">Passport scans</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-notepad" data-app="notepad" data-search="6 packing list txt notepad" aria-selected="false">
+                <span class="sw-num">6</span>
+                <span class="sw-ico" style="background:#5b6570" aria-hidden="true">N</span>
+                <span class="sw-text"><span class="sw-title">packing list.txt</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-photos" data-app="photos" data-search="7 cinque terre photos" aria-selected="false">
+                <span class="sw-num">7</span>
+                <span class="sw-ico" style="background:#2b6cb0" aria-hidden="true">P</span>
+                <span class="sw-text"><span class="sw-title">Cinque Terre.jpg</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-edge" data-app="edge" data-search="8 local forecast news edge" aria-selected="false">
+                <span class="sw-num">8</span>
+                <span class="sw-ico" style="background:#1a4d8c" aria-hidden="true">e</span>
+                <span class="sw-text"><span class="sw-title">The local forecast</span></span>
+              </button>
+              <button type="button" class="sw-row" role="option" tabindex="-1" id="win-settings" data-app="settings" data-search="9 settings" aria-selected="false">
+                <span class="sw-num">9</span>
+                <span class="sw-ico" style="background:#52525b" aria-hidden="true">S</span>
+                <span class="sw-text"><span class="sw-title">Settings</span></span>
+              </button>
+            </div>
+            <p class="sw-empty" id="sw-empty" hidden>No windows match. Clear the search to see the full list.</p>
+          </div>
+          <div class="sw-preview" id="sw-preview">
+            <div class="scene word" data-app="word" role="img" aria-label="Preview of a Word document titled Italy trip itinerary">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">W</span>
+                <span class="scene-name">Italy trip itinerary.docx</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body">
+                <div class="scene-line wide"></div>
+                <div class="scene-line mid"></div>
+                <div class="scene-line narrow"></div>
+                <div class="scene-line mid"></div>
+                <div class="scene-line wide"></div>
+              </div>
+            </div>
+            <div class="scene chrome" data-app="chrome" hidden role="img" aria-label="Preview of Chrome showing flight search results">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">C</span>
+                <span class="scene-name">Flights to Rome</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body">
+                <div class="scene-line wide"></div>
+                <div class="scene-mail"><b></b><b></b><b></b></div>
+              </div>
+            </div>
+            <div class="scene excel" data-app="excel" hidden role="img" aria-label="Preview of an Excel sheet of Florence hotels">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">X</span>
+                <span class="scene-name">Hotels in Florence.xlsx</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body"><div class="scene-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+            </div>
+            <div class="scene outlook" data-app="outlook" hidden role="img" aria-label="Preview of an Outlook inbox message">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">O</span>
+                <span class="scene-name">Inbox</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body"><div class="scene-mail"><b></b><b></b><b></b><b></b></div></div>
+            </div>
+            <div class="scene explorer" data-app="explorer" hidden role="img" aria-label="Preview of File Explorer showing passport scans">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">E</span>
+                <span class="scene-name">Passport scans</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body"><div class="scene-mail"><b></b><b></b><b></b></div></div>
+            </div>
+            <div class="scene notepad" data-app="notepad" hidden role="img" aria-label="Preview of a Notepad packing list">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">N</span>
+                <span class="scene-name">packing list.txt</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body">
+                <div class="scene-line mid"></div>
+                <div class="scene-line narrow"></div>
+                <div class="scene-line wide"></div>
+                <div class="scene-line mid"></div>
+              </div>
+            </div>
+            <div class="scene photos" data-app="photos" hidden role="img" aria-label="Preview of a photo of Cinque Terre">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">P</span>
+                <span class="scene-name">Cinque Terre.jpg</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body"><div class="scene-photo"></div></div>
+            </div>
+            <div class="scene edge" data-app="edge" hidden role="img" aria-label="Preview of a weather article in Edge">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">e</span>
+                <span class="scene-name">The local forecast</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body">
+                <div class="scene-line wide"></div>
+                <div class="scene-line mid"></div>
+                <div class="scene-line narrow"></div>
+              </div>
+            </div>
+            <div class="scene settings" data-app="settings" hidden role="img" aria-label="Preview of Windows Settings">
+              <div class="scene-bar">
+                <span class="scene-ico" aria-hidden="true">S</span>
+                <span class="scene-name">Settings</span>
+                <span class="scene-caption" aria-hidden="true"><span class="cap-min"></span><span class="cap-max"></span><span class="cap-close"></span></span>
+              </div>
+              <span class="scene-accent" aria-hidden="true"></span>
+              <div class="scene-body"><div class="scene-mail"><b></b><b></b><b></b><b></b></div></div>
+            </div>
+          </div>
+        </div>
+        <figcaption class="demo-caption">
+          <label for="switcher-filter">Try it
+            <input id="switcher-filter" type="search" placeholder="Type to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="sw-rows" aria-activedescendant="win-word" aria-describedby="switcher-hint" />
+          </label>
+          <span class="demo-hint" id="switcher-hint">Type to filter. 1 to 9 jumps. In the app there is no search box.</span>
+        </figcaption>
+        <p class="sr-only" id="switcher-live" aria-live="polite"></p>
+      </figure>
     </section>
-
-    <div class="wrap">
-      <div class="facts" aria-label="Product facts">
-        <div><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-check"/></svg><span><b>Free forever</b> on 64-bit Windows</span></div>
-        <div><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-lock"/></svg><span><b>No ads, no account,</b> no telemetry</span></div>
-        <div><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-search"/></svg><span><b>Type to search</b> open windows</span></div>
-        <div><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-windows"/></svg><span><b>Replaces Alt+Tab</b> on Windows</span></div>
-      </div>
-    </div>
 
     <section id="how">
       <div class="wrap">
         <div class="sec-copy">
-          <h2>A clearer Alt+Tab for Windows</h2>
-          <p class="lede">Hold Alt, tap Tab, same as always. The overlay is just easier to read when you have a lot open.</p>
+          <h2>Same shortcut.<br>A list you can read.</h2>
+          <p class="lede">Hold Alt, tap Tab. The overlay is built for a desk with twenty windows, not four thumbnails.</p>
         </div>
-        <div class="bento">
-          <article class="cell preview">
-            <div class="shot">
-              <img src="images/hero-switcher.webp" width="1600" height="1066" alt="Live preview of a trip itinerary Word document beside the AltTabio window list." decoding="async" />
-            </div>
-            <div class="pad">
-              <h3>See it before you switch</h3>
-              <p>A live preview shows the actual window before you let go of Alt, so you stop landing on the wrong document.</p>
-            </div>
-          </article>
-          <article class="cell search">
-            <div class="shot">
-              <img src="images/search-switcher.webp" width="1400" height="934" alt="AltTabio filtered to windows matching a typed search, with a live preview of flight results in Chrome." loading="lazy" decoding="async" />
-            </div>
-            <div class="pad">
-              <h3>Type to find it</h3>
-              <p>Start typing. A few letters is enough. The list shrinks to matching titles and app names.</p>
-            </div>
-          </article>
-          <article class="cell numbers">
-            <div class="shot num-visual" role="img" aria-label="Number keys 1 through 4">
-              <div class="num-row">
-                <kbd class="accent">1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd>
-              </div>
-            </div>
-            <div class="pad">
-              <h3>Or press a number</h3>
-              <p>Visible windows get keys 1 through 9. The ones you use most become one keystroke.</p>
-            </div>
-          </article>
-          <article class="cell monitors">
-            <div class="shot">
-              <img src="images/dual-monitors.webp" width="1400" height="934" alt="Two monitors on a desk: a spreadsheet on the left screen and a news site on the right." loading="lazy" decoding="async" />
-            </div>
-            <div class="pad">
-              <h3>Great with two screens</h3>
-              <p>Limit the list to the monitor you are looking at, or keep every window in one place.</p>
-            </div>
-          </article>
-          <article class="cell close">
-            <div class="shot close-visual" role="img" aria-label="Close with F4 or force-close with F8">
-              <span class="close-glyph">
-                <svg class="ph" viewBox="0 0 256 256"><use href="#i-x"/></svg>
-              </span>
-              <div class="num-row">
-                <kbd>F4</kbd><kbd class="accent">F8</kbd>
-              </div>
-            </div>
-            <div class="pad">
-              <h3>Close a stuck program</h3>
-              <p>Close, minimize, maximize, restore, or force-close from the list. No Task Manager hunt.</p>
-            </div>
-          </article>
-        </div>
+        <figure class="proof">
+          <div class="shot">
+            <img
+              src="images/hero-switcher.webp"
+              width="1600"
+              height="1066"
+              alt="AltTabio on Windows 11: numbered list of open apps on the left, live Word document preview on the right."
+              loading="lazy"
+              decoding="async"
+            />
+          </div>
+          <figcaption class="shot-copy">On Windows the preview is a live thumbnail of the selected window. The replica above is a stand-in so you can try search in the browser.</figcaption>
+        </figure>
       </div>
     </section>
 
@@ -857,7 +1247,7 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
           <details>
             <summary>Show every shortcut <svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="allkeys">
-              <div class="keyrow"><span class="combo"><kbd>Win</kbd><span class="plus">+</span><kbd>Tab</kbd></span><span class="what">Also opens AltTabio (optional)</span></div>
+              <div class="keyrow"><span class="combo"><kbd>Win</kbd><span class="plus">+</span><kbd>Tab</kbd></span><span class="what">Also opens AltTabio, optional</span></div>
               <div class="keyrow"><span class="combo"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span><span class="what">Move through the list</span></div>
               <div class="keyrow"><span class="combo"><kbd>Shift</kbd><span class="plus">+</span><kbd>Tab</kbd></span><span class="what">Go backwards</span></div>
               <div class="keyrow"><span class="combo"><kbd>Backspace</kbd></span><span class="what">Fix a typo in search</span></div>
@@ -875,17 +1265,12 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
 
     <section id="personalize">
       <div class="wrap custom">
-        <div>
+        <div class="sec-copy">
           <h2>Make it feel like yours</h2>
-          <p class="lede">Eight icon colors, light or dark, compact or roomy. These swatches are the colors that ship in the app.</p>
-          <ul>
-            <li><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-check"/></svg><span>Compact or roomy list</span></li>
-            <li><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-check"/></svg><span>Bigger icons, window numbers, and app names, all optional</span></li>
-            <li><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-check"/></svg><span>Preview one window, or see it on the full desktop</span></li>
-          </ul>
+          <p class="lede">Eight icon colors. Azure is the default.</p>
         </div>
         <div class="specimen">
-          <div class="stagearea">
+          <div class="stagearea" role="img" aria-label="AltTabio app icon">
             <svg class="bigmark" id="bigmark" viewBox="0 0 64 64" style="color:#268ee4" aria-hidden="true"><use href="#mark"/></svg>
           </div>
           <div class="picker">
@@ -893,43 +1278,6 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
             <p class="swname" id="swname">Azure, the default</p>
           </div>
         </div>
-      </div>
-    </section>
-
-    <section id="honest">
-      <div class="wrap">
-        <div class="sec-copy">
-          <h2>Honest software. Actually free.</h2>
-          <p class="lede">No trial that expires. No pro version held hostage. No ads. A small native program that does one job.</p>
-        </div>
-        <div class="notes">
-          <div class="note">
-            <h3><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-lock"/></svg> Completely private</h3>
-            <p>AltTabio never connects to the internet. No data leaves your computer, because the app cannot send any. Settings live in a local INI file.</p>
-          </div>
-          <div class="note">
-            <h3><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-bolt"/></svg> About the permission prompt</h3>
-            <p>Windows asks for permission so AltTabio can handle Alt+Tab first, and so it can close a frozen program when you ask. Needed for the job, not for anything sneaky.</p>
-          </div>
-          <div class="note">
-            <h3><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-x"/></svg> Changed your mind?</h3>
-            <p>It lives in one folder. Delete the folder and it is gone. Exit from the tray icon and the built-in Alt+Tab comes back immediately.</p>
-          </div>
-        </div>
-        <dl class="glance">
-          <div>
-            <dt>License</dt>
-            <dd>MIT. Source code is public on GitHub.</dd>
-          </div>
-          <div>
-            <dt>Platform</dt>
-            <dd>64-bit Windows 10 and Windows 11</dd>
-          </div>
-          <div>
-            <dt>Stack</dt>
-            <dd>Native Rust, Win32, Direct2D, DWM previews</dd>
-          </div>
-        </dl>
       </div>
     </section>
 
@@ -941,23 +1289,26 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
         </div>
         <div class="steps">
           <div class="step">
+            <div class="step-stage" role="img" aria-label="A zip archive">
+              <svg class="step-still" viewBox="0 0 256 256" width="104" height="104" aria-hidden="true"><use href="#i-file-zip"/></svg>
+            </div>
             <h3>Download</h3>
-            <p>Get the latest Windows archive from GitHub Releases. It is a small zip, nothing else to install.</p>
+            <p>Get the latest Windows archive from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a>. It is a small zip, nothing else to install.</p>
           </div>
           <div class="step">
+            <div class="step-stage" role="img" aria-label="A folder">
+              <svg class="step-still" viewBox="0 0 256 256" width="104" height="104" aria-hidden="true"><use href="#i-folder"/></svg>
+            </div>
             <h3>Place</h3>
             <p>Unzip it into a folder you will keep. Documents works. If you enable start with Windows, prefer a folder only administrators can write, such as Program Files.</p>
           </div>
           <div class="step">
+            <div class="step-stage" role="img" aria-label="The AltTabio app icon">
+              <svg class="step-still step-mark" viewBox="0 0 64 64" width="96" height="96" aria-hidden="true"><use href="#mark"/></svg>
+            </div>
             <h3>Run</h3>
             <p>Open <code>AltTabio.exe</code>, click Yes on the Windows prompt, then press Alt+Tab.</p>
           </div>
-        </div>
-        <div class="cta" style="margin-top:28px">
-          <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest">
-            <svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-download"/></svg>
-            Download for Windows
-          </a>
         </div>
       </div>
     </section>
@@ -966,38 +1317,43 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
       <div class="wrap">
         <div class="sec-copy">
           <h2>Questions</h2>
+          <p class="lede">Free, the permission prompt, and how to leave.</p>
         </div>
         <div class="faq">
           <details>
-            <summary>Is it really free? What is the catch?</summary>
-            <div class="ans"><p>There isn’t one. AltTabio is free, open-source software under the MIT license. No trial, no ads, no account, no premium version.</p></div>
+            <summary><span>Is it really free? What is the catch?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
+            <div class="ans"><p>There isn't one. AltTabio is free, open-source software under the MIT license. No trial, no ads, no account, no premium version.</p></div>
           </details>
           <details>
-            <summary>Will it slow down my computer?</summary>
+            <summary><span>Will it slow down my computer?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>No. It is a single small native program, and it sits quietly until you press Alt+Tab. There is no background syncing or phoning home, because it has no internet connection.</p></div>
           </details>
           <details>
-            <summary>Does it collect any of my data?</summary>
+            <summary><span>Does it collect any of my data?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>None. AltTabio contains no analytics and no networking. It could not send your data anywhere even if it wanted to. Anyone can verify that in the public source.</p></div>
           </details>
           <details>
-            <summary>Why does Windows ask for permission when it starts?</summary>
+            <summary><span>Why does Windows ask for permission when it starts?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>That approval lets AltTabio respond to Alt+Tab before Windows does, and lets it close a frozen program when you ask. Those are the only reasons.</p></div>
           </details>
           <details>
-            <summary>What if I want the old Alt+Tab back?</summary>
+            <summary><span>What if I want the old Alt+Tab back?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>Right-click the AltTabio icon in the system tray and choose Exit. Windows goes back to normal. You can also keep AltTabio on Alt+Tab and leave Win+Tab alone, or the other way around.</p></div>
           </details>
           <details>
-            <summary>How do I uninstall it?</summary>
+            <summary><span>How do I uninstall it?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>Turn off start with Windows if you enabled it, exit from the tray icon, and delete the folder. That is everything.</p></div>
           </details>
           <details>
-            <summary>Which computers does it work on?</summary>
+            <summary><span>Which computers does it work on?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>Any modern 64-bit Windows PC, including Windows 10 and Windows 11. Multiple monitors and high-resolution displays are supported.</p></div>
           </details>
           <details>
-            <summary>Is this an Alt+Tab Terminator alternative?</summary>
+            <summary><span>Is the overlay on this page the real app?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
+            <div class="ans"><p>No. It is a replica so you can try typed search and number keys in the browser. Live previews of your actual windows need the Windows download.</p></div>
+          </details>
+          <details>
+            <summary><span>Is this an Alt+Tab Terminator alternative?</span><svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-caret"/></svg></summary>
             <div class="ans"><p>Yes. AltTabio is an independent open-source window switcher for people who want that kind of list-and-preview Alt+Tab on Windows. It is not affiliated with Alt+Tab Terminator.</p></div>
           </details>
         </div>
@@ -1006,8 +1362,8 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
 
     <div class="closing wrap">
       <div class="closing-in">
-        <h2>Your windows, found. Every time.</h2>
-        <p class="lede">It takes a minute to try, and nothing to undo.</p>
+        <h2>Try it for a minute</h2>
+        <p class="lede">Download, unzip, press Alt+Tab. If you don't like it, delete the folder.</p>
         <div class="cta">
           <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest">
             <svg class="ph" viewBox="0 0 256 256" aria-hidden="true"><use href="#i-download"/></svg>
@@ -1027,8 +1383,8 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
 <footer>
   <div class="wrap foot">
     <div>
-      <a class="brand" href="#top" style="margin-right:0">
-        <svg class="mark" viewBox="0 0 64 64" style="width:24px;height:24px;color:var(--accent)" aria-hidden="true"><use href="#mark"/></svg>
+      <a class="brand" href="#top">
+        <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>
         <span>AltTabio</span>
       </a>
       <p class="colophon">
@@ -1059,25 +1415,23 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
   const metaDark = document.querySelector('meta[name="theme-color"][media*="dark"]');
 
   const applyTheme = (theme) => {
-    root.classList.add("no-transitions");
     root.setAttribute("data-theme", theme);
     const dark = theme === "dark";
     themeIcon.innerHTML = dark ? '<use href="#i-sun"/>' : '<use href="#i-moon"/>';
     themeBtn.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
-    const color = dark ? "#12141a" : "#f2f3f6";
+    const color = dark ? "#151b22" : "#f1f4f7";
     if (metaLight) metaLight.setAttribute("content", color);
     if (metaDark) metaDark.setAttribute("content", color);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        root.classList.remove("no-transitions");
-      });
-    });
   };
   applyTheme(root.getAttribute("data-theme") || "light");
   themeBtn.addEventListener("click", () => {
     const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
     try { localStorage.setItem("alttabio-theme", next); } catch (e) {}
+    root.classList.add("theme-switching");
     applyTheme(next);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => root.classList.remove("theme-switching"));
+    });
   });
 
   const hdr = document.getElementById("hdr");
@@ -1100,10 +1454,13 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
   menuBtn.addEventListener("click", () => setMenu(!hdr.classList.contains("is-open")));
   navlinks.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => setMenu(false)));
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") setMenu(false);
+    if (e.key !== "Escape" || !hdr.classList.contains("is-open")) return;
+    const restore = hdr.contains(document.activeElement);
+    setMenu(false);
+    if (restore) menuBtn.focus();
   });
   window.addEventListener("resize", () => {
-    if (window.matchMedia("(min-width: 1180px)").matches) setMenu(false);
+    if (window.matchMedia("(min-width: 960px)").matches) setMenu(false);
   });
 
   const COLORS = [
@@ -1137,6 +1494,100 @@ footer{ margin-top:72px; border-top:1px solid var(--line); }
       box.appendChild(b);
     });
   }
+
+  const filter = document.getElementById("switcher-filter");
+  const rows = [...document.querySelectorAll(".sw-row")];
+  const scenes = [...document.querySelectorAll(".scene")];
+  document.querySelectorAll(".sw-title, .scene-name").forEach((el) => {
+    el.title = el.textContent.trim();
+  });
+  const empty = document.getElementById("sw-empty");
+  const live = document.getElementById("switcher-live");
+
+  const visibleRows = () => rows.filter((row) => !row.hidden);
+
+  const selectRow = (row) => {
+    if (!row) return;
+    rows.forEach((r) => r.setAttribute("aria-selected", r === row ? "true" : "false"));
+    scenes.forEach((scene) => {
+      const on = scene.dataset.app === row.dataset.app;
+      scene.hidden = !on;
+    });
+    filter.setAttribute("aria-activedescendant", row.id);
+    const title = row.querySelector(".sw-title");
+    if (live && title) live.textContent = title.textContent;
+  };
+
+  const applyFilter = (raw) => {
+    const query = raw.trim().toLowerCase();
+    let n = 0;
+    rows.forEach((row) => {
+      const match = !query || row.dataset.search.includes(query);
+      row.hidden = !match;
+      if (match) {
+        n += 1;
+        const num = row.querySelector(".sw-num");
+        if (num) num.textContent = n <= 9 ? String(n) : "";
+      }
+    });
+    const vis = visibleRows();
+    empty.hidden = vis.length > 0;
+    const selected = vis.find((r) => r.getAttribute("aria-selected") === "true") || vis[0];
+    if (selected) {
+      selectRow(selected);
+      return;
+    }
+    rows.forEach((r) => r.setAttribute("aria-selected", "false"));
+    scenes.forEach((scene) => { scene.hidden = true; });
+    filter.removeAttribute("aria-activedescendant");
+    if (live) live.textContent = empty.textContent.trim();
+  };
+
+  filter.addEventListener("input", () => applyFilter(filter.value));
+  filter.addEventListener("keydown", (e) => {
+    const vis = visibleRows();
+    const idx = vis.findIndex((r) => r.getAttribute("aria-selected") === "true");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (vis.length) selectRow(vis[Math.min(idx + 1, vis.length - 1)]);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (vis.length) selectRow(vis[Math.max(idx - 1, 0)]);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      if (vis[0]) selectRow(vis[0]);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      if (vis.length) selectRow(vis[vis.length - 1]);
+    } else if (e.key === "Escape") {
+      if (filter.value) {
+        e.preventDefault();
+        filter.value = "";
+        applyFilter("");
+      }
+    } else if (/^[1-9]$/.test(e.key)) {
+      const jump = vis[Number(e.key) - 1];
+      if (jump) {
+        e.preventDefault();
+        selectRow(jump);
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const current = vis.find((r) => r.getAttribute("aria-selected") === "true");
+      if (current && live) {
+        live.textContent = "Would switch to " + current.querySelector(".sw-title").textContent;
+      }
+    }
+  });
+
+  rows.forEach((row) => {
+    row.addEventListener("click", () => {
+      selectRow(row);
+      if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        filter.focus();
+      }
+    });
+  });
 })();
 </script>
 </body>
