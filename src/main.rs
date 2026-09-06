@@ -13,6 +13,7 @@ mod settings_dialog;
 mod settings_io;
 mod single_instance;
 mod startup;
+mod task_icon;
 mod tray;
 mod win_events;
 mod window_commands;

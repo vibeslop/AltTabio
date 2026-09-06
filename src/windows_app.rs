@@ -6,6 +6,7 @@ use crate::settings_dialog;
 use crate::settings_io::SettingsStore;
 use crate::single_instance::SingleInstance;
 use crate::startup;
+use crate::task_icon::TaskIcons;
 use crate::tray::{TrayAction, TrayIcon, WM_TRAY_CALLBACK};
 use crate::win_events::{
     self, LISTED_REFRESH_RETRY_DELAY_MS, LISTED_REFRESH_RETRY_TIMER_ID, WM_FOREGROUND_CHECK,
@@ -56,19 +57,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GCLP_HICON, GCLP_HICONSM,
-    GW_OWNER, GWL_EXSTYLE, GWLP_USERDATA, GetClassLongPtrW, GetClassNameW, GetCursorPos,
-    GetForegroundWindow, GetLastActivePopup, GetMessageW, GetShellWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, ICON_SMALL2, IDC_ARROW, IsIconic,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, EnumChildWindows, EnumWindows, GW_OWNER,
+    GWL_EXSTYLE, GWLP_USERDATA, GetClassNameW, GetCursorPos, GetForegroundWindow,
+    GetLastActivePopup, GetMessageW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IDC_ARROW, IsIconic,
     IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_HIDE,
-    SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage,
-    WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_GETICON, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE,
+    SWP_NOZORDER, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    ShowWindowAsync, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
     WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
 };
 use windows::core::{BOOL, Error, PCWSTR, PWSTR, Result, w};
@@ -284,6 +283,7 @@ impl Drop for ComApartment {
 struct App {
     hwnd: HWND,
     session: SwitcherSession,
+    task_icons: TaskIcons,
     renderer: Renderer,
     resolved_theme: ResolvedTheme,
     preview: Option<DwmPreview>,
@@ -418,6 +418,7 @@ impl App {
         Ok(Self {
             hwnd: HWND::default(),
             session,
+            task_icons: TaskIcons::default(),
             renderer: Renderer::new(resolved_theme)?,
             resolved_theme,
             preview: None,
@@ -997,7 +998,7 @@ impl App {
         let affected = self.task_refresh.take_pending_handles();
         let had_pending_retries = self.task_refresh.close_tracker().has_pending();
         match enumerate_switchable_windows(&self.settings) {
-            Ok(tasks) => {
+            Ok(EnumeratedTasks { tasks, icons }) => {
                 self.task_refresh.close_tracker_mut().reconcile(&tasks);
                 for window_handle in affected {
                     if close_refresh_target_if_still_listed(window_handle, &tasks).is_some() {
@@ -1005,6 +1006,7 @@ impl App {
                     }
                 }
                 self.session.refresh_tasks(tasks);
+                self.task_icons = icons;
             }
             Err(error) => {
                 eprintln!("Could not refresh windows: {error}");
@@ -1232,7 +1234,10 @@ impl App {
 
     fn show_overlay(&mut self, selection_delta: Option<i32>) {
         match enumerate_switchable_windows(&self.settings) {
-            Ok(tasks) => self.session.open(tasks, selection_delta),
+            Ok(EnumeratedTasks { tasks, icons }) => {
+                self.session.open(tasks, selection_delta);
+                self.task_icons = icons;
+            }
             Err(error) => {
                 self.set_hook_search_active(false);
                 self.set_hook_overlay_active(self.is_visible());
@@ -1654,13 +1659,12 @@ fn run_message_loop() -> Result<()> {
     }
 }
 
-struct EnumerationContext {
+struct EnumeratedTasks {
     tasks: Vec<SwitchTask>,
-    current_process_id: u32,
-    current_monitor: Option<HMONITOR>,
+    icons: TaskIcons,
 }
 
-fn enumerate_switchable_windows(settings: &Settings) -> Result<Vec<SwitchTask>> {
+fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTasks> {
     let current_monitor = if settings.monitor.use_current_monitor_filter {
         let mut cursor = POINT::default();
         unsafe {
@@ -1674,41 +1678,44 @@ fn enumerate_switchable_windows(settings: &Settings) -> Result<Vec<SwitchTask>> 
     } else {
         None
     };
-    let mut context = EnumerationContext {
-        tasks: Vec::new(),
-        current_process_id: std::process::id(),
-        current_monitor,
-    };
+    let mut handles = Vec::<HWND>::new();
     unsafe {
-        // SAFETY: EnumWindows is synchronous, so `context` remains exclusively borrowed and live
+        // SAFETY: EnumWindows is synchronous, so `handles` remains exclusively borrowed and live
         // for every invocation of enum_window.
         EnumWindows(
             Some(enum_window),
-            LPARAM((&raw mut context).cast::<c_void>() as isize),
+            LPARAM((&raw mut handles).cast::<c_void>() as isize),
         )?;
     }
-    Ok(context.tasks)
+    let mut result = EnumeratedTasks {
+        tasks: Vec::new(),
+        icons: TaskIcons::default(),
+    };
+    for hwnd in handles {
+        if let Some(task) = create_switch_task(
+            hwnd,
+            std::process::id(),
+            current_monitor,
+            result.tasks.len(),
+            &mut result.icons,
+        ) {
+            result.tasks.push(task);
+        }
+    }
+    Ok(result)
 }
 
 unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let context = unsafe {
-        // SAFETY: enumerate_switchable_windows passes a live exclusive EnumerationContext pointer
-        // and EnumWindows invokes callbacks synchronously on this thread.
-        (lparam.0 as *mut EnumerationContext).as_mut()
+        // SAFETY: the caller passes an exclusive live Vec<HWND> for synchronous enumeration.
+        (lparam.0 as *mut Vec<HWND>).as_mut()
     };
     let Some(context) = context else {
         return false.into();
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        if let Some(task) = create_switch_task(
-            hwnd,
-            context.current_process_id,
-            context.current_monitor,
-            context.tasks.len(),
-        ) {
-            context.tasks.push(task);
-        }
+        context.push(hwnd);
     }));
     result.is_ok().into()
 }
@@ -1718,6 +1725,7 @@ fn create_switch_task(
     current_process_id: u32,
     current_monitor: Option<HMONITOR>,
     index: usize,
+    icons: &mut TaskIcons,
 ) -> Option<SwitchTask> {
     let title = window_title(hwnd);
     let class_name = window_class_name(hwnd);
@@ -1768,11 +1776,17 @@ fn create_switch_task(
         return None;
     }
 
-    let (process_name, process_identity) = process_details(process_id);
+    let (executable, process_identity) = process_details(process_id);
+    let process_name = Path::new(&executable)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let icon_executable =
+        hosted_app_executable(hwnd, &class_name).unwrap_or_else(|| executable.clone());
     Some(
-        SwitchTask::new(index + 1, hwnd.0 as isize, &title, &process_name)
+        SwitchTask::new(index + 1, hwnd.0 as isize, &title, process_name)
             .with_process_identity(process_identity)
-            .with_icon_handle(window_icon(hwnd)),
+            .with_icon_handle(icons.resolve(hwnd, &icon_executable)),
     )
 }
 
@@ -1788,37 +1802,35 @@ fn excludes_current_process_window(
         )
 }
 
-fn window_icon(hwnd: HWND) -> isize {
-    for size in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
-        let mut icon = 0_usize;
-        let sent = unsafe {
-            // SAFETY: hwnd is supplied by EnumWindows and icon is writable for the bounded,
-            // abort-if-hung synchronous query.
-            SendMessageTimeoutW(
-                hwnd,
-                WM_GETICON,
-                WPARAM(size as usize),
-                LPARAM(0),
-                SMTO_BLOCK | SMTO_ABORTIFHUNG,
-                75,
-                Some(&raw mut icon),
-            )
-        };
-        if sent.0 != 0 && icon != 0 {
-            return isize::try_from(icon).unwrap_or_default();
+fn hosted_app_executable(hwnd: HWND, class_name: &str) -> Option<String> {
+    if class_name != "ApplicationFrameWindow" {
+        return None;
+    }
+    let mut children = Vec::<HWND>::new();
+    unsafe {
+        // SAFETY: children is exclusively borrowed for synchronous callbacks. EnumChildWindows'
+        // return value is documented as unused; the callback only collects borrowed handles.
+        let _unused = EnumChildWindows(
+            Some(hwnd),
+            Some(enum_window),
+            LPARAM((&raw mut children).cast::<c_void>() as isize),
+        );
+    }
+    for child in children {
+        if window_class_name(child) != "Windows.UI.Core.CoreWindow" {
+            continue;
+        }
+        let mut process_id = 0;
+        unsafe {
+            // SAFETY: child is borrowed; process_id is writable for this synchronous query.
+            GetWindowThreadProcessId(child, Some(&raw mut process_id));
+        }
+        let (path, _) = process_details(process_id);
+        if !path.is_empty() {
+            return Some(path);
         }
     }
-    for class_index in [GCLP_HICON, GCLP_HICONSM] {
-        let icon = unsafe {
-            // SAFETY: hwnd is supplied by EnumWindows and class icon handles remain owned by the
-            // registered window class.
-            GetClassLongPtrW(hwnd, class_index)
-        };
-        if icon != 0 {
-            return isize::try_from(icon).unwrap_or_default();
-        }
-    }
-    0
+    None
 }
 
 fn window_title(hwnd: HWND) -> String {
@@ -1880,12 +1892,7 @@ fn process_details(process_id: u32) -> (String, ProcessIdentity) {
     }
     let length = usize::try_from(length).unwrap_or_default();
     let path = String::from_utf16_lossy(buffer.get(..length).unwrap_or_default());
-    let name = Path::new(&path)
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_owned();
-    (name, ProcessIdentity::new(process_id, started_at))
+    (path, ProcessIdentity::new(process_id, started_at))
 }
 
 fn process_started_at(process: HANDLE) -> Option<u64> {
@@ -2341,6 +2348,103 @@ fn null_terminated(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_frame_uses_core_window_executable() -> Result<()> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            UnregisterClassW, WINDOW_EX_STYLE, WS_CHILD,
+        };
+
+        struct TestClass(HINSTANCE);
+        impl Drop for TestClass {
+            fn drop(&mut self) {
+                // SAFETY: all windows of this test-owned class have been dropped first.
+                if let Err(error) =
+                    unsafe { UnregisterClassW(w!("Windows.UI.Core.CoreWindow"), Some(self.0)) }
+                {
+                    eprintln!("Could not unregister the test class: {error}");
+                }
+            }
+        }
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                // SAFETY: the test owns this window on the current thread.
+                if let Err(error) = unsafe { DestroyWindow(self.0) } {
+                    eprintln!("Could not destroy the test window: {error}");
+                }
+            }
+        }
+
+        unsafe extern "system" fn test_proc(
+            hwnd: HWND,
+            message: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> LRESULT {
+            catch_unwind(|| {
+                // SAFETY: Windows supplies this procedure's arguments; no Rust window state exists.
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            })
+            .unwrap_or_default()
+        }
+        let instance = module_instance()?;
+        let class = WNDCLASSEXW {
+            cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).unwrap_or_default(),
+            lpfnWndProc: Some(test_proc),
+            hInstance: instance,
+            lpszClassName: w!("Windows.UI.Core.CoreWindow"),
+            ..Default::default()
+        };
+        // SAFETY: the callback contains panics and forwards to Windows; the class name is static.
+        if unsafe { RegisterClassExW(&raw const class) } == 0 {
+            return Err(Error::from_thread());
+        }
+        let _class = TestClass(instance);
+        // SAFETY: this thread owns both hidden windows; their guards destroy child before parent.
+        let parent = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Frame test"),
+                WS_POPUP,
+                0,
+                0,
+                10,
+                10,
+                None,
+                None,
+                Some(instance),
+                None,
+            )?
+        });
+        assert!(hosted_app_executable(parent.0, "ApplicationFrameWindow").is_none());
+        // SAFETY: parent is live; the child class is registered above and remains live until drop.
+        let _child = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                class.lpszClassName,
+                w!("App test"),
+                WS_CHILD,
+                0,
+                0,
+                10,
+                10,
+                Some(parent.0),
+                None,
+                Some(instance),
+                None,
+            )?
+        });
+        let (executable, _) = process_details(std::process::id());
+        assert!(!executable.is_empty());
+        assert_eq!(
+            hosted_app_executable(parent.0, "ApplicationFrameWindow"),
+            Some(executable)
+        );
+        assert!(hosted_app_executable(parent.0, "OtherWindowClass").is_none());
+        Ok(())
+    }
 
     #[test]
     fn external_close_skips_follow_up_when_the_hwnd_is_already_gone() {
