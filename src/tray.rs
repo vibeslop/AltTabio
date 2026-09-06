@@ -77,9 +77,9 @@ impl TrayIcon {
             // null-terminated UTF-16 strings. A zero-id separator cannot emit an application
             // command.
             AppendMenuW(menu, MF_STRING, SHOW_COMMAND, w!("Show")).and_then(|()| {
-                AppendMenuW(menu, MF_STRING, SETTINGS_COMMAND, w!("Settings..."))
+                AppendMenuW(menu, MF_STRING, SETTINGS_COMMAND, w!("Settings"))
                     .and_then(|()| {
-                        AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio..."))
+                        AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio"))
                     })
                     .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
                     .and_then(|()| AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("Exit")))
