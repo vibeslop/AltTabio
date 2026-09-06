@@ -17,7 +17,39 @@ pub const LISTED_REFRESH_RETRY_TIMER_ID: usize = 2;
 pub const LISTED_REFRESH_RETRY_DELAY_MS: u32 = 50;
 
 static WIN_EVENT_NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);
-static FOREGROUND_CHECK_QUEUED: AtomicBool = AtomicBool::new(false);
+static FOREGROUND_CHECK: ForegroundCheckSignal = ForegroundCheckSignal::new();
+
+struct ForegroundCheckSignal {
+    queued: AtomicBool,
+    dirty: AtomicBool,
+}
+
+impl ForegroundCheckSignal {
+    const fn new() -> Self {
+        Self {
+            queued: AtomicBool::new(false),
+            dirty: AtomicBool::new(false),
+        }
+    }
+
+    fn request(&self) -> bool {
+        self.dirty.store(true, Ordering::Release);
+        !self.queued.swap(true, Ordering::AcqRel)
+    }
+
+    fn acknowledge(&self) {
+        self.dirty.store(false, Ordering::Release);
+        self.queued.store(false, Ordering::Release);
+    }
+
+    fn dropped(&self) {
+        self.queued.store(false, Ordering::Release);
+    }
+
+    fn needs_retry(&self) -> bool {
+        self.dirty.load(Ordering::Acquire) && !self.queued.load(Ordering::Acquire)
+    }
+}
 static LISTED_REFRESH_SIGNAL: ListedRefreshSignal = ListedRefreshSignal::new();
 
 pub struct WinEventWatcher {
@@ -84,7 +116,7 @@ pub fn publish_notify_hwnd(hwnd: HWND) {
 
 pub fn clear_notify_hwnd() {
     WIN_EVENT_NOTIFY_HWND.store(0, Ordering::Release);
-    FOREGROUND_CHECK_QUEUED.store(false, Ordering::Release);
+    FOREGROUND_CHECK.acknowledge();
     let _ = take_listed_refresh_notices();
 }
 
@@ -106,8 +138,16 @@ pub const fn is_listed_refresh_wakeup(message: u32, wparam: WPARAM) -> bool {
         || (message == WM_TIMER && wparam.0 == LISTED_REFRESH_RETRY_TIMER_ID)
 }
 
+pub fn foreground_check_message_dropped() {
+    FOREGROUND_CHECK.dropped();
+}
+
+pub fn foreground_check_needs_retry() -> bool {
+    FOREGROUND_CHECK.needs_retry()
+}
+
 pub fn acknowledge_foreground_check() {
-    FOREGROUND_CHECK_QUEUED.store(false, Ordering::Release);
+    FOREGROUND_CHECK.acknowledge();
 }
 
 fn unhook_win_event(hook: HWINEVENTHOOK) {
@@ -170,7 +210,7 @@ fn request_foreground_check() {
     if target == 0 {
         return;
     }
-    if FOREGROUND_CHECK_QUEUED.swap(true, Ordering::AcqRel) {
+    if !FOREGROUND_CHECK.request() {
         return;
     }
     let hwnd = HWND(target as *mut c_void);
@@ -178,7 +218,7 @@ fn request_foreground_check() {
         // SAFETY: `hwnd` is the overlay window published before the winevent hook is installed
         // and cleared before shutdown unhooks it. PostMessageW copies the integer payloads.
         if PostMessageW(Some(hwnd), WM_FOREGROUND_CHECK, WPARAM(0), LPARAM(0)).is_err() {
-            FOREGROUND_CHECK_QUEUED.store(false, Ordering::Release);
+            FOREGROUND_CHECK.dropped();
         }
     }
 }
@@ -210,6 +250,30 @@ fn post_listed_refresh() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_foreground_message_is_retried_without_losing_future_events() {
+        let signal = ForegroundCheckSignal::new();
+        assert!(signal.request());
+        assert!(!signal.request());
+        assert!(!signal.needs_retry());
+        signal.dropped();
+        assert!(signal.needs_retry());
+        signal.acknowledge();
+        assert!(!signal.needs_retry());
+        assert!(signal.request());
+    }
+
+    #[test]
+    fn new_foreground_event_can_requeue_after_a_failed_post() {
+        let signal = ForegroundCheckSignal::new();
+        assert!(signal.request());
+        signal.dropped();
+        assert!(signal.request());
+        assert!(!signal.needs_retry());
+        signal.acknowledge();
+        assert!(signal.request());
+    }
     use windows::Win32::UI::WindowsAndMessaging::{
         EVENT_OBJECT_SHOW, OBJID_CARET, OBJID_CLIENT, OBJID_CURSOR,
     };

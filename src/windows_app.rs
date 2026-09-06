@@ -1,12 +1,15 @@
 use crate::about_dialog;
 use crate::hook::{HookThread, WM_HOOK_ACTION, decode_action, decode_virtual_key};
+use crate::native_theme::resolve_current_theme;
 use crate::preview::DwmPreview;
+use crate::process_info::ProcessInfo;
 use crate::renderer::{CloseButtonVisualState, RenderOptions, Renderer, TaskListHit};
 use crate::settings_dialog;
 use crate::settings_io::SettingsStore;
 use crate::single_instance::SingleInstance;
 use crate::startup;
 use crate::task_icon::TaskIcons;
+use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows, window_class_name};
 use crate::tray::{TrayAction, TrayIcon, WM_TRAY_CALLBACK};
 use crate::win_events::{
     self, LISTED_REFRESH_RETRY_DELAY_MS, LISTED_REFRESH_RETRY_TIMER_ID, WM_FOREGROUND_CHECK,
@@ -19,58 +22,50 @@ use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
 };
 use alttabio::passthrough::{PassthroughPolicy, is_remote_desktop_client, window_fills_monitor};
-use alttabio::settings::{Settings, Theme};
+use alttabio::settings::Settings;
 use alttabio::switcher::{
-    ProcessIdentity, SwitchTask, Switcher, SwitcherEffect, SwitcherSession,
-    SwitcherSessionSettings, WindowCommandRequest, WindowEligibility, is_switchable_window,
+    Switcher, SwitcherEffect, SwitcherSession, SwitcherSessionSettings, WindowCommandRequest,
 };
 use alttabio::task_refresh::{
-    ContextMenuCommandOutcome, RefreshDecision, TaskListRefresh, apply_listed_refresh_batch,
+    ContextMenuCommandOutcome, RefreshDecision, RetryTimer, TaskListRefresh,
+    apply_listed_refresh_batch,
 };
-use alttabio::theme::{ResolvedTheme, Rgb8, resolve};
+use alttabio::theme::{ResolvedTheme, Rgb8};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
-use windows::Win32::Foundation::{
-    CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
-};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_BORDER_COLOR, DWMWA_CLOAKED, DWMWA_COLOR_NONE, DWMWA_USE_IMMERSIVE_DARK_MODE,
-    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmGetWindowAttribute, DwmSetWindowAttribute,
+    DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetMonitorInfoW, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromPoint, MonitorFromRect, MonitorFromWindow, PAINTSTRUCT,
+    BeginPaint, EndPaint, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromPoint, MonitorFromRect, MonitorFromWindow, PAINTSTRUCT,
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-use windows::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-};
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetActiveWindow, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
     TrackMouseEvent, VK_BACK, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EnumChildWindows, EnumWindows, GW_OWNER,
-    GWL_EXSTYLE, GWLP_USERDATA, GetClassNameW, GetCursorPos, GetForegroundWindow,
-    GetLastActivePopup, GetMessageW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IDC_ARROW, IsIconic,
-    IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    ShowWindowAsync, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
-    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos,
+    GetForegroundWindow, GetLastActivePopup, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed, KillTimer,
+    LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
+    TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
 };
-use windows::core::{BOOL, Error, PCWSTR, PWSTR, Result, w};
+use windows::core::{Error, PCWSTR, Result, w};
 
 const WINDOW_CLASS: PCWSTR = w!("AltTabioRustOverlay");
 const WINDOW_TITLE: PCWSTR = w!("AltTabio");
@@ -348,6 +343,7 @@ impl AppHost {
             return;
         };
         app.settings_dialog_open = false;
+        app.sync_hook_interception();
         match result {
             Ok(Some(settings)) => app.apply_settings(settings, previous_autostart),
             Ok(None) => {}
@@ -371,6 +367,7 @@ impl AppHost {
             return;
         };
         app.about_dialog_open = false;
+        app.sync_hook_interception();
         if let Err(error) = result {
             app.show_error(&error);
         }
@@ -566,6 +563,11 @@ impl App {
         match message {
             WM_HOOK_ACTION => {
                 if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
+                    && !self.session.context_menu_open()
+                    && self
+                        .hooks
+                        .as_ref()
+                        .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
                     self.handle_input_action(action);
@@ -600,11 +602,13 @@ impl App {
         let message = u32::try_from(lparam.0).unwrap_or_default();
         let action = match message {
             WM_LBUTTONUP | WM_LBUTTONDBLCLK => TrayAction::Show,
-            WM_RBUTTONUP => self
-                .tray
-                .as_ref()
-                .map(TrayIcon::show_menu)
-                .unwrap_or_default(),
+            WM_RBUTTONUP => {
+                let _suspension = self.hooks.as_ref().map(HookThread::suspend_interception);
+                self.tray
+                    .as_ref()
+                    .map(TrayIcon::show_menu)
+                    .unwrap_or_default()
+            }
             _ => TrayAction::None,
         };
         match action {
@@ -652,6 +656,7 @@ impl App {
         }
         self.hide_overlay();
         self.settings_dialog_open = true;
+        self.sync_hook_interception();
         Some((self.hwnd, self.settings.clone()))
     }
 
@@ -661,6 +666,7 @@ impl App {
         }
         self.hide_overlay();
         self.about_dialog_open = true;
+        self.sync_hook_interception();
         Some((self.resolved_theme, self.settings.appearance.icon))
     }
 
@@ -811,6 +817,7 @@ impl App {
     }
 
     fn show_error(&self, message: &str) {
+        let _suspension = self.hooks.as_ref().map(HookThread::suspend_interception);
         show_error_for_window(self.hwnd, message);
     }
 
@@ -879,10 +886,7 @@ impl App {
         }
     }
 
-    fn schedule_close_refresh(&mut self, window_handle: isize) {
-        if !self.task_refresh.close_tracker_mut().track(window_handle) {
-            return;
-        }
+    fn start_close_refresh_timer(&mut self) {
         let timer_id = unsafe {
             // SAFETY: the live overlay HWND owns this timer and no callback pointer is retained.
             SetTimer(
@@ -893,7 +897,7 @@ impl App {
             )
         };
         if timer_id == 0 {
-            self.task_refresh.close_tracker_mut().clear();
+            self.task_refresh.cancel_retries();
             eprintln!(
                 "Could not schedule a follow-up refresh after closing a window: {}",
                 Error::from_thread()
@@ -915,7 +919,7 @@ impl App {
         if self.session.context_menu_open() {
             return;
         }
-        if !self.task_refresh.close_tracker().has_pending() {
+        if !self.task_refresh.has_pending_retries() {
             self.stop_close_refresh_timer();
             return;
         }
@@ -962,6 +966,9 @@ impl App {
     }
 
     fn handle_listed_refresh_retry_timer(&mut self) {
+        if win_events::foreground_check_needs_retry() {
+            self.handle_foreground_check();
+        }
         let Some(batch) = win_events::take_listed_refresh_retry() else {
             return;
         };
@@ -987,7 +994,7 @@ impl App {
             self.session.context_menu_open(),
         ) {
             RefreshDecision::Ignore => {
-                let _discarded = self.task_refresh.take_pending_handles();
+                self.task_refresh.clear_notices();
             }
             RefreshDecision::Defer => {}
             RefreshDecision::Refresh => self.refresh_switcher_tasks(),
@@ -995,31 +1002,22 @@ impl App {
     }
 
     fn refresh_switcher_tasks(&mut self) {
-        let affected = self.task_refresh.take_pending_handles();
-        let had_pending_retries = self.task_refresh.close_tracker().has_pending();
-        match enumerate_switchable_windows(&self.settings) {
+        let timer = match enumerate_switchable_windows(&self.settings) {
             Ok(EnumeratedTasks { tasks, icons }) => {
-                self.task_refresh.close_tracker_mut().reconcile(&tasks);
-                for window_handle in affected {
-                    if close_refresh_target_if_still_listed(window_handle, &tasks).is_some() {
-                        self.schedule_close_refresh(window_handle);
-                    }
-                }
+                let timer = self.task_refresh.complete_enumeration(Ok(&tasks));
                 self.session.refresh_tasks(tasks);
                 self.task_icons = icons;
+                timer
             }
             Err(error) => {
                 eprintln!("Could not refresh windows: {error}");
-                for window_handle in affected {
-                    self.schedule_close_refresh(window_handle);
-                }
-                self.task_refresh
-                    .close_tracker_mut()
-                    .advance_after_enumeration_error();
+                self.task_refresh.complete_enumeration(Err(()))
             }
-        }
-        if had_pending_retries && !self.task_refresh.close_tracker().has_pending() {
-            self.stop_close_refresh_timer();
+        };
+        match timer {
+            RetryTimer::Start => self.start_close_refresh_timer(),
+            RetryTimer::Stop => self.stop_close_refresh_timer(),
+            RetryTimer::Keep => {}
         }
         self.sync_overlay_after_task_refresh();
     }
@@ -1140,6 +1138,13 @@ impl App {
     }
 
     fn prepare_task_context_menu(&mut self, lparam: LPARAM) -> Option<HWND> {
+        if !self.is_visible()
+            || self.settings_dialog_open
+            || self.about_dialog_open
+            || self.session.context_menu_open()
+        {
+            return None;
+        }
         let hit = self.hit_test(lparam)?;
         let position = hit.position();
         if !self
@@ -1150,22 +1155,21 @@ impl App {
             return None;
         }
         self.request_redraw();
-        self.session.set_context_menu_open(true);
+        if !self.session.open_context_menu() {
+            return None;
+        }
+        self.sync_hook_interception();
         Some(self.hwnd)
     }
 
     fn finish_task_context_menu(&mut self, command: Option<WindowCommand>) {
-        self.session.set_context_menu_open(false);
+        let effect = self.session.finish_context_menu(command);
+        self.sync_hook_interception();
         self.ingest_listed_refresh_signal();
-        let outcome = command.map_or(ContextMenuCommandOutcome::None, |command| {
-            match self
-                .session
-                .handle_input(InputAction::WindowCommand(command))
-            {
-                SwitcherEffect::Execute(request) => self.execute_window_command(request),
-                _ => ContextMenuCommandOutcome::Rejected,
-            }
-        });
+        let outcome = match effect {
+            SwitcherEffect::Execute(request) => self.execute_window_command(request),
+            _ => ContextMenuCommandOutcome::None,
+        };
         self.task_refresh.apply_command_outcome(outcome);
         self.run_pending_task_refresh();
     }
@@ -1371,6 +1375,22 @@ impl App {
         self.session.search_active()
     }
 
+    fn sync_hook_interception(&self) {
+        let Some(hooks) = self.hooks.as_ref() else {
+            return;
+        };
+        let suspended =
+            self.settings_dialog_open || self.about_dialog_open || self.session.context_menu_open();
+        if suspended {
+            hooks.set_interception_suspended(true);
+        }
+        hooks.set_search_active(!suspended && self.session.search_active());
+        hooks.set_overlay_active(!suspended && self.session.is_visible());
+        if !suspended {
+            hooks.set_interception_suspended(false);
+        }
+    }
+
     fn set_hook_search_active(&self, overlay_visible: bool) {
         if let Some(hooks) = &self.hooks {
             hooks.set_search_active(overlay_visible && self.settings.general.typed_search);
@@ -1481,6 +1501,10 @@ unsafe extern "system" fn window_proc(
         }
         let Ok(mut app) = host.state.try_borrow_mut() else {
             return match busy_overlay_message_action(message, wparam) {
+                BusyOverlayMessage::RetryForegroundCheck => {
+                    win_events::foreground_check_message_dropped();
+                    Some(LRESULT(0))
+                }
                 BusyOverlayMessage::AcknowledgeDroppedRefresh => {
                     win_events::listed_refresh_message_dropped();
                     Some(LRESULT(0))
@@ -1502,13 +1526,16 @@ const fn is_modal_dialog_message(message: u32) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BusyOverlayMessage {
+    RetryForegroundCheck,
     AcknowledgeDroppedRefresh,
     IgnoreRetryTick,
     DeferToDefault,
 }
 
 const fn busy_overlay_message_action(message: u32, wparam: WPARAM) -> BusyOverlayMessage {
-    if message == WM_LISTED_WINDOW_REFRESH {
+    if message == WM_FOREGROUND_CHECK {
+        BusyOverlayMessage::RetryForegroundCheck
+    } else if message == WM_LISTED_WINDOW_REFRESH {
         BusyOverlayMessage::AcknowledgeDroppedRefresh
     } else if is_listed_refresh_wakeup(message, wparam) {
         BusyOverlayMessage::IgnoreRetryTick
@@ -1548,9 +1575,10 @@ fn foreground_passthrough_policy(overlay: HWND) -> PassthroughPolicy {
         // SAFETY: process_id is writable and hwnd is the live foreground window.
         GetWindowThreadProcessId(hwnd, Some(&raw mut process_id));
     }
-    let (executable_stem, _) = process_details(process_id);
+    let process =
+        ProcessInfo::query(process_id).unwrap_or_else(|_| ProcessInfo::unavailable(process_id));
     PassthroughPolicy::from_foreground(
-        is_remote_desktop_client(&class_name, &executable_stem),
+        is_remote_desktop_client(&class_name, process.executable_stem()),
         is_maximized_or_fullscreen(hwnd),
     )
 }
@@ -1659,289 +1687,6 @@ fn run_message_loop() -> Result<()> {
     }
 }
 
-struct EnumeratedTasks {
-    tasks: Vec<SwitchTask>,
-    icons: TaskIcons,
-}
-
-fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTasks> {
-    let current_monitor = if settings.monitor.use_current_monitor_filter {
-        let mut cursor = POINT::default();
-        unsafe {
-            // SAFETY: cursor is writable for the synchronous call.
-            GetCursorPos(&raw mut cursor)?;
-        }
-        Some(unsafe {
-            // SAFETY: cursor was initialized above and nearest-monitor fallback guarantees a result.
-            MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
-        })
-    } else {
-        None
-    };
-    let mut handles = Vec::<HWND>::new();
-    unsafe {
-        // SAFETY: EnumWindows is synchronous, so `handles` remains exclusively borrowed and live
-        // for every invocation of enum_window.
-        EnumWindows(
-            Some(enum_window),
-            LPARAM((&raw mut handles).cast::<c_void>() as isize),
-        )?;
-    }
-    let mut result = EnumeratedTasks {
-        tasks: Vec::new(),
-        icons: TaskIcons::default(),
-    };
-    for hwnd in handles {
-        if let Some(task) = create_switch_task(
-            hwnd,
-            std::process::id(),
-            current_monitor,
-            result.tasks.len(),
-            &mut result.icons,
-        ) {
-            result.tasks.push(task);
-        }
-    }
-    Ok(result)
-}
-
-unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let context = unsafe {
-        // SAFETY: the caller passes an exclusive live Vec<HWND> for synchronous enumeration.
-        (lparam.0 as *mut Vec<HWND>).as_mut()
-    };
-    let Some(context) = context else {
-        return false.into();
-    };
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        context.push(hwnd);
-    }));
-    result.is_ok().into()
-}
-
-fn create_switch_task(
-    hwnd: HWND,
-    current_process_id: u32,
-    current_monitor: Option<HMONITOR>,
-    index: usize,
-    icons: &mut TaskIcons,
-) -> Option<SwitchTask> {
-    let title = window_title(hwnd);
-    let class_name = window_class_name(hwnd);
-    let mut process_id = 0;
-    unsafe {
-        // SAFETY: `process_id` is writable and HWND is supplied by EnumWindows.
-        GetWindowThreadProcessId(hwnd, Some(&raw mut process_id));
-    }
-    let extended_style = unsafe {
-        // SAFETY: HWND is supplied by EnumWindows and GWL_EXSTYLE requests a scalar style value.
-        GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
-    };
-    let shell = unsafe {
-        // SAFETY: GetShellWindow has no preconditions and returns a borrowed HWND.
-        GetShellWindow()
-    };
-    let has_owner = unsafe {
-        // SAFETY: HWND is supplied by EnumWindows; a missing owner is represented as an error/null.
-        GetWindow(hwnd, GW_OWNER).is_ok()
-    };
-    let matches_monitor_filter = current_monitor.is_none_or(|current_monitor| {
-        (unsafe {
-            // SAFETY: HWND is supplied by EnumWindows and nearest-monitor fallback is requested.
-            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
-        }) == current_monitor
-    });
-    let eligibility = WindowEligibility {
-        title: &title,
-        class_name: &class_name,
-        is_visible: unsafe {
-            // SAFETY: HWND is supplied by EnumWindows.
-            IsWindowVisible(hwnd).as_bool()
-        },
-        is_current_process: excludes_current_process_window(
-            process_id,
-            current_process_id,
-            &class_name,
-        ) || hwnd == shell,
-        is_cloaked: is_cloaked(hwnd),
-        is_tool_window: (extended_style & isize::try_from(WS_EX_TOOLWINDOW.0).unwrap_or_default())
-            != 0,
-        has_owner,
-        is_app_window: (extended_style & isize::try_from(WS_EX_APPWINDOW.0).unwrap_or_default())
-            != 0,
-        matches_monitor_filter,
-    };
-    if !is_switchable_window(&eligibility) {
-        return None;
-    }
-
-    let (executable, process_identity) = process_details(process_id);
-    let process_name = Path::new(&executable)
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    let icon_executable =
-        hosted_app_executable(hwnd, &class_name).unwrap_or_else(|| executable.clone());
-    Some(
-        SwitchTask::new(index + 1, hwnd.0 as isize, &title, process_name)
-            .with_process_identity(process_identity)
-            .with_icon_handle(icons.resolve(hwnd, &icon_executable)),
-    )
-}
-
-fn excludes_current_process_window(
-    process_id: u32,
-    current_process_id: u32,
-    class_name: &str,
-) -> bool {
-    process_id == current_process_id
-        && !matches!(
-            class_name,
-            about_dialog::WINDOW_CLASS_NAME | settings_dialog::WINDOW_CLASS_NAME
-        )
-}
-
-fn hosted_app_executable(hwnd: HWND, class_name: &str) -> Option<String> {
-    if class_name != "ApplicationFrameWindow" {
-        return None;
-    }
-    let mut children = Vec::<HWND>::new();
-    unsafe {
-        // SAFETY: children is exclusively borrowed for synchronous callbacks. EnumChildWindows'
-        // return value is documented as unused; the callback only collects borrowed handles.
-        let _unused = EnumChildWindows(
-            Some(hwnd),
-            Some(enum_window),
-            LPARAM((&raw mut children).cast::<c_void>() as isize),
-        );
-    }
-    for child in children {
-        if window_class_name(child) != "Windows.UI.Core.CoreWindow" {
-            continue;
-        }
-        let mut process_id = 0;
-        unsafe {
-            // SAFETY: child is borrowed; process_id is writable for this synchronous query.
-            GetWindowThreadProcessId(child, Some(&raw mut process_id));
-        }
-        let (path, _) = process_details(process_id);
-        if !path.is_empty() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn window_title(hwnd: HWND) -> String {
-    let length = unsafe {
-        // SAFETY: HWND is supplied by EnumWindows.
-        GetWindowTextLengthW(hwnd)
-    };
-    if length <= 0 {
-        return String::new();
-    }
-    let capacity = usize::try_from(length)
-        .unwrap_or_default()
-        .saturating_add(1);
-    let mut buffer = vec![0_u16; capacity];
-    let written = unsafe {
-        // SAFETY: `buffer` is writable and HWND is supplied by EnumWindows.
-        GetWindowTextW(hwnd, &mut buffer)
-    };
-    utf16_prefix(&buffer, written)
-}
-
-fn window_class_name(hwnd: HWND) -> String {
-    let mut buffer = [0_u16; 256];
-    let written = unsafe {
-        // SAFETY: `buffer` is writable and HWND is supplied by EnumWindows.
-        GetClassNameW(hwnd, &mut buffer)
-    };
-    utf16_prefix(&buffer, written)
-}
-
-fn utf16_prefix(buffer: &[u16], written: i32) -> String {
-    let length = usize::try_from(written).unwrap_or_default();
-    String::from_utf16_lossy(buffer.get(..length).unwrap_or_default())
-}
-
-fn process_details(process_id: u32) -> (String, ProcessIdentity) {
-    let handle = match unsafe {
-        // SAFETY: OpenProcess is called with query-only access for the process id from EnumWindows.
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)
-    } {
-        Ok(handle) => OwnedHandle(handle),
-        Err(_) => return (String::new(), ProcessIdentity::new(process_id, 0)),
-    };
-    let started_at = process_started_at(handle.0).unwrap_or_default();
-    let mut buffer = vec![0_u16; 32_768];
-    let mut length = u32::try_from(buffer.len()).unwrap_or_default();
-    let result = unsafe {
-        // SAFETY: the handle is live and query-only; the UTF-16 buffer and length are writable for
-        // the synchronous call.
-        QueryFullProcessImageNameW(
-            handle.0,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &raw mut length,
-        )
-    };
-    if result.is_err() {
-        return (String::new(), ProcessIdentity::new(process_id, started_at));
-    }
-    let length = usize::try_from(length).unwrap_or_default();
-    let path = String::from_utf16_lossy(buffer.get(..length).unwrap_or_default());
-    (path, ProcessIdentity::new(process_id, started_at))
-}
-
-fn process_started_at(process: HANDLE) -> Option<u64> {
-    let mut creation = windows::Win32::Foundation::FILETIME::default();
-    let mut exit = windows::Win32::Foundation::FILETIME::default();
-    let mut kernel = windows::Win32::Foundation::FILETIME::default();
-    let mut user = windows::Win32::Foundation::FILETIME::default();
-    unsafe {
-        // SAFETY: process is live and queryable; all four FILETIME outputs are writable.
-        GetProcessTimes(
-            process,
-            &raw mut creation,
-            &raw mut exit,
-            &raw mut kernel,
-            &raw mut user,
-        )
-    }
-    .ok()?;
-    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
-}
-
-struct OwnedHandle(HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        let result = unsafe {
-            // SAFETY: this guard uniquely owns the process HANDLE and closes it exactly once.
-            CloseHandle(self.0)
-        };
-        if let Err(error) = result {
-            eprintln!("Could not close a process handle: {error}");
-        }
-    }
-}
-
-fn is_cloaked(hwnd: HWND) -> bool {
-    let mut cloaked = 0_u32;
-    let result = unsafe {
-        // SAFETY: `cloaked` is writable for its exact byte size and HWND is supplied by EnumWindows.
-        DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAKED,
-            (&raw mut cloaked).cast(),
-            u32::try_from(size_of::<u32>()).unwrap_or_default(),
-        )
-    };
-    result.is_ok() && cloaked != 0
-}
-
 fn position_on_cursor_monitor(hwnd: HWND) -> Result<()> {
     let mut cursor = POINT::default();
     unsafe {
@@ -2026,42 +1771,12 @@ const fn overlay_bounds(work_area: RECT) -> RECT {
     }
 }
 
-fn resolve_current_theme(theme: Theme) -> ResolvedTheme {
-    if theme != Theme::Auto {
-        return resolve(theme, ResolvedTheme::Light);
+fn key_is_down(virtual_key: u16) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
+    unsafe {
+        // SAFETY: GetKeyState accepts any virtual-key code and has no pointer preconditions.
+        GetKeyState(i32::from(virtual_key)) < 0
     }
-    let windows_theme = match read_windows_app_theme() {
-        Ok(theme) => theme,
-        Err(error) => {
-            eprintln!("Could not read the Windows app theme; using Light: {error}");
-            ResolvedTheme::Light
-        }
-    };
-    resolve(theme, windows_theme)
-}
-
-fn read_windows_app_theme() -> Result<ResolvedTheme> {
-    let mut apps_use_light_theme = 1_u32;
-    let mut value_size = u32::try_from(size_of::<u32>()).unwrap_or_default();
-    let status = unsafe {
-        // SAFETY: the predefined current-user key is borrowed, both strings are static and
-        // null-terminated, and the DWORD buffer and byte count remain writable for the call.
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            w!("AppsUseLightTheme"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut apps_use_light_theme).cast()),
-            Some(&raw mut value_size),
-        )
-    };
-    status.ok()?;
-    Ok(if apps_use_light_theme == 0 {
-        ResolvedTheme::Dark
-    } else {
-        ResolvedTheme::Light
-    })
 }
 
 fn apply_window_appearance(hwnd: HWND, visible_borders: bool, theme: ResolvedTheme) -> Result<()> {
@@ -2130,58 +1845,93 @@ fn activate_window(owner: HWND) -> bool {
         }
     }
 
+    // Hook input is delivered to our UI thread as an application message. That alone does
+    // not grant foreground permission, especially when the overlay could not take focus.
+    // Keep the temporary input-queue sharing used by ordinary switching before 5e9be7e.
     let current_thread = unsafe {
-        // SAFETY: GetCurrentThreadId has no preconditions.
+        // SAFETY: this query has no preconditions.
         GetCurrentThreadId()
     };
     let foreground = unsafe {
-        // SAFETY: GetForegroundWindow has no preconditions and returns a borrowed HWND.
+        // SAFETY: this query has no preconditions and returns a borrowed HWND.
         GetForegroundWindow()
     };
     let foreground_thread = unsafe {
-        // SAFETY: foreground is a borrowed HWND and no process-id output is requested.
+        // SAFETY: foreground is borrowed; an expired or null HWND returns zero.
         GetWindowThreadProcessId(foreground, None)
     };
     let target_thread = unsafe {
-        // SAFETY: target is a borrowed HWND and no process-id output is requested.
+        // SAFETY: target is borrowed; an expired HWND returns zero.
         GetWindowThreadProcessId(target, None)
     };
     let _foreground_attachment = ThreadInputAttachment::new(current_thread, foreground_thread);
-    let _target_attachment = ThreadInputAttachment::new(current_thread, target_thread);
+    // The foreground and selected window can belong to the same thread. Attach that pair once.
+    let _target_attachment = (target_thread != foreground_thread)
+        .then(|| ThreadInputAttachment::new(current_thread, target_thread))
+        .flatten();
 
-    // Leave keyboard focus to the target's activation handling so it can restore its prior child.
-    let mut foreground_set = false;
-    for action in activation_actions() {
-        match action {
-            ActivationAction::BringToTop => {
-                if let Err(error) = unsafe {
-                    // SAFETY: target is a borrowed top-level or owned-popup HWND.
-                    BringWindowToTop(target)
-                } {
-                    eprintln!("Could not bring the selected window to the top: {error}");
-                }
-            }
-            ActivationAction::SetForeground => {
-                foreground_set = unsafe {
-                    // SAFETY: target is a borrowed top-level or owned-popup HWND.
-                    SetForegroundWindow(target).as_bool()
-                };
-            }
-            ActivationAction::SetActive => {
-                if let Err(error) = unsafe {
-                    // SAFETY: input queues are attached for the duration of this activation attempt.
-                    SetActiveWindow(target)
-                } {
-                    eprintln!("Could not set the selected window active: {error}");
-                }
-            }
-        }
+    // Leave child keyboard focus to the target application's activation handling.
+    if let Err(error) = unsafe {
+        // SAFETY: target is a borrowed top-level or owned-popup HWND.
+        BringWindowToTop(target)
+    } {
+        eprintln!("Could not bring the selected window to the top: {error}");
     }
-    foreground_set
+    let activated = unsafe {
+        // SAFETY: target is borrowed; the attachment guards live through activation.
+        SetForegroundWindow(target).as_bool()
+    };
+    if let Err(error) = unsafe {
+        // SAFETY: target is borrowed; temporary input attachments remain in scope.
+        SetActiveWindow(target)
+    } {
+        eprintln!("Could not set the selected window active: {error}");
+    }
+    activated
         || unsafe {
-            // SAFETY: GetForegroundWindow has no preconditions and returns a borrowed HWND.
+            // SAFETY: GetForegroundWindow has no preconditions and returns a borrowed window.
             GetForegroundWindow()
         } == target
+}
+
+struct ThreadInputAttachment {
+    source: u32,
+    target: u32,
+}
+
+impl ThreadInputAttachment {
+    fn new(source: u32, target: u32) -> Option<Self> {
+        if source == 0 || target == 0 || source == target {
+            return None;
+        }
+        let attached = unsafe {
+            // SAFETY: these GUI thread ids were just queried; Windows rejects stale ids.
+            AttachThreadInput(source, target, true).as_bool()
+        };
+        if !attached {
+            eprintln!(
+                "Could not attach temporary window-activation input queues: {}",
+                Error::from_thread()
+            );
+            return None;
+        }
+        Some(Self { source, target })
+    }
+}
+
+impl Drop for ThreadInputAttachment {
+    fn drop(&mut self) {
+        let detached = unsafe {
+            // SAFETY: this guard balances exactly one successful attachment, on the UI thread.
+            AttachThreadInput(self.source, self.target, false).as_bool()
+        };
+        if !detached {
+            eprintln!(
+                "Could not detach temporary window-activation input queues: {}",
+                Error::from_thread()
+            );
+        }
+    }
 }
 
 fn activation_target(owner: HWND, popup: HWND, popup_is_visible: bool) -> HWND {
@@ -2189,67 +1939,6 @@ fn activation_target(owner: HWND, popup: HWND, popup_is_visible: bool) -> HWND {
         popup
     } else {
         owner
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ActivationAction {
-    BringToTop,
-    SetForeground,
-    SetActive,
-}
-
-const fn activation_actions() -> &'static [ActivationAction] {
-    &[
-        ActivationAction::BringToTop,
-        ActivationAction::SetForeground,
-        ActivationAction::SetActive,
-    ]
-}
-
-struct ThreadInputAttachment {
-    source: u32,
-    target: u32,
-    attached: bool,
-}
-
-impl ThreadInputAttachment {
-    fn new(source: u32, target: u32) -> Self {
-        let attached = source != 0
-            && target != 0
-            && source != target
-            && unsafe {
-                // SAFETY: both values are live GUI thread ids queried immediately before this call.
-                AttachThreadInput(source, target, true).as_bool()
-            };
-        Self {
-            source,
-            target,
-            attached,
-        }
-    }
-}
-
-impl Drop for ThreadInputAttachment {
-    fn drop(&mut self) {
-        if self.attached {
-            let detached = unsafe {
-                // SAFETY: this exactly balances the successful AttachThreadInput call owned by the
-                // guard and occurs on the same source thread.
-                AttachThreadInput(self.source, self.target, false).as_bool()
-            };
-            if !detached {
-                eprintln!("Could not detach temporary window-activation input queues");
-            }
-        }
-    }
-}
-
-fn key_is_down(virtual_key: u16) -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
-    unsafe {
-        // SAFETY: GetKeyState accepts any virtual-key code and has no pointer preconditions.
-        GetKeyState(i32::from(virtual_key)) < 0
     }
 }
 
@@ -2274,26 +1963,6 @@ const fn switcher_session_settings(settings: &Settings) -> SwitcherSessionSettin
 const fn key_was_previously_down(lparam: LPARAM) -> bool {
     let previous_key_state_mask = 1_isize << 30;
     lparam.0 & previous_key_state_mask != 0
-}
-
-fn close_refresh_target_if_still_listed(
-    window_handle: isize,
-    tasks: &[SwitchTask],
-) -> Option<isize> {
-    tasks
-        .iter()
-        .any(|task| task.window_handle == window_handle)
-        .then_some(window_handle)
-}
-
-#[cfg(test)]
-fn close_refresh_target_after_enumeration(
-    request: WindowCommandRequest,
-    tasks: &[SwitchTask],
-) -> Option<isize> {
-    (request.command == WindowCommand::Close)
-        .then(|| close_refresh_target_if_still_listed(request.window_handle, tasks))
-        .flatten()
 }
 
 fn mouse_coordinates(lparam: LPARAM) -> (i32, i32) {
@@ -2348,145 +2017,55 @@ fn null_terminated(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alttabio::switcher::SwitchTask;
 
     #[test]
-    fn hosted_frame_uses_core_window_executable() -> Result<()> {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            UnregisterClassW, WINDOW_EX_STYLE, WS_CHILD,
-        };
-
-        struct TestClass(HINSTANCE);
-        impl Drop for TestClass {
-            fn drop(&mut self) {
-                // SAFETY: all windows of this test-owned class have been dropped first.
-                if let Err(error) =
-                    unsafe { UnregisterClassW(w!("Windows.UI.Core.CoreWindow"), Some(self.0)) }
-                {
-                    eprintln!("Could not unregister the test class: {error}");
-                }
-            }
-        }
-        struct TestWindow(HWND);
-        impl Drop for TestWindow {
-            fn drop(&mut self) {
-                // SAFETY: the test owns this window on the current thread.
-                if let Err(error) = unsafe { DestroyWindow(self.0) } {
-                    eprintln!("Could not destroy the test window: {error}");
-                }
-            }
-        }
-
-        unsafe extern "system" fn test_proc(
-            hwnd: HWND,
-            message: u32,
-            wparam: WPARAM,
-            lparam: LPARAM,
-        ) -> LRESULT {
-            catch_unwind(|| {
-                // SAFETY: Windows supplies this procedure's arguments; no Rust window state exists.
-                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    #[ignore = "requires two responsive desktop windows; changes foreground focus"]
+    fn activation_switches_between_foreign_windows() {
+        let handles = std::env::var("ALTTABIO_TEST_ACTIVATION_WINDOWS")
+            .unwrap_or_else(|_| panic!("Set ALTTABIO_TEST_ACTIVATION_WINDOWS to two HWNDs"));
+        let handles: Vec<isize> = handles
+            .split(',')
+            .map(|value| {
+                value
+                    .trim()
+                    .parse()
+                    .unwrap_or_else(|_| panic!("Invalid HWND"))
             })
-            .unwrap_or_default()
+            .collect();
+        assert_eq!(handles.len(), 2);
+        assert_ne!(handles[0], handles[1]);
+        for handle in handles.iter().cycle().take(10) {
+            let window = HWND(*handle as *mut c_void);
+            let mut process = 0;
+            // SAFETY: the supplied HWND is borrowed and the process output is writable.
+            assert_ne!(
+                unsafe { GetWindowThreadProcessId(window, Some(&raw mut process)) },
+                0
+            );
+            assert_ne!(
+                process,
+                std::process::id(),
+                "Use windows from other processes"
+            );
+            assert!(
+                activate_window(window),
+                "Activation was rejected for {handle}"
+            );
+            // SetForegroundWindow may return before a foreign input queue processes activation.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            loop {
+                // SAFETY: this query has no preconditions and transfers no ownership.
+                if unsafe { GetForegroundWindow() } == window {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Window {handle} never became foreground"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         }
-        let instance = module_instance()?;
-        let class = WNDCLASSEXW {
-            cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).unwrap_or_default(),
-            lpfnWndProc: Some(test_proc),
-            hInstance: instance,
-            lpszClassName: w!("Windows.UI.Core.CoreWindow"),
-            ..Default::default()
-        };
-        // SAFETY: the callback contains panics and forwards to Windows; the class name is static.
-        if unsafe { RegisterClassExW(&raw const class) } == 0 {
-            return Err(Error::from_thread());
-        }
-        let _class = TestClass(instance);
-        // SAFETY: this thread owns both hidden windows; their guards destroy child before parent.
-        let parent = TestWindow(unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("STATIC"),
-                w!("Frame test"),
-                WS_POPUP,
-                0,
-                0,
-                10,
-                10,
-                None,
-                None,
-                Some(instance),
-                None,
-            )?
-        });
-        assert!(hosted_app_executable(parent.0, "ApplicationFrameWindow").is_none());
-        // SAFETY: parent is live; the child class is registered above and remains live until drop.
-        let _child = TestWindow(unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                class.lpszClassName,
-                w!("App test"),
-                WS_CHILD,
-                0,
-                0,
-                10,
-                10,
-                Some(parent.0),
-                None,
-                Some(instance),
-                None,
-            )?
-        });
-        let (executable, _) = process_details(std::process::id());
-        assert!(!executable.is_empty());
-        assert_eq!(
-            hosted_app_executable(parent.0, "ApplicationFrameWindow"),
-            Some(executable)
-        );
-        assert!(hosted_app_executable(parent.0, "OtherWindowClass").is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn external_close_skips_follow_up_when_the_hwnd_is_already_gone() {
-        let remaining = [SwitchTask::new(1, 10, "Browser", "browser")];
-
-        assert_eq!(close_refresh_target_if_still_listed(20, &remaining), None);
-        assert_eq!(
-            close_refresh_target_if_still_listed(
-                20,
-                &[
-                    SwitchTask::new(1, 10, "Browser", "browser"),
-                    SwitchTask::new(2, 20, "Closing", "editor"),
-                ]
-            ),
-            Some(20)
-        );
-    }
-
-    #[test]
-    fn own_visible_dialogs_are_not_excluded_from_switching() {
-        let current_process_id = 42;
-
-        assert!(!excludes_current_process_window(
-            current_process_id,
-            current_process_id,
-            about_dialog::WINDOW_CLASS_NAME,
-        ));
-        assert!(!excludes_current_process_window(
-            current_process_id,
-            current_process_id,
-            settings_dialog::WINDOW_CLASS_NAME,
-        ));
-        assert!(excludes_current_process_window(
-            current_process_id,
-            current_process_id,
-            "AltTabioRustOverlay",
-        ));
-        assert!(!excludes_current_process_window(
-            current_process_id + 1,
-            current_process_id,
-            "EditorWindow",
-        ));
     }
 
     #[test]
@@ -2498,6 +2077,10 @@ mod tests {
 
     #[test]
     fn listed_refresh_messages_are_acknowledged_when_app_state_is_busy() {
+        assert_eq!(
+            busy_overlay_message_action(WM_FOREGROUND_CHECK, WPARAM(0)),
+            BusyOverlayMessage::RetryForegroundCheck
+        );
         assert_eq!(
             busy_overlay_message_action(WM_LISTED_WINDOW_REFRESH, WPARAM(0)),
             BusyOverlayMessage::AcknowledgeDroppedRefresh
@@ -2544,7 +2127,11 @@ mod tests {
             refresh.decision(true, |_| true, false),
             RefreshDecision::Refresh
         );
-        assert_eq!(refresh.take_pending_handles(), vec![10]);
+        let stale = [alttabio::switcher::SwitchTask::new(
+            1, 10, "Closing", "editor",
+        )];
+        assert_eq!(refresh.complete_enumeration(Ok(&stale)), RetryTimer::Start);
+        assert!(refresh.has_pending_retries());
         assert_eq!(signal.record(20), RefreshWakeup::PostNow);
     }
 
@@ -2580,52 +2167,6 @@ mod tests {
         assert!(hook_actions_enabled(false, false));
         assert!(!hook_actions_enabled(true, false));
         assert!(!hook_actions_enabled(false, true));
-    }
-
-    #[test]
-    fn accepted_close_schedules_another_refresh_when_the_first_snapshot_is_stale() {
-        let request = WindowCommandRequest {
-            command: WindowCommand::Close,
-            window_handle: 20,
-            process_identity: ProcessIdentity::default(),
-        };
-        let first_snapshot = vec![
-            SwitchTask::new(1, 10, "Browser", "browser"),
-            SwitchTask::new(2, 20, "Closing editor", "editor"),
-        ];
-
-        assert_eq!(
-            close_refresh_target_after_enumeration(request, &first_snapshot),
-            Some(20)
-        );
-    }
-
-    #[test]
-    fn close_refresh_is_not_scheduled_when_the_target_is_gone_or_not_closing() {
-        let tasks = vec![SwitchTask::new(1, 20, "Editor", "editor")];
-
-        assert_eq!(
-            close_refresh_target_after_enumeration(
-                WindowCommandRequest {
-                    command: WindowCommand::Close,
-                    window_handle: 10,
-                    process_identity: ProcessIdentity::default(),
-                },
-                &tasks,
-            ),
-            None
-        );
-        assert_eq!(
-            close_refresh_target_after_enumeration(
-                WindowCommandRequest {
-                    command: WindowCommand::Minimize,
-                    window_handle: 20,
-                    process_identity: ProcessIdentity::default(),
-                },
-                &tasks,
-            ),
-            None
-        );
     }
 
     #[test]
@@ -2728,18 +2269,6 @@ mod tests {
     #[test]
     fn colorref_preserves_windows_bgr_storage_order() {
         assert_eq!(colorref(Rgb8::new(0x12, 0x34, 0x56)), 0x0056_3412);
-    }
-
-    #[test]
-    fn activation_preserves_target_app_child_focus_by_not_forcing_frame_focus() {
-        assert_eq!(
-            activation_actions(),
-            &[
-                ActivationAction::BringToTop,
-                ActivationAction::SetForeground,
-                ActivationAction::SetActive,
-            ]
-        );
     }
 
     #[test]

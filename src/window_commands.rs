@@ -1,9 +1,9 @@
+use crate::process_info::{executable_path, process_started_at};
 use alttabio::input::WindowCommand;
 use alttabio::switcher::ProcessIdentity;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM};
 use windows::Win32::Security::{
     GetTokenInformation, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_QUERY,
@@ -11,9 +11,8 @@ use windows::Win32::Security::{
 };
 use windows::Win32::System::Threading::{
     CreateProcessWithTokenW, LOGON_WITH_PROFILE, OpenProcess, OpenProcessToken,
-    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTUPINFOW,
-    TerminateProcess,
+    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE, STARTUPINFOW, TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetShellWindow,
@@ -21,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
     TrackPopupMenu, WM_CLOSE,
 };
-use windows::core::{PCWSTR, PWSTR, w};
+use windows::core::{PCWSTR, w};
 
 pub fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let menu = unsafe {
@@ -144,7 +143,7 @@ fn run_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
     else {
         return false;
     };
-    let Some(path) = executable_path(process.0) else {
+    let Ok(path) = executable_path(process.0) else {
         return false;
     };
     if let Err(error) = launch_with_shell_token(&path) {
@@ -155,26 +154,6 @@ fn run_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
         return false;
     }
     true
-}
-
-fn executable_path(process: HANDLE) -> Option<PathBuf> {
-    let mut buffer = vec![0_u16; 32_768];
-    let mut length = u32::try_from(buffer.len()).ok()?;
-    unsafe {
-        // SAFETY: the process handle is live and query-only, while the UTF-16 buffer and length are
-        // writable for the synchronous call.
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &raw mut length,
-        )
-    }
-    .ok()?;
-    let length = usize::try_from(length).ok()?;
-    Some(PathBuf::from(String::from_utf16_lossy(
-        buffer.get(..length)?,
-    )))
 }
 
 fn open_selected_process(
@@ -190,7 +169,7 @@ fn open_selected_process(
             // the minimum access needed for this command.
             OpenProcess(access, false, process_id).ok().map(OwnedHandle)
         },
-        |process| process_started_at(process.0),
+        |process| process_started_at(process.0).ok(),
         process_id,
     )
 }
@@ -210,25 +189,6 @@ fn open_selected_process_with<P>(
         return None;
     }
     Some(process)
-}
-
-fn process_started_at(process: HANDLE) -> Option<u64> {
-    let mut creation = windows::Win32::Foundation::FILETIME::default();
-    let mut exit = windows::Win32::Foundation::FILETIME::default();
-    let mut kernel = windows::Win32::Foundation::FILETIME::default();
-    let mut user = windows::Win32::Foundation::FILETIME::default();
-    unsafe {
-        // SAFETY: process is live and queryable; all four FILETIME outputs are writable.
-        windows::Win32::System::Threading::GetProcessTimes(
-            process,
-            &raw mut creation,
-            &raw mut exit,
-            &raw mut kernel,
-            &raw mut user,
-        )
-    }
-    .ok()?;
-    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
 fn launch_with_shell_token(path: &std::path::Path) -> Result<(), String> {

@@ -112,6 +112,29 @@ pub struct WindowCommandRequest {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WindowTarget {
+    window_handle: isize,
+    process_identity: ProcessIdentity,
+}
+
+impl WindowTarget {
+    fn from_task(task: &SwitchTask) -> Self {
+        Self {
+            window_handle: task.window_handle,
+            process_identity: task.process_identity,
+        }
+    }
+
+    fn command(self, command: WindowCommand) -> SwitcherEffect {
+        SwitcherEffect::Execute(WindowCommandRequest {
+            command,
+            window_handle: self.window_handle,
+            process_identity: self.process_identity,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SwitcherEffect {
     None,
     Open { selection_delta: Option<i32> },
@@ -126,7 +149,7 @@ pub struct SwitcherSession {
     switcher: Switcher,
     settings: SwitcherSessionSettings,
     visible: bool,
-    context_menu_open: bool,
+    context_menu_target: Option<WindowTarget>,
 }
 
 impl SwitcherSession {
@@ -142,7 +165,7 @@ impl SwitcherSession {
             },
             settings,
             visible: false,
-            context_menu_open: false,
+            context_menu_target: None,
         }
     }
 
@@ -185,13 +208,25 @@ impl SwitcherSession {
         }
     }
 
-    pub fn set_context_menu_open(&mut self, open: bool) {
-        self.context_menu_open = open;
+    pub fn open_context_menu(&mut self) -> bool {
+        if !self.visible || self.context_menu_open() {
+            return false;
+        }
+        self.context_menu_target = self.switcher.selected_task().map(WindowTarget::from_task);
+        self.context_menu_open()
+    }
+
+    pub fn finish_context_menu(&mut self, command: Option<WindowCommand>) -> SwitcherEffect {
+        let target = self.context_menu_target.take();
+        match (target, command) {
+            (Some(target), Some(command)) => target.command(command),
+            _ => SwitcherEffect::None,
+        }
     }
 
     #[must_use]
     pub const fn context_menu_open(&self) -> bool {
-        self.context_menu_open
+        self.context_menu_target.is_some()
     }
 
     pub fn hide(&mut self) {
@@ -209,6 +244,9 @@ impl SwitcherSession {
 
     #[must_use]
     pub fn handle_input(&mut self, action: InputAction) -> SwitcherEffect {
+        if self.context_menu_open() {
+            return SwitcherEffect::None;
+        }
         if !self.visible {
             return match action {
                 InputAction::Switch(delta) => SwitcherEffect::Open {
@@ -281,7 +319,7 @@ impl SwitcherSession {
     }
 
     fn activate_from_release(&mut self) -> SwitcherEffect {
-        if self.context_menu_open {
+        if self.context_menu_open() {
             SwitcherEffect::None
         } else {
             self.activate_selected()
@@ -530,6 +568,52 @@ impl Switcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_menu_keeps_its_target_while_keyboard_input_arrives() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        let identity = ProcessIdentity::new(100, 500);
+        session.open(
+            [
+                SwitchTask::new(1, 10, "Project", "editor").with_process_identity(identity),
+                SwitchTask::new(2, 20, "Different", "browser")
+                    .with_process_identity(ProcessIdentity::new(200, 600)),
+            ],
+            None,
+        );
+        assert!(session.open_context_menu());
+        for action in [
+            InputAction::AppendSearchCharacter('d'),
+            InputAction::Navigate(1),
+            InputAction::ActivateVisiblePosition(2),
+            InputAction::WindowCommand(WindowCommand::Terminate),
+        ] {
+            assert_eq!(session.handle_input(action), SwitcherEffect::None);
+        }
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(10)
+        );
+        // Even a replacement snapshot must not retarget an already-open command menu.
+        session.refresh_tasks([SwitchTask::new(2, 20, "Another", "another")]);
+        assert!(!session.open_context_menu());
+        assert_eq!(
+            session.finish_context_menu(Some(WindowCommand::Terminate)),
+            SwitcherEffect::Execute(WindowCommandRequest {
+                command: WindowCommand::Terminate,
+                window_handle: 10,
+                process_identity: identity,
+            })
+        );
+        assert!(!session.context_menu_open());
+    }
 
     fn tasks() -> Vec<SwitchTask> {
         vec![
@@ -882,14 +966,14 @@ mod tests {
             session.handle_input(InputAction::RightButtonReleased),
             SwitcherEffect::None
         );
-        session.set_context_menu_open(true);
+        assert!(session.open_context_menu());
         assert_eq!(
             session.handle_input(InputAction::AltReleased),
             SwitcherEffect::None
         );
         assert!(session.is_visible());
 
-        session.set_context_menu_open(false);
+        assert_eq!(session.finish_context_menu(None), SwitcherEffect::None);
         assert_eq!(
             session.handle_input(InputAction::AltReleased),
             SwitcherEffect::Activate(10)

@@ -178,6 +178,13 @@ pub enum RefreshDecision {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetryTimer {
+    Start,
+    Keep,
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CloseRefresh {
     window_handle: isize,
     attempts_remaining: u8,
@@ -284,18 +291,42 @@ impl TaskListRefresh {
         }
     }
 
-    pub fn take_pending_handles(&mut self) -> Vec<isize> {
+    fn take_pending_handles(&mut self) -> Vec<isize> {
         self.enumerate_requested = false;
         std::mem::take(&mut self.pending_handles)
     }
 
-    #[must_use]
-    pub const fn close_tracker(&self) -> &CloseRefreshTracker {
-        &self.close_tracker
+    /// Complete the production refresh transition, including retries for stale snapshots.
+    pub fn complete_enumeration(&mut self, tasks: Result<&[SwitchTask], ()>) -> RetryTimer {
+        let was_pending = self.has_pending_retries();
+        let affected = self.take_pending_handles();
+        if let Ok(tasks) = tasks {
+            self.close_tracker.reconcile(tasks);
+            for handle in affected {
+                if tasks.iter().any(|task| task.window_handle == handle) {
+                    self.close_tracker.track(handle);
+                }
+            }
+        } else {
+            self.close_tracker.advance_after_enumeration_error();
+            for handle in affected {
+                self.close_tracker.track(handle);
+            }
+        }
+        match (was_pending, self.has_pending_retries()) {
+            (false, true) => RetryTimer::Start,
+            (true, false) => RetryTimer::Stop,
+            _ => RetryTimer::Keep,
+        }
     }
 
-    pub fn close_tracker_mut(&mut self) -> &mut CloseRefreshTracker {
-        &mut self.close_tracker
+    #[must_use]
+    pub fn has_pending_retries(&self) -> bool {
+        self.close_tracker.has_pending()
+    }
+
+    pub fn cancel_retries(&mut self) {
+        self.close_tracker.clear();
     }
 
     pub fn clear_notices(&mut self) {
@@ -314,6 +345,57 @@ pub fn apply_listed_refresh_batch(refresh: &mut TaskListRefresh, batch: RefreshB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_refresh_retries_a_stale_close_then_stops_when_it_disappears() {
+        let mut refresh = TaskListRefresh::default();
+        refresh.apply_command_outcome(ContextMenuCommandOutcome::Succeeded {
+            close_window: Some(20),
+        });
+        let stale = [SwitchTask::new(1, 20, "Closing", "editor")];
+        assert_eq!(refresh.complete_enumeration(Ok(&stale)), RetryTimer::Start);
+        assert_eq!(
+            refresh.decision(true, |_| true, true),
+            RefreshDecision::Defer
+        );
+        assert_eq!(refresh.complete_enumeration(Ok(&stale)), RetryTimer::Keep);
+        assert_eq!(refresh.complete_enumeration(Ok(&[])), RetryTimer::Stop);
+        assert_eq!(
+            refresh.decision(true, |_| true, false),
+            RefreshDecision::Ignore
+        );
+    }
+
+    #[test]
+    fn failed_enumerations_keep_bounded_retries_and_new_closes_independent() {
+        let mut refresh = TaskListRefresh::default();
+        refresh.note_handles([10]);
+        assert_eq!(refresh.complete_enumeration(Err(())), RetryTimer::Start);
+        for _ in 1..CLOSE_REFRESH_ATTEMPTS {
+            assert_eq!(refresh.complete_enumeration(Err(())), RetryTimer::Keep);
+        }
+        refresh.note_handles([20]);
+        assert_eq!(refresh.complete_enumeration(Err(())), RetryTimer::Keep);
+        assert_eq!(refresh.close_tracker.pending.len(), 1);
+        assert_eq!(refresh.close_tracker.pending[0].window_handle, 20);
+        for _ in 1..CLOSE_REFRESH_ATTEMPTS {
+            assert_eq!(refresh.complete_enumeration(Err(())), RetryTimer::Keep);
+        }
+        assert_eq!(refresh.complete_enumeration(Err(())), RetryTimer::Stop);
+        assert!(!refresh.has_pending_retries());
+    }
+
+    #[test]
+    fn failed_timer_setup_cancels_policy_retries() {
+        let mut refresh = TaskListRefresh::default();
+        refresh.note_handles([10]);
+        assert_eq!(refresh.complete_enumeration(Err(())), RetryTimer::Start);
+        refresh.cancel_retries();
+        assert_eq!(
+            refresh.decision(true, |_| true, false),
+            RefreshDecision::Ignore
+        );
+    }
     use crate::switcher::SwitchTask;
 
     #[test]
