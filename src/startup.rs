@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::mem::size_of;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
@@ -15,6 +15,7 @@ use windows::Win32::Storage::FileSystem::{
     DELETE, FILE_ADD_FILE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
 };
+use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -342,13 +343,40 @@ fn run(arguments: &[&str]) -> Result<Output, String> {
 }
 
 fn run_owned(arguments: impl IntoIterator<Item = OsString>) -> Result<Output, String> {
-    use std::os::windows::process::CommandExt;
-
-    Command::new("schtasks.exe")
-        .args(arguments)
-        .creation_flags(CREATE_NO_WINDOW)
+    scheduler_command(arguments)?
         .output()
         .map_err(|error| format!("Could not run schtasks.exe: {error}"))
+}
+
+fn scheduler_command(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
+    use std::os::windows::process::CommandExt;
+
+    let mut command = Command::new(system_directory()?.join("schtasks.exe"));
+    command.args(arguments).creation_flags(CREATE_NO_WINDOW);
+    Ok(command)
+}
+
+fn system_directory() -> Result<PathBuf, String> {
+    // Reserve the maximum Windows path length, including the terminating null.
+    let mut buffer = vec![0_u16; 32768];
+    let length = unsafe {
+        // SAFETY: buffer is writable for its full length and the API retains no pointers.
+        GetSystemDirectoryW(Some(&mut buffer))
+    } as usize;
+    if length == 0 {
+        return Err(format!(
+            "Could not locate the Windows system directory: {}",
+            windows::core::Error::from_thread()
+        ));
+    }
+    if length >= buffer.len() {
+        return Err("The Windows system directory path exceeds the supported length".to_owned());
+    }
+    let path = PathBuf::from(OsString::from_wide(&buffer[..length]));
+    if !path.is_absolute() {
+        return Err("Windows returned a non-absolute system directory path".to_owned());
+    }
+    Ok(path)
 }
 
 fn output_details(output: &Output) -> String {
@@ -369,6 +397,44 @@ fn output_details(output: &Output) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduler_command_uses_an_absolute_system_executable_without_launching_it()
+    -> Result<(), String> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+        let mut directory = vec![0_u16; 32768];
+        let length = unsafe {
+            // SAFETY: directory is writable for the complete slice; no pointers are retained.
+            GetSystemDirectoryW(Some(&mut directory))
+        } as usize;
+        assert!(length > 0 && length < directory.len());
+        let expected =
+            PathBuf::from(OsString::from_wide(&directory[..length])).join("schtasks.exe");
+
+        for arguments in [
+            vec![
+                "/Query".into(),
+                "/TN".into(),
+                "AltTabio".into(),
+                "/XML".into(),
+            ],
+            vec![
+                "/Delete".into(),
+                "/TN".into(),
+                "AltTabio".into(),
+                "/F".into(),
+            ],
+            create_arguments(Path::new(r"C:\Program Files\AltTabio\AltTabio.exe")),
+        ] {
+            let command = scheduler_command(arguments.clone())?;
+            assert!(Path::new(command.get_program()).is_absolute());
+            assert_eq!(command.get_program(), expected.as_os_str());
+            assert_eq!(command.get_args().collect::<Vec<_>>(), arguments);
+        }
+        Ok(())
+    }
 
     #[test]
     fn create_arguments_quote_the_executable_and_request_highest_on_logon() {
