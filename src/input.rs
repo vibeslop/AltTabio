@@ -286,6 +286,14 @@ pub struct HookState {
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
     right_button: RightButtonState,
+    interception: InterceptionState,
+}
+
+#[derive(Debug, Default)]
+struct InterceptionState {
+    suspended: bool,
+    // Keys held across a modal boundary stay with their original recipient until release.
+    passthrough_keys: [u64; 4],
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -294,11 +302,66 @@ enum RightButtonState {
     Released,
     Pressed,
     WheelGesture,
+    CancelledWheelGesture,
 }
 
 impl HookState {
+    /// Cancels gestures without forgetting suppressed presses or synthetic mouse releases.
+    /// The adapter calls this for every suspension generation, including a missed open/close.
+    pub fn set_interception_suspended(&mut self, suspended: bool) {
+        self.interception.suspended = suspended;
+        for (passthrough, pressed) in self
+            .interception
+            .passthrough_keys
+            .iter_mut()
+            .zip(self.pressed_owned_keys)
+        {
+            *passthrough |= pressed;
+        }
+        self.reset_gestures();
+        if self.right_button == RightButtonState::WheelGesture {
+            self.right_button = RightButtonState::CancelledWheelGesture;
+        }
+    }
+
     pub fn set_overlay_active(&mut self, active: bool) {
         self.overlay_active = active;
+    }
+
+    /// Rebases a modifier after an input-desktop gap, independently of release ownership.
+    pub fn rebase_modifier(&mut self, key: Key, pressed: bool) {
+        let pending_alt = alt_key_mask(key).is_some_and(|mask| self.pending_alt_keys & mask != 0);
+        let pending_windows =
+            windows_key_mask(key).is_some_and(|mask| self.pending_windows_keys & mask != 0);
+        if let Some(mask) = alt_key_mask(key) {
+            self.pending_alt_keys &= !mask;
+        }
+        if let Some(mask) = windows_key_mask(key) {
+            self.pending_windows_keys &= !mask;
+        }
+        let event = if pressed {
+            KeyEvent::pressed(key, Modifiers::default())
+        } else {
+            KeyEvent::released(key, Modifiers::default())
+        };
+        self.update_shift_state(event);
+        self.update_owned_key_state(event);
+        if pressed {
+            // An async down means Windows has a press to balance, so its release must pass.
+            self.take_suppressed_owned_key_release(key);
+            if let Some(mask) = shift_mask(key) {
+                self.suppressed_shift_keys &= !mask;
+            }
+        } else if pending_alt || pending_windows {
+            self.suppress_owned_key_release(key);
+        }
+        if let Some((word, mask)) = owned_key_slot(key) {
+            if pressed {
+                self.interception.passthrough_keys[word] |= mask;
+            } else {
+                self.interception.passthrough_keys[word] &= !mask;
+            }
+        }
     }
 
     pub fn reset_gestures(&mut self) {
@@ -307,7 +370,10 @@ impl HookState {
         self.win_switch_gesture_active = false;
         // The synthetic release already balanced the forwarded down. Keep owning the later
         // physical release so a rejected or dismissed overlay cannot leak a duplicate button-up.
-        if self.right_button != RightButtonState::WheelGesture {
+        if !matches!(
+            self.right_button,
+            RightButtonState::WheelGesture | RightButtonState::CancelledWheelGesture
+        ) {
             self.right_button = RightButtonState::Released;
         }
     }
@@ -327,21 +393,31 @@ impl HookState {
 
     #[must_use]
     pub fn process_key(&mut self, event: KeyEvent, settings: HookSettings) -> HookOutcome {
-        if is_ctrl_or_print_screen(event.key) {
-            return HookOutcome::default();
-        }
-        self.update_shift_state(event);
-
         let pressed = event.transition == KeyTransition::Pressed;
         let released = event.transition == KeyTransition::Released;
-        let key_was_down = self.owned_key_is_down(event.key);
-        self.update_owned_key_state(event);
+        let key_was_down = self.observe_key_transition(event);
+        if let Some(outcome) = self.process_retained_key(event, settings) {
+            return outcome;
+        }
+        let switching_allowed = ![
+            Key::Alt,
+            Key::LeftAlt,
+            Key::RightAlt,
+            Key::LeftWindows,
+            Key::RightWindows,
+        ]
+        .into_iter()
+        .any(|key| self.key_passes_until_release(key));
         if let Some(outcome) = self.process_alt_key_transition(event, settings) {
             return outcome;
         }
         let pending_alt_keys = self.pending_alt_keys;
         let alt_down = event.modifiers.alt || pending_alt_keys != 0 || is_alt(event.key);
-        let alt_tab = settings.replace_alt_tab && pressed && event.key == Key::Tab && alt_down;
+        let alt_tab = switching_allowed
+            && settings.replace_alt_tab
+            && pressed
+            && event.key == Key::Tab
+            && alt_down;
         if let Some(outcome) = self.process_pending_alt_shortcut(event, alt_tab) {
             return outcome;
         }
@@ -351,7 +427,8 @@ impl HookState {
         // A suppressed Windows-key press never reaches the system async state, so the hook's
         // observed pending press is authoritative when the following Tab callback arrives.
         let pending_windows_keys = self.pending_windows_keys;
-        let windows_tab = settings.replace_win_tab
+        let windows_tab = switching_allowed
+            && settings.replace_win_tab
             && pressed
             && event.key == Key::Tab
             && (pending_windows_keys != 0
@@ -359,6 +436,10 @@ impl HookState {
 
         if let Some(outcome) = self.process_pending_windows_shortcut(event, windows_tab) {
             return outcome;
+        }
+
+        if is_ctrl_or_print_screen(event.key) {
+            return HookOutcome::default();
         }
 
         if let Some(outcome) = self.process_escape(event) {
@@ -387,15 +468,7 @@ impl HookState {
             };
         }
 
-        if let Some(outcome) = self.process_f4(event) {
-            return outcome;
-        }
-
-        if let Some(outcome) = self.process_function_key(event) {
-            return outcome;
-        }
-
-        if let Some(outcome) = self.process_enter(event) {
+        if let Some(outcome) = self.process_command_key(event) {
             return outcome;
         }
 
@@ -433,6 +506,89 @@ impl HookState {
         HookOutcome::default()
     }
 
+    fn observe_key_transition(&mut self, event: KeyEvent) -> bool {
+        self.update_shift_state(event);
+        let key_was_down = self.owned_key_is_down(event.key);
+        if event.transition == KeyTransition::Pressed && !key_was_down {
+            // Reconciliation may retain an old release debt after clearing a stale down bit.
+            // A fresh press begins a new pair; an old release alone is still suppressed.
+            self.take_suppressed_owned_key_release(event.key);
+            if let Some(mask) = shift_mask(event.key) {
+                self.suppressed_shift_keys &= !mask;
+            }
+        }
+        self.update_owned_key_state(event);
+        key_was_down
+    }
+
+    fn process_retained_key(
+        &mut self,
+        event: KeyEvent,
+        settings: HookSettings,
+    ) -> Option<HookOutcome> {
+        if self.interception.suspended || self.key_passes_until_release(event.key) {
+            return Some(self.process_unintercepted_key(event));
+        }
+        if event.transition == KeyTransition::Pressed
+            && !self.switch_gesture_active()
+            && !settings.search_active
+            && (self.owned_key_release_pending(event.key)
+                || shift_mask(event.key).is_some_and(|mask| self.suppressed_shift_keys & mask != 0))
+        {
+            // Until a release or rebase establishes a fresh press, keep the whole old pair
+            // suppressed, including repeats after search or a gesture has ended.
+            return Some(HookOutcome {
+                suppress: true,
+                ..HookOutcome::default()
+            });
+        }
+        None
+    }
+
+    fn key_passes_until_release(&self, key: Key) -> bool {
+        owned_key_slot(key)
+            .is_some_and(|(word, mask)| self.interception.passthrough_keys[word] & mask != 0)
+    }
+
+    fn process_unintercepted_key(&mut self, event: KeyEvent) -> HookOutcome {
+        let pressed = event.transition == KeyTransition::Pressed;
+        if let Some((word, mask)) = owned_key_slot(event.key) {
+            if pressed {
+                self.interception.passthrough_keys[word] |= mask;
+            } else {
+                self.interception.passthrough_keys[word] &= !mask;
+            }
+        }
+        let owned = if pressed {
+            self.owned_key_release_pending(event.key)
+        } else {
+            self.take_suppressed_owned_key_release(event.key)
+        };
+        let shift_owned = shift_mask(event.key).is_some_and(|mask| {
+            let owned = self.suppressed_shift_keys & mask != 0;
+            if !pressed {
+                self.suppressed_shift_keys &= !mask;
+            }
+            owned
+        });
+        if owned || shift_owned {
+            return HookOutcome {
+                suppress: true,
+                ..HookOutcome::default()
+            };
+        }
+        let disabled = HookSettings {
+            replace_alt_tab: false,
+            replace_win_tab: false,
+            ..HookSettings::default()
+        };
+        self.process_alt_key_transition(event, disabled)
+            .or_else(|| self.process_windows_key_transition(event, disabled))
+            .or_else(|| self.process_pending_alt_shortcut(event, false))
+            .or_else(|| self.process_pending_windows_shortcut(event, false))
+            .unwrap_or_default()
+    }
+
     fn process_number_shortcut(
         &mut self,
         event: KeyEvent,
@@ -466,6 +622,19 @@ impl HookState {
 
     #[must_use]
     pub fn process_mouse(&mut self, event: MouseEvent, settings: HookSettings) -> HookOutcome {
+        if self.interception.suspended
+            || self.right_button == RightButtonState::CancelledWheelGesture
+        {
+            let suppress = event == MouseEvent::RightButtonReleased
+                && self.right_button == RightButtonState::CancelledWheelGesture;
+            if event == MouseEvent::RightButtonReleased {
+                self.right_button = RightButtonState::Released;
+            }
+            return HookOutcome {
+                suppress,
+                ..HookOutcome::default()
+            };
+        }
         match event {
             MouseEvent::RightButtonPressed if settings.right_button_wheel_switching => {
                 self.right_button = RightButtonState::Pressed;
@@ -740,8 +909,10 @@ impl HookState {
         None
     }
 
-    fn process_enter(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        if event.key != Key::Enter || event.transition != KeyTransition::Pressed {
+    fn process_command_key(&mut self, event: KeyEvent) -> Option<HookOutcome> {
+        if !matches!(event.key, Key::Enter | Key::F4 | Key::Function(5..=9))
+            || event.transition != KeyTransition::Pressed
+        {
             return None;
         }
         if self.owned_key_release_pending(event.key) {
@@ -754,50 +925,12 @@ impl HookState {
             return None;
         }
 
-        self.alt_switch_gesture_active = false;
-        self.win_switch_gesture_active = false;
+        if event.key == Key::Enter {
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+        }
         self.suppress_owned_key_release(event.key);
         let action = overlay_key_action(OverlayKeyEvent::pressed(event.key))?;
-        Some(HookOutcome::one(true, action))
-    }
-
-    fn process_f4(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        if event.key != Key::F4 || event.transition != KeyTransition::Pressed {
-            return None;
-        }
-        if self.owned_key_release_pending(event.key) {
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
-        }
-        if !self.switch_gesture_active() {
-            return None;
-        }
-
-        self.suppress_owned_key_release(event.key);
-        let action = overlay_key_action(OverlayKeyEvent::pressed(event.key))?;
-        Some(HookOutcome::one(true, action))
-    }
-
-    fn process_function_key(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        let Key::Function(number @ 5..=9) = event.key else {
-            return None;
-        };
-        if event.transition != KeyTransition::Pressed {
-            return None;
-        }
-        if self.owned_key_release_pending(event.key) {
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
-        }
-        if !self.switch_gesture_active() {
-            return None;
-        }
-        self.suppress_owned_key_release(event.key);
-        let action = overlay_key_action(OverlayKeyEvent::pressed(Key::Function(number)))?;
         Some(HookOutcome::one(true, action))
     }
 
@@ -1024,6 +1157,393 @@ fn owned_key_slot(key: Key) -> Option<(usize, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebased_shift_release_debt_does_not_swallow_a_fresh_forwarded_pair() {
+        let mut state = HookState::default();
+        let settings = HookSettings::default();
+        let _tab = state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings);
+        assert!(
+            state
+                .process_key(KeyEvent::pressed(Key::LeftShift, ALT), settings)
+                .suppress
+        );
+        assert_ne!(state.suppressed_shift_keys, 0);
+        state.reset_gestures();
+        state.rebase_modifier(Key::LeftShift, false);
+        assert_ne!(state.suppressed_shift_keys, 0);
+        for event in [
+            KeyEvent::pressed(Key::LeftShift, Modifiers::default()),
+            KeyEvent::released(Key::LeftShift, Modifiers::default()),
+        ] {
+            assert_eq!(state.process_key(event, settings), HookOutcome::default());
+        }
+    }
+
+    #[test]
+    fn rebased_owned_keys_start_fresh_pairs_and_unrebased_keys_remain_fully_owned() {
+        for key in [
+            Key::LeftAlt,
+            Key::RightAlt,
+            Key::LeftWindows,
+            Key::RightWindows,
+            Key::Other(65),
+        ] {
+            for rebase in [false, true] {
+                let mut state = HookState::default();
+                let settings = HookSettings::default();
+                let _win = state.process_key(
+                    KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
+                    settings,
+                );
+                let _tab =
+                    state.process_key(KeyEvent::pressed(Key::Tab, Modifiers::default()), settings);
+                assert!(
+                    state
+                        .process_key(KeyEvent::pressed(key, Modifiers::default()), settings)
+                        .suppress
+                );
+                state.reset_gestures();
+                if rebase {
+                    state.rebase_modifier(key, false);
+                }
+                let settings = HookSettings {
+                    replace_alt_tab: false,
+                    replace_win_tab: false,
+                    ..settings
+                };
+                for event in [
+                    KeyEvent::pressed(key, Modifiers::default()),
+                    KeyEvent::released(key, Modifiers::default()),
+                ] {
+                    let outcome = state.process_key(event, settings);
+                    assert_eq!(outcome.suppress, !rebase);
+                    assert!(outcome.actions().next().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_commands_share_ownership_but_only_enter_ends_the_gesture() {
+        for key in [
+            Key::Enter,
+            Key::F4,
+            Key::Function(5),
+            Key::Function(6),
+            Key::Function(7),
+            Key::Function(8),
+            Key::Function(9),
+        ] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            let _alt = state.process_key(KeyEvent::pressed(Key::LeftAlt, ALT), settings);
+            let _tab = state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings);
+            let action = state.process_key(KeyEvent::pressed(key, ALT), settings);
+            assert!(action.suppress);
+            assert_eq!(
+                action.actions().next(),
+                overlay_key_action(OverlayKeyEvent::pressed(key))
+            );
+            for event in [KeyEvent::pressed(key, ALT), KeyEvent::released(key, ALT)] {
+                let outcome = state.process_key(event, settings);
+                assert!(outcome.suppress);
+                assert!(outcome.actions().next().is_none());
+            }
+            let release = state.process_key(
+                KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+                settings,
+            );
+            assert!(release.suppress);
+            assert_eq!(
+                release.actions().next(),
+                (key != Key::Enter).then_some(InputAction::AltReleased)
+            );
+        }
+    }
+
+    #[test]
+    fn print_screen_replays_both_sides_and_repeats_without_replaying_modifiers_twice() {
+        for modifiers in [
+            [Key::LeftAlt, Key::RightAlt],
+            [Key::LeftWindows, Key::RightWindows],
+        ] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            for key in modifiers {
+                assert!(
+                    state
+                        .process_key(KeyEvent::pressed(key, Modifiers::default()), settings)
+                        .suppress
+                );
+            }
+            assert!(
+                state
+                    .process_key(
+                        KeyEvent::pressed(Key::PrintScreen, Modifiers::default()),
+                        settings
+                    )
+                    .suppress
+            );
+            assert_eq!(
+                state.take_replayed_key_events(),
+                [
+                    Some(ReplayedKeyEvent::pressed(modifiers[0])),
+                    Some(ReplayedKeyEvent::pressed(modifiers[1])),
+                    Some(ReplayedKeyEvent::pressed(Key::PrintScreen))
+                ]
+            );
+            assert_eq!(
+                state.process_key(
+                    KeyEvent::pressed(Key::PrintScreen, Modifiers::default()),
+                    settings
+                ),
+                HookOutcome::default()
+            );
+            assert_eq!(state.take_replayed_key_events(), [None; 3]);
+        }
+    }
+
+    #[test]
+    fn suspension_passes_switching_and_typing_without_actions() {
+        let mut state = HookState::default();
+        let settings = HookSettings {
+            search_active: true,
+            ..HookSettings::default()
+        };
+        state.set_overlay_active(true);
+        state.set_interception_suspended(true);
+        for key in [
+            Key::LeftAlt,
+            Key::Tab,
+            Key::Other(65),
+            Key::Escape,
+            Key::F4,
+            Key::Enter,
+            Key::LeftWindows,
+        ] {
+            assert_eq!(
+                state.process_key(KeyEvent::pressed(key, ALT).with_text('a'), settings),
+                HookOutcome::default()
+            );
+            assert_eq!(
+                state.process_key(KeyEvent::released(key, Modifiers::default()), settings),
+                HookOutcome::default()
+            );
+        }
+        for event in [
+            MouseEvent::RightButtonPressed,
+            MouseEvent::Wheel(120),
+            MouseEvent::RightButtonReleased,
+        ] {
+            assert_eq!(state.process_mouse(event, settings), HookOutcome::default());
+        }
+        assert!(!state.switch_gesture_active());
+    }
+
+    #[test]
+    fn suspension_keeps_owned_repeats_and_releases_suppressed() {
+        let mut state = HookState::default();
+        let settings = HookSettings {
+            search_active: true,
+            ..HookSettings::default()
+        };
+        for key in [Key::LeftAlt, Key::Tab, Key::LeftShift] {
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(key, ALT), settings)
+                    .suppress
+            );
+        }
+        assert!(
+            state
+                .process_key(
+                    KeyEvent::pressed(Key::Other(65), ALT).with_text('a'),
+                    settings
+                )
+                .suppress
+        );
+        state.set_interception_suspended(true);
+        for key in [Key::LeftAlt, Key::Tab, Key::LeftShift, Key::Other(65)] {
+            for event in [
+                KeyEvent::pressed(key, ALT),
+                KeyEvent::released(key, Modifiers::default()),
+            ] {
+                let outcome = state.process_key(event, settings);
+                assert!(outcome.suppress);
+                assert!(outcome.actions().next().is_none());
+            }
+            assert_eq!(
+                state.process_key(KeyEvent::released(key, Modifiers::default()), settings),
+                HookOutcome::default()
+            );
+        }
+    }
+
+    #[test]
+    fn suspension_replays_pending_modifiers_for_shortcuts_and_lone_releases() {
+        for modifier in [
+            Key::LeftAlt,
+            Key::RightAlt,
+            Key::LeftWindows,
+            Key::RightWindows,
+        ] {
+            for shortcut in [None, Some(Key::PrintScreen), Some(Key::Other(82))] {
+                let mut state = HookState::default();
+                let settings = HookSettings::default();
+                assert!(
+                    state
+                        .process_key(KeyEvent::pressed(modifier, Modifiers::default()), settings)
+                        .suppress
+                );
+                state.set_interception_suspended(true);
+                let event = shortcut
+                    .map_or(KeyEvent::released(modifier, Modifiers::default()), |key| {
+                        KeyEvent::pressed(key, Modifiers::default())
+                    });
+                let outcome = state.process_key(event, settings);
+                assert!(outcome.suppress);
+                assert!(outcome.actions().next().is_none());
+                assert_eq!(
+                    state.take_replayed_key_events(),
+                    [
+                        Some(ReplayedKeyEvent::pressed(modifier)),
+                        Some(ReplayedKeyEvent {
+                            key: event.key,
+                            transition: event.transition
+                        }),
+                        None
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resume_does_not_inherit_held_switch_or_typing_keys() {
+        for owned in [false, true] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            if !owned {
+                state.set_interception_suspended(true);
+            }
+            let _alt = state.process_key(KeyEvent::pressed(Key::LeftAlt, ALT), settings);
+            let _tab = state.process_key(KeyEvent::pressed(Key::Tab, ALT), settings);
+            state.set_interception_suspended(true);
+            let _typing = state.process_key(
+                KeyEvent::pressed(Key::Other(65), ALT).with_text('a'),
+                settings,
+            );
+            state.set_interception_suspended(false);
+            for key in [Key::Tab, Key::Other(65)] {
+                assert!(
+                    state
+                        .process_key(
+                            KeyEvent::pressed(key, ALT).with_text('a'),
+                            HookSettings {
+                                search_active: true,
+                                ..settings
+                            }
+                        )
+                        .actions()
+                        .next()
+                        .is_none()
+                );
+                let _release = state.process_key(KeyEvent::released(key, ALT), settings);
+            }
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(Key::Tab, ALT), settings)
+                    .actions()
+                    .next()
+                    .is_none()
+            );
+            let _tab = state.process_key(KeyEvent::released(Key::Tab, ALT), settings);
+            let _alt = state.process_key(
+                KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+                settings,
+            );
+            let _alt = state.process_key(KeyEvent::pressed(Key::LeftAlt, ALT), settings);
+            assert_eq!(
+                state
+                    .process_key(KeyEvent::pressed(Key::Tab, ALT), settings)
+                    .actions()
+                    .next(),
+                Some(InputAction::Switch(1))
+            );
+        }
+    }
+
+    #[test]
+    fn suspension_keeps_synthetic_right_button_up_owned_even_after_resume() {
+        for resume_before_release in [false, true] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
+            assert!(
+                state
+                    .process_mouse(MouseEvent::Wheel(120), settings)
+                    .suppress
+            );
+            assert_eq!(
+                state.take_replayed_mouse_event(),
+                Some(ReplayedMouseEvent::RightButtonReleased)
+            );
+            state.set_interception_suspended(true);
+            if resume_before_release {
+                state.set_interception_suspended(false);
+            }
+            assert_eq!(
+                state.process_mouse(MouseEvent::Wheel(120), settings),
+                HookOutcome::default()
+            );
+            let release = state.process_mouse(MouseEvent::RightButtonReleased, settings);
+            assert!(release.suppress);
+            assert!(release.actions().next().is_none());
+            assert_eq!(
+                state.process_mouse(MouseEvent::RightButtonReleased, settings),
+                HookOutcome::default()
+            );
+        }
+    }
+
+    #[test]
+    fn pending_modifiers_are_replayed_before_print_screen() {
+        for modifier in [
+            Key::LeftAlt,
+            Key::RightAlt,
+            Key::LeftWindows,
+            Key::RightWindows,
+        ] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(modifier, Modifiers::default()), settings)
+                    .suppress
+            );
+            let outcome = state.process_key(
+                KeyEvent::pressed(Key::PrintScreen, Modifiers::default()),
+                settings,
+            );
+            assert!(outcome.suppress);
+            assert!(outcome.actions().next().is_none());
+            assert_eq!(
+                state.take_replayed_key_events(),
+                [
+                    Some(ReplayedKeyEvent::pressed(modifier)),
+                    Some(ReplayedKeyEvent::pressed(Key::PrintScreen)),
+                    None
+                ]
+            );
+            for key in [Key::PrintScreen, modifier] {
+                assert_eq!(
+                    state.process_key(KeyEvent::released(key, Modifiers::default()), settings),
+                    HookOutcome::default()
+                );
+            }
+        }
+    }
 
     const ALT: Modifiers = Modifiers {
         alt: true,

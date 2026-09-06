@@ -3,37 +3,43 @@ use alttabio::input::{
     MouseEvent, ReplayedKeyEvent, ReplayedMouseEvent,
 };
 use alttabio::passthrough::PassthroughPolicy;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::StationsAndDesktops::{
+    GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
+};
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyboardLayout, GetKeyboardState, INPUT, INPUT_0, INPUT_KEYBOARD,
     INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput, ToUnicodeEx, VIRTUAL_KEY, VK_0, VK_1, VK_9,
-    VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9,
-    VK_HOME, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMPAD0, VK_NUMPAD1,
-    VK_NUMPAD9, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SNAPSHOT,
-    VK_TAB, VK_UP,
+    VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8,
+    VK_F9, VK_HOME, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMLOCK,
+    VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD9, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
+    VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SNAPSHOT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
-    PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, DispatchMessageW, EVENT_SYSTEM_DESKTOPSWITCH, GetMessageW,
+    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, KillTimer, LLKHF_ALTDOWN, MSG,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW, PostThreadMessageW, SetTimer,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WINEVENT_OUTOFCONTEXT, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
-use windows::core::Error;
+use windows::core::{BOOL, Error};
 
 pub const WM_HOOK_ACTION: u32 = WM_APP + 1;
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
+const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
 const HOOK_ERROR_POST_ACTION: u8 = 2;
@@ -54,20 +60,140 @@ const ACTION_DISMISS_OVERLAY: usize = 14;
 const ACTION_CLOSE_SELECTED: usize = 15;
 const ACTION_WINDOW_COMMAND: usize = 16;
 const REPLAYED_INPUT_MARKER: usize = 0x0A17_AB10;
+const INTERCEPTION_SUSPENDED: usize = 1;
+const SEARCH_ACTIVE: usize = 2;
+const OVERLAY_ACTIVE: usize = 4;
+const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE;
+const ACTION_CODE_MASK: usize = 0xFF;
+const ACTION_EPOCH_MASK: usize = usize::MAX >> 8;
+static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
+
+fn next_hook_generation() -> usize {
+    (NEXT_HOOK_EPOCH.fetch_add(1, Ordering::Relaxed) & ACTION_EPOCH_MASK) << 3
+}
+
+const fn action_wparam(code: usize, generation: usize) -> WPARAM {
+    WPARAM((((generation >> 3) & ACTION_EPOCH_MASK) << 8) | (code & ACTION_CODE_MASK))
+}
+
+#[derive(Default)]
+struct HookFlags {
+    value: AtomicUsize,
+    recovery_pending: AtomicBool,
+}
+
+impl HookFlags {
+    fn new() -> Self {
+        Self::with_value(next_hook_generation())
+    }
+
+    fn with_value(value: usize) -> Self {
+        Self {
+            value: AtomicUsize::new(value),
+            recovery_pending: AtomicBool::new(false),
+        }
+    }
+
+    fn action_is_current(&self, wparam: WPARAM) -> bool {
+        let flags = self.load();
+        !self.recovery_pending.load(Ordering::Acquire)
+            && flags & INTERCEPTION_SUSPENDED == 0
+            && (wparam.0 >> 8) == ((flags >> 3) & ACTION_EPOCH_MASK)
+    }
+
+    fn load(&self) -> usize {
+        self.value.load(Ordering::Acquire)
+    }
+
+    fn set(&self, flag: usize, active: bool) {
+        if active {
+            self.value.fetch_or(flag, Ordering::AcqRel);
+        } else {
+            self.value.fetch_and(!flag, Ordering::AcqRel);
+        }
+    }
+
+    fn suspend(&self, suspended: bool) {
+        // Each modal boundary advances the generation, even if no callback ran in between.
+        let _previous = self
+            .value
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                if (value & INTERCEPTION_SUSPENDED != 0) == suspended {
+                    return None;
+                }
+                let flags = if suspended {
+                    INTERCEPTION_SUSPENDED
+                } else {
+                    value & OVERLAY_FLAGS
+                };
+                Some(next_hook_generation() | flags)
+            });
+    }
+
+    fn replace_modal_flags(&self, flags: usize) -> usize {
+        // The closure always supplies a value, so fetch_update retries until it swaps the
+        // complete snapshot. Entry and exit advance the generation even when already suspended.
+        self.value
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |_value| {
+                Some(next_hook_generation() | (flags & 7))
+            })
+            .unwrap_or_else(|value| value)
+            & 7
+    }
+
+    fn update_overlay(&self, generation: usize, active: bool, typed_search: bool) -> bool {
+        let value = self.load();
+        if self.recovery_pending.load(Ordering::Acquire)
+            || value & !OVERLAY_FLAGS != generation
+            || value & INTERCEPTION_SUSPENDED != 0
+        {
+            return false;
+        }
+        let flags = if active {
+            OVERLAY_ACTIVE | if typed_search { SEARCH_ACTIVE } else { 0 }
+        } else {
+            0
+        };
+        // A single attempt keeps the hook callback bounded. A concurrent UI update wins.
+        self.value
+            .compare_exchange(
+                value,
+                generation | flags,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
 
 struct HookContext {
     target: HWND,
     state: HookState,
     settings: HookSettings,
-    search_active: Arc<AtomicBool>,
-    overlay_active: Arc<AtomicBool>,
     remote_desktop_passthrough: Arc<AtomicBool>,
     target_thread_id: u32,
     hook_thread_id: u32,
     pending_errors: u8,
+    flags: Arc<HookFlags>,
+    interception_generation: usize,
+    keyboard_state: KeyboardState,
+    recovering: bool,
 }
 
 impl HookContext {
+    fn sync_interception(&mut self) -> usize {
+        let flags = self.flags.load();
+        let generation = flags & !OVERLAY_FLAGS;
+        let recovering = self.flags.recovery_pending.load(Ordering::Acquire);
+        let suspended = flags & INTERCEPTION_SUSPENDED != 0 || recovering;
+        if generation != self.interception_generation || recovering != self.recovering {
+            self.state.set_interception_suspended(suspended);
+            self.interception_generation = generation;
+            self.recovering = recovering;
+        }
+        if suspended { 0 } else { flags & OVERLAY_FLAGS }
+    }
+
     fn record_error(&mut self, error: u8) {
         if self.pending_errors & error != 0 {
             return;
@@ -88,14 +214,37 @@ impl HookContext {
 
 thread_local! {
     static CONTEXT: RefCell<Option<HookContext>> = const { RefCell::new(None) };
+    // Independent publication lets reentrant desktop callbacks gate delivery during state borrows.
+    static RECOVERY_FLAGS: RefCell<Option<Arc<HookFlags>>> = const { RefCell::new(None) };
+    static DESKTOP_BOUNDARY: Cell<Option<u32>> = const { Cell::new(None) };
+    static RECOVERY_QUEUED: Cell<bool> = const { Cell::new(false) };
 }
 
 pub struct HookThread {
     thread_id: u32,
     join_handle: Option<JoinHandle<()>>,
-    search_active: Arc<AtomicBool>,
-    overlay_active: Arc<AtomicBool>,
     remote_desktop_passthrough: Arc<AtomicBool>,
+    flags: Arc<HookFlags>,
+}
+
+/// Restores a modal scope's saved flags on drop. Nested guards must drop in reverse order.
+#[must_use = "keep the guard alive for the entire modal call"]
+pub struct HookInterceptionGuard {
+    flags: Arc<HookFlags>,
+    saved_flags: usize,
+}
+
+impl HookInterceptionGuard {
+    fn new(flags: Arc<HookFlags>) -> Self {
+        let saved_flags = flags.replace_modal_flags(INTERCEPTION_SUSPENDED);
+        Self { flags, saved_flags }
+    }
+}
+
+impl Drop for HookInterceptionGuard {
+    fn drop(&mut self) {
+        let _previous = self.flags.replace_modal_flags(self.saved_flags);
+    }
 }
 
 impl HookThread {
@@ -111,10 +260,9 @@ impl HookThread {
             ));
         }
         let target_value = target.0 as isize;
-        let search_active = Arc::new(AtomicBool::new(false));
-        let hook_search_active = Arc::clone(&search_active);
-        let overlay_active = Arc::new(AtomicBool::new(false));
-        let hook_overlay_active = Arc::clone(&overlay_active);
+        let keyboard_state = KeyboardState::snapshot()?;
+        let flags = Arc::new(HookFlags::new());
+        let hook_flags = Arc::clone(&flags);
         let remote_desktop_passthrough = Arc::new(AtomicBool::new(
             PassthroughPolicy::INITIAL.bypasses_local_switching(),
         ));
@@ -125,12 +273,19 @@ impl HookThread {
             .spawn(move || {
                 let target = HWND(target_value as *mut core::ffi::c_void);
                 if let Err(error) = run_hook_thread(
-                    target,
-                    target_thread_id,
-                    settings,
-                    hook_search_active,
-                    hook_overlay_active,
-                    hook_remote_desktop_passthrough,
+                    HookContext {
+                        target,
+                        target_thread_id,
+                        settings,
+                        state: HookState::default(),
+                        remote_desktop_passthrough: hook_remote_desktop_passthrough,
+                        hook_thread_id: 0,
+                        pending_errors: 0,
+                        flags: hook_flags,
+                        interception_generation: 0,
+                        keyboard_state,
+                        recovering: false,
+                    },
                     &sender,
                 ) && sender.send(Err(error)).is_err()
                 {
@@ -143,9 +298,8 @@ impl HookThread {
             Ok(Ok(thread_id)) => Ok(Self {
                 thread_id,
                 join_handle: Some(join_handle),
-                search_active,
-                overlay_active,
                 remote_desktop_passthrough,
+                flags,
             }),
             Ok(Err(error)) => {
                 report_join_error(join_handle.join(), "after setup failed");
@@ -159,11 +313,26 @@ impl HookThread {
     }
 
     pub fn set_search_active(&self, active: bool) {
-        self.search_active.store(active, Ordering::Relaxed);
+        self.flags.set(SEARCH_ACTIVE, active);
     }
 
     pub fn set_overlay_active(&self, active: bool) {
-        self.overlay_active.store(active, Ordering::Release);
+        self.flags.set(OVERLAY_ACTIVE, active);
+    }
+
+    /// Cancels interception across modal boundaries without touching the UI's restored flags.
+    pub fn set_interception_suspended(&self, suspended: bool) {
+        self.flags.suspend(suspended);
+    }
+
+    /// Suspends interception until drop without borrowing the hook owner across a modal call.
+    /// Restores the saved search, overlay, and suspension flags, including an outer suspension.
+    pub fn suspend_interception(&self) -> HookInterceptionGuard {
+        HookInterceptionGuard::new(Arc::clone(&self.flags))
+    }
+
+    pub fn action_is_current(&self, wparam: WPARAM) -> bool {
+        self.flags.action_is_current(wparam)
     }
 
     pub fn set_remote_desktop_passthrough(&self, policy: PassthroughPolicy) -> Result<(), String> {
@@ -204,7 +373,7 @@ impl Drop for HookThread {
 }
 
 pub fn decode_action(wparam: WPARAM, lparam: LPARAM) -> Option<InputAction> {
-    match wparam.0 {
+    match wparam.0 & ACTION_CODE_MASK {
         ACTION_SWITCH => i32::try_from(lparam.0).ok().map(InputAction::Switch),
         ACTION_ACTIVATE_POSITION => usize::try_from(lparam.0)
             .ok()
@@ -233,12 +402,7 @@ pub fn decode_action(wparam: WPARAM, lparam: LPARAM) -> Option<InputAction> {
 }
 
 fn run_hook_thread(
-    target: HWND,
-    target_thread_id: u32,
-    settings: HookSettings,
-    search_active: Arc<AtomicBool>,
-    overlay_active: Arc<AtomicBool>,
-    remote_desktop_passthrough: Arc<AtomicBool>,
+    mut hook_context: HookContext,
     ready: &SyncSender<Result<u32, String>>,
 ) -> Result<(), String> {
     let thread_id = unsafe {
@@ -252,19 +416,9 @@ fn run_hook_thread(
         let _queue_ready = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
     }
 
-    CONTEXT.with(|context| {
-        *context.borrow_mut() = Some(HookContext {
-            target,
-            state: HookState::default(),
-            settings,
-            search_active,
-            overlay_active,
-            remote_desktop_passthrough,
-            target_thread_id,
-            hook_thread_id: thread_id,
-            pending_errors: 0,
-        });
-    });
+    hook_context.hook_thread_id = thread_id;
+    RECOVERY_FLAGS.with(|flags| *flags.borrow_mut() = Some(Arc::clone(&hook_context.flags)));
+    CONTEXT.with(|context| *context.borrow_mut() = Some(hook_context));
 
     let module = unsafe {
         // SAFETY: None requests a borrowed handle for this executable module.
@@ -290,6 +444,15 @@ fn run_hook_thread(
         }
     };
 
+    let recovery = match KeyboardRecoveryWatcher::install() {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            remove_hook(mouse, "mouse");
+            remove_hook(keyboard, "keyboard");
+            return Err(error);
+        }
+    };
+
     if let Err(error) = ready.send(Ok(thread_id)) {
         remove_hook(mouse, "mouse");
         remove_hook(keyboard, "keyboard");
@@ -309,6 +472,13 @@ fn run_hook_thread(
         if result.0 == 0 {
             break Ok(());
         }
+        if message.message == WM_RECONCILE_KEYBOARD
+            || (message.message == WM_TIMER && message.wParam.0 == recovery.timer)
+        {
+            RECOVERY_QUEUED.set(false);
+            recover_keyboard_state(message.time);
+            continue;
+        }
         if message.message == WM_RESET_GESTURES {
             reset_context();
             continue;
@@ -325,8 +495,205 @@ fn run_hook_thread(
 
     remove_hook(mouse, "mouse");
     remove_hook(keyboard, "keyboard");
+    drop(recovery);
     CONTEXT.with(|context| *context.borrow_mut() = None);
+    RECOVERY_FLAGS.with(|flags| *flags.borrow_mut() = None);
     loop_result
+}
+
+struct KeyboardRecoveryWatcher {
+    hook: HWINEVENTHOOK,
+    timer: usize,
+}
+
+impl KeyboardRecoveryWatcher {
+    fn install() -> Result<Self, String> {
+        let hook = unsafe {
+            // SAFETY: the out-of-context callback has a static lifetime and the required ABI.
+            // This message-loop thread owns registration and unregistration.
+            SetWinEventHook(
+                EVENT_SYSTEM_DESKTOPSWITCH,
+                EVENT_SYSTEM_DESKTOPSWITCH,
+                None,
+                Some(desktop_switch_proc),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            )
+        };
+        if hook.is_invalid() {
+            return Err(format!(
+                "Could not watch input desktop changes: {}",
+                Error::from_thread()
+            ));
+        }
+        let mut watcher = Self { hook, timer: 0 };
+        watcher.timer = unsafe {
+            // SAFETY: no window or callback is supplied; the timer posts to this owning thread.
+            SetTimer(None, 0, 100, None)
+        };
+        if watcher.timer == 0 {
+            return Err(format!(
+                "Could not start keyboard recovery timer: {}",
+                Error::from_thread()
+            ));
+        }
+        Ok(watcher)
+    }
+}
+
+impl Drop for KeyboardRecoveryWatcher {
+    fn drop(&mut self) {
+        if self.timer != 0 {
+            let result = unsafe {
+                // SAFETY: this thread owns the timer and removes it exactly once.
+                KillTimer(None, self.timer)
+            };
+            if let Err(error) = result {
+                eprintln!("Could not remove keyboard recovery timer: {error}");
+            }
+        }
+        let removed = unsafe {
+            // SAFETY: this thread owns the successful registration and removes it exactly once.
+            UnhookWinEvent(self.hook)
+        };
+        if !removed.as_bool() {
+            eprintln!(
+                "Could not remove input desktop watcher: {}",
+                Error::from_thread()
+            );
+        }
+    }
+}
+
+fn note_desktop_boundary(time: u32) {
+    DESKTOP_BOUNDARY.with(|pending| {
+        if pending
+            .get()
+            .is_none_or(|previous| timestamp_at_or_after(time, previous))
+        {
+            pending.set(Some(time));
+        }
+    });
+    RECOVERY_FLAGS.with(|flags| {
+        if let Some(flags) = flags.borrow().as_ref() {
+            flags.recovery_pending.store(true, Ordering::Release);
+        } else {
+            let _marked = process_with_context(|context| {
+                context
+                    .flags
+                    .recovery_pending
+                    .store(true, Ordering::Release);
+            });
+        }
+    });
+}
+
+unsafe extern "system" fn desktop_switch_proc(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    _hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    time: u32,
+) {
+    let _contained = std::panic::catch_unwind(|| {
+        if event != EVENT_SYSTEM_DESKTOPSWITCH {
+            return;
+        }
+        note_desktop_boundary(time);
+        if !RECOVERY_QUEUED.replace(true) {
+            let result = unsafe {
+                // SAFETY: out-of-context WinEvents run on this hook-owning thread, whose message
+                // queue already exists. Only scalar values are posted; no input state is sampled.
+                PostThreadMessageW(
+                    GetCurrentThreadId(),
+                    WM_RECONCILE_KEYBOARD,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+            };
+            if result.is_err() {
+                // The periodic owning-thread check retries recovery if this wake-up was dropped.
+                RECOVERY_QUEUED.set(false);
+            }
+        }
+    });
+}
+
+fn own_desktop_receives_input() -> Result<bool, Error> {
+    let mut active = BOOL::default();
+    unsafe {
+        // SAFETY: the desktop is borrowed from this thread and must not be closed. UOI_IO
+        // writes exactly one BOOL into the initialized buffer; no thread queues are attached.
+        let desktop = GetThreadDesktop(GetCurrentThreadId())?;
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_IO,
+            Some((&raw mut active).cast()),
+            u32::try_from(core::mem::size_of::<BOOL>()).unwrap_or(4),
+            None,
+        )?;
+    }
+    Ok(active.as_bool())
+}
+
+fn recover_keyboard_state(now: u32) {
+    recover_keyboard_state_with(now, own_desktop_receives_input, || {
+        MODIFIER_KEYS.map(|key| key_pressed(key.0))
+    });
+}
+
+fn recover_keyboard_state_with(
+    now: u32,
+    mut desktop_active: impl FnMut() -> Result<bool, Error>,
+    sample: impl FnOnce() -> [bool; 8],
+) {
+    // Only message-loop work calls this function. Never interpret inaccessible-desktop zeros
+    // from GetAsyncKeyState as an all-up keyboard, and retain pending recovery on query failure.
+    match desktop_active() {
+        Ok(true) => {}
+        inactive => {
+            if DESKTOP_BOUNDARY.get().is_none() {
+                note_desktop_boundary(now);
+                if let Err(error) = inactive {
+                    eprintln!("Could not inspect input desktop: {error}");
+                }
+            }
+            return;
+        }
+    }
+    let Some(boundary) = DESKTOP_BOUNDARY.get() else {
+        return;
+    };
+    let Some(before) = process_with_context(|context| context.keyboard_state.modifier_observations)
+    else {
+        return;
+    };
+    // Sample outside the RefCell borrow: reentrant hook events can record fresh evidence.
+    let down = sample();
+    if desktop_active() != Ok(true) || DESKTOP_BOUNDARY.get() != Some(boundary) {
+        return;
+    }
+    let _recovered = process_with_context(|context| {
+        context
+            .keyboard_state
+            .rebase_modifiers(boundary, before, down, &mut context.state);
+        // Invalidate queued actions without overwriting concurrent UI flag changes.
+        let _previous =
+            context
+                .flags
+                .value
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    Some(next_hook_generation() | (value & 7))
+                });
+        DESKTOP_BOUNDARY.set(None);
+        context
+            .flags
+            .recovery_pending
+            .store(false, Ordering::Release);
+    });
 }
 
 fn remove_hook(hook: HHOOK, kind: &str) {
@@ -351,14 +718,49 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     }
 
     std::panic::catch_unwind(|| {
-        finish_callback(
-            code,
-            wparam,
-            lparam,
+        finish_callback_with(
             process_keyboard_message(wparam, lparam),
+            post_actions,
+            reset_context,
+            || forward_keyboard(code, wparam, lparam),
         )
     })
-    .unwrap_or_else(|_| call_next(code, wparam, lparam))
+    .unwrap_or_else(|_| forward_keyboard(code, wparam, lparam))
+}
+
+fn forward_keyboard(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    forward_keyboard_with(
+        || call_next(code, wparam, lparam),
+        || commit_keyboard_delivery(wparam, lparam),
+    )
+}
+
+fn forward_keyboard_with(next: impl FnOnce() -> LRESULT, commit: impl FnOnce()) -> LRESULT {
+    let result = next();
+    if result.0 == 0 {
+        commit();
+    }
+    result
+}
+
+fn commit_keyboard_delivery(wparam: WPARAM, lparam: LPARAM) {
+    let transition = match u32::try_from(wparam.0) {
+        Ok(WM_KEYDOWN | WM_SYSKEYDOWN) => KeyTransition::Pressed,
+        Ok(WM_KEYUP | WM_SYSKEYUP) => KeyTransition::Released,
+        _ => return,
+    };
+    let data = unsafe {
+        // SAFETY: called only while handling the original nonnegative keyboard hook callback;
+        // Windows keeps its KBDLLHOOKSTRUCT alive until we return to the hook chain.
+        (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
+    };
+    if let Some(data) = data {
+        let _committed = process_with_context(|context| {
+            context
+                .keyboard_state
+                .commit_forwarded(data.vkCode, transition);
+        });
+    }
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -394,17 +796,21 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     };
 
     let (mut outcome, replayed_key_events) = process_with_context(|context| {
-        let search_active = context.search_active.load(Ordering::Relaxed);
+        context
+            .keyboard_state
+            .observe_at(data.vkCode, transition, data.time);
+        let flags = context.sync_interception();
+        let search_active = flags & SEARCH_ACTIVE != 0;
         context
             .state
-            .set_overlay_active(context.overlay_active.load(Ordering::Acquire));
+            .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
         let mut settings = PassthroughPolicy::from_bypass_flag(
             context.remote_desktop_passthrough.load(Ordering::Acquire),
         )
         .apply(context.settings);
         settings.search_active = search_active;
         let text = if search_active && transition == KeyTransition::Pressed {
-            translate_search_character(data, context.target_thread_id)
+            translate_search_character(data, context.target_thread_id, &context.keyboard_state)
         } else {
             None
         };
@@ -442,9 +848,10 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
         _ => return None,
     };
     let (mut outcome, replayed_mouse_event) = process_with_context(|context| {
+        let flags = context.sync_interception();
         context
             .state
-            .set_overlay_active(context.overlay_active.load(Ordering::Acquire));
+            .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
         let outcome = context.state.process_mouse(event, context.settings);
         let replayed_mouse_event = context.state.take_replayed_mouse_event();
         (outcome, replayed_mouse_event)
@@ -505,7 +912,10 @@ fn post_actions(outcome: HookOutcome) -> bool {
         .try_with(|context| {
             let mut context = context.try_borrow_mut().ok()?;
             let context = context.as_mut()?;
-            Some(post_context_actions(context, outcome, post_action))
+            let generation = context.interception_generation;
+            Some(post_context_actions(context, outcome, |target, action| {
+                post_action(target, action, generation)
+            }))
         })
         .ok()
         .flatten()
@@ -518,21 +928,34 @@ fn post_context_actions(
     mut post: impl FnMut(HWND, InputAction) -> bool,
 ) -> bool {
     for action in outcome.actions() {
+        if context.flags.recovery_pending.load(Ordering::Acquire)
+            || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
+            || context.interception_generation & INTERCEPTION_SUSPENDED != 0
+        {
+            // Keep release ownership even when a modal boundary races with this callback.
+            return true;
+        }
         let opens_overlay = matches!(
             action,
             InputAction::Switch(_) | InputAction::RightButtonPressed
         );
-        if opens_overlay {
-            context.overlay_active.store(true, Ordering::Release);
-            context
-                .search_active
-                .store(context.settings.typed_search, Ordering::Relaxed);
+        if opens_overlay
+            && !context.flags.update_overlay(
+                context.interception_generation,
+                true,
+                context.settings.typed_search,
+            )
+        {
+            context.state.reset_gestures();
+            return true;
         }
         if !post(context.target, action) {
             context.record_error(HOOK_ERROR_POST_ACTION);
             if opens_overlay {
-                context.overlay_active.store(false, Ordering::Release);
-                context.search_active.store(false, Ordering::Relaxed);
+                let _cleared =
+                    context
+                        .flags
+                        .update_overlay(context.interception_generation, false, false);
             }
             return false;
         }
@@ -540,7 +963,7 @@ fn post_context_actions(
     true
 }
 
-fn post_action(target: HWND, action: InputAction) -> bool {
+fn post_action(target: HWND, action: InputAction, generation: usize) -> bool {
     let (code, value) = match action {
         InputAction::Switch(delta) => (ACTION_SWITCH, delta as isize),
         InputAction::Navigate(delta) => (ACTION_NAVIGATE, delta as isize),
@@ -569,7 +992,12 @@ fn post_action(target: HWND, action: InputAction) -> bool {
     unsafe {
         // SAFETY: `target` is the UI HWND supplied at hook creation; PostMessageW copies the two
         // integer payloads and retains no Rust references.
-        PostMessageW(Some(target), WM_HOOK_ACTION, WPARAM(code), LPARAM(value))
+        PostMessageW(
+            Some(target),
+            WM_HOOK_ACTION,
+            action_wparam(code, generation),
+            LPARAM(value),
+        )
     }
     .is_ok()
 }
@@ -740,17 +1168,170 @@ const fn is_extended_virtual_key(virtual_key: u16) -> bool {
     )
 }
 
-fn translate_search_character(data: &KBDLLHOOKSTRUCT, target_thread_id: u32) -> Option<char> {
-    let mut keyboard_state = [0_u8; 256];
-    unsafe {
-        // SAFETY: the complete fixed-size keyboard-state buffer is writable for this call.
-        GetKeyboardState(&mut keyboard_state).ok()?;
+struct KeyboardState {
+    keys: [u8; 256],
+    forwarded_toggle_keys: u8,
+    modifier_observations: [ModifierObservation; 8],
+}
+
+const MODIFIER_KEYS: [VIRTUAL_KEY; 8] = [
+    VK_LSHIFT,
+    VK_RSHIFT,
+    VK_LCONTROL,
+    VK_RCONTROL,
+    VK_LMENU,
+    VK_RMENU,
+    VK_LWIN,
+    VK_RWIN,
+];
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+struct ModifierObservation {
+    time: Option<u32>,
+    sequence: u64,
+}
+
+const fn timestamp_at_or_after(time: u32, boundary: u32) -> bool {
+    time.wrapping_sub(boundary) < (1 << 31)
+}
+
+impl Default for KeyboardState {
+    fn default() -> Self {
+        Self {
+            keys: [0; 256],
+            forwarded_toggle_keys: 0,
+            modifier_observations: [ModifierObservation::default(); 8],
+        }
     }
-    for key in [VK_MENU, VK_LMENU, VK_RMENU] {
-        keyboard_state[usize::from(key.0)] = 0;
+}
+
+impl KeyboardState {
+    fn snapshot() -> Result<Self, String> {
+        let mut keys = [0; 256];
+        unsafe {
+            // SAFETY: the complete fixed-size buffer is writable. This runs on the owning UI
+            // thread before hooks start, so toggle bits are seeded from its input queue.
+            GetKeyboardState(&mut keys)
+        }
+        .map_err(|error| format!("Could not read initial keyboard state: {error}"))?;
+        for key in 0_u16..=255 {
+            keys[usize::from(key)] =
+                (keys[usize::from(key)] & 1) | if key_pressed(key) { 0x80 } else { 0 };
+        }
+        let forwarded_toggle_keys = [VK_CAPITAL, VK_NUMLOCK, VK_SCROLL]
+            .into_iter()
+            .enumerate()
+            .fold(0, |mask, (index, key)| {
+                mask | if keys[usize::from(key.0)] & 0x80 != 0 {
+                    1 << index
+                } else {
+                    0
+                }
+            });
+        Ok(Self {
+            keys,
+            forwarded_toggle_keys,
+            ..Self::default()
+        })
     }
-    let virtual_key = u8::try_from(data.vkCode).ok()?;
-    keyboard_state[usize::from(virtual_key)] |= 0x80;
+
+    fn observe_at(&mut self, virtual_key: u32, transition: KeyTransition, time: u32) {
+        self.observe(virtual_key, transition);
+        if let Some(index) = MODIFIER_KEYS
+            .into_iter()
+            .position(|key| u32::from(key.0) == virtual_key)
+        {
+            let observation = &mut self.modifier_observations[index];
+            observation.time = Some(time);
+            observation.sequence = observation.sequence.wrapping_add(1);
+        }
+    }
+
+    fn rebase_modifiers(
+        &mut self,
+        boundary: u32,
+        before: [ModifierObservation; 8],
+        down: [bool; 8],
+        state: &mut HookState,
+    ) {
+        state.reset_gestures();
+        for (index, key) in MODIFIER_KEYS.into_iter().enumerate() {
+            let observed = self.modifier_observations[index];
+            if observed.sequence != before[index].sequence
+                || observed
+                    .time
+                    .is_some_and(|time| timestamp_at_or_after(time, boundary))
+            {
+                continue;
+            }
+            self.keys[usize::from(key.0)] = if down[index] { 0x80 } else { 0 };
+            state.rebase_modifier(decode_virtual_key(u32::from(key.0)), down[index]);
+        }
+        for (aggregate, left, right) in [
+            (VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
+            (VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
+            (VK_MENU, VK_LMENU, VK_RMENU),
+        ] {
+            self.keys[usize::from(aggregate.0)] =
+                (self.keys[usize::from(left.0)] | self.keys[usize::from(right.0)]) & 0x80;
+        }
+    }
+
+    fn observe(&mut self, virtual_key: u32, transition: KeyTransition) {
+        let Some(state) = usize::try_from(virtual_key)
+            .ok()
+            .and_then(|key| self.keys.get_mut(key))
+        else {
+            return;
+        };
+        let pressed = transition == KeyTransition::Pressed;
+        *state = (*state & 1) | if pressed { 0x80 } else { 0 };
+        for (aggregate, left, right) in [
+            (VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
+            (VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
+            (VK_MENU, VK_LMENU, VK_RMENU),
+        ] {
+            if virtual_key == u32::from(left.0) || virtual_key == u32::from(right.0) {
+                self.keys[usize::from(aggregate.0)] =
+                    (self.keys[usize::from(left.0)] | self.keys[usize::from(right.0)]) & 0x80;
+            }
+        }
+    }
+
+    fn commit_forwarded(&mut self, virtual_key: u32, transition: KeyTransition) {
+        let Some(index) = [VK_CAPITAL, VK_NUMLOCK, VK_SCROLL]
+            .into_iter()
+            .position(|key| u32::from(key.0) == virtual_key)
+        else {
+            return;
+        };
+        let mask = 1 << index;
+        if transition == KeyTransition::Pressed {
+            if self.forwarded_toggle_keys & mask == 0 {
+                self.keys[virtual_key as usize] ^= 1;
+            }
+            self.forwarded_toggle_keys |= mask;
+        } else {
+            self.forwarded_toggle_keys &= !mask;
+        }
+    }
+
+    fn search_state(&self) -> [u8; 256] {
+        let mut keys = self.keys;
+        // Alt belongs to the switch gesture, not the user's search text.
+        for key in [VK_MENU, VK_LMENU, VK_RMENU] {
+            keys[usize::from(key.0)] = 0;
+        }
+        keys
+    }
+}
+
+fn translate_search_character(
+    data: &KBDLLHOOKSTRUCT,
+    target_thread_id: u32,
+    observed: &KeyboardState,
+) -> Option<char> {
+    let keyboard_state = observed.search_state();
     let mut text = [0_u16; 4];
     let count = unsafe {
         // SAFETY: both buffers are initialized for their full lengths; the keyboard layout is
@@ -812,6 +1393,473 @@ pub(crate) fn decode_virtual_key(virtual_key: u32) -> Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_context() -> HookContext {
+        HookContext {
+            target: HWND::default(),
+            state: HookState::default(),
+            settings: HookSettings::default(),
+            remote_desktop_passthrough: Arc::new(AtomicBool::new(false)),
+            target_thread_id: 0,
+            hook_thread_id: 0,
+            pending_errors: 0,
+            flags: Arc::new(HookFlags::default()),
+            interception_generation: 0,
+            keyboard_state: KeyboardState::default(),
+            recovering: false,
+        }
+    }
+
+    #[test]
+    fn queued_destructive_action_cannot_cross_a_menu_or_hook_restart() {
+        let flags = Arc::new(HookFlags::new());
+        let stale = action_wparam(ACTION_WINDOW_COMMAND, flags.load());
+        assert_eq!(
+            decode_action(stale, LPARAM(8)),
+            Some(InputAction::WindowCommand(
+                alttabio::input::WindowCommand::Terminate
+            ))
+        );
+        assert!(flags.action_is_current(stale));
+        {
+            let _menu = HookInterceptionGuard::new(Arc::clone(&flags));
+            assert!(!flags.action_is_current(stale));
+        }
+        assert!(!flags.action_is_current(stale));
+        let current = action_wparam(ACTION_WINDOW_COMMAND, flags.load());
+        assert!(flags.action_is_current(current));
+        assert!(!HookFlags::new().action_is_current(current));
+    }
+
+    #[test]
+    fn swallowed_and_replayed_toggles_follow_actual_chain_delivery() {
+        let mut context = test_context();
+        let settings = context.settings;
+        let _win = context.state.process_key(
+            KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
+            settings,
+        );
+        let _tab = context
+            .state
+            .process_key(KeyEvent::pressed(Key::Tab, Modifiers::default()), settings);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        for message in [WM_KEYDOWN, WM_KEYDOWN, WM_KEYUP] {
+            let data = KBDLLHOOKSTRUCT {
+                vkCode: u32::from(VK_CAPITAL.0),
+                ..KBDLLHOOKSTRUCT::default()
+            };
+            let wparam = WPARAM(message as usize);
+            let lparam = LPARAM((&raw const data) as isize);
+            let outcome = process_keyboard_message(wparam, lparam);
+            let result = finish_callback_with(
+                outcome,
+                |_| true,
+                || {},
+                || {
+                    commit_keyboard_delivery(wparam, lparam);
+                    LRESULT(0)
+                },
+            );
+            assert_eq!(result, LRESULT(1));
+            assert_eq!(
+                process_with_context(|context| context.keyboard_state.keys
+                    [usize::from(VK_CAPITAL.0)]
+                    & 1),
+                Some(0)
+            );
+        }
+        // Tagged SendInput replay bypasses interception, but only commits when lower hooks agree.
+        let data = KBDLLHOOKSTRUCT {
+            vkCode: u32::from(VK_CAPITAL.0),
+            dwExtraInfo: REPLAYED_INPUT_MARKER,
+            ..KBDLLHOOKSTRUCT::default()
+        };
+        let wparam = WPARAM(WM_KEYDOWN as usize);
+        let lparam = LPARAM((&raw const data) as isize);
+        assert_eq!(process_keyboard_message(wparam, lparam), None);
+        assert_eq!(
+            forward_keyboard_with(|| LRESULT(1), || commit_keyboard_delivery(wparam, lparam)),
+            LRESULT(1)
+        );
+        assert_eq!(
+            process_with_context(
+                |context| context.keyboard_state.keys[usize::from(VK_CAPITAL.0)] & 1
+            ),
+            Some(0)
+        );
+        for _repeat in 0..2 {
+            assert_eq!(
+                forward_keyboard_with(|| LRESULT(0), || commit_keyboard_delivery(wparam, lparam)),
+                LRESULT(0)
+            );
+            assert_eq!(
+                process_with_context(|context| context.keyboard_state.keys
+                    [usize::from(VK_CAPITAL.0)]
+                    & 1),
+                Some(1)
+            );
+        }
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    #[test]
+    fn desktop_rebase_clears_old_modifiers_but_preserves_fresh_suppressed_shift() {
+        for fresh in [false, true] {
+            let mut context = test_context();
+            let alt = Modifiers {
+                alt: true,
+                ..Modifiers::default()
+            };
+            let _tab = context
+                .state
+                .process_key(KeyEvent::pressed(Key::Tab, alt), context.settings);
+            let _tab_up = context
+                .state
+                .process_key(KeyEvent::released(Key::Tab, alt), context.settings);
+            let shift = context
+                .state
+                .process_key(KeyEvent::pressed(Key::LeftShift, alt), context.settings);
+            assert!(shift.suppress);
+            context.keyboard_state.observe_at(
+                u32::from(VK_LSHIFT.0),
+                KeyTransition::Pressed,
+                if fresh { 310 } else { 100 },
+            );
+            let before = context.keyboard_state.modifier_observations;
+            context
+                .keyboard_state
+                .rebase_modifiers(300, before, [false; 8], &mut context.state);
+            assert_eq!(
+                context.keyboard_state.keys[usize::from(VK_SHIFT.0)] != 0,
+                fresh
+            );
+            let direction = context
+                .state
+                .process_key(KeyEvent::pressed(Key::Tab, alt), context.settings);
+            assert_eq!(
+                direction.actions().next(),
+                Some(InputAction::Switch(if fresh { -1 } else { 1 }))
+            );
+            let release = context
+                .state
+                .process_key(KeyEvent::released(Key::LeftShift, alt), context.settings);
+            assert!(release.suppress);
+        }
+    }
+
+    #[test]
+    fn desktop_rebase_preserves_observations_during_snapshot_and_timestamp_wrap() {
+        let mut context = test_context();
+        context
+            .keyboard_state
+            .observe_at(u32::from(VK_LSHIFT.0), KeyTransition::Pressed, 100);
+        let before = context.keyboard_state.modifier_observations;
+        context
+            .keyboard_state
+            .observe_at(u32::from(VK_LSHIFT.0), KeyTransition::Released, 400);
+        context
+            .keyboard_state
+            .observe_at(u32::from(VK_RSHIFT.0), KeyTransition::Pressed, 20);
+        context.keyboard_state.rebase_modifiers(
+            u32::MAX - 10,
+            before,
+            [true; 8],
+            &mut context.state,
+        );
+        assert_eq!(context.keyboard_state.keys[usize::from(VK_LSHIFT.0)], 0);
+        assert_eq!(context.keyboard_state.keys[usize::from(VK_RSHIFT.0)], 0x80);
+        assert!(timestamp_at_or_after(20, u32::MAX - 10));
+        assert!(!timestamp_at_or_after(u32::MAX - 10, 20));
+    }
+
+    #[test]
+    fn desktop_recovery_waits_for_access_and_coalesces_a_complete_gap() {
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
+        DESKTOP_BOUNDARY.set(None);
+        note_desktop_boundary(200);
+        note_desktop_boundary(300);
+        note_desktop_boundary(250);
+        assert_eq!(DESKTOP_BOUNDARY.get(), Some(300));
+        for active in [Ok(false), Err(Error::empty())] {
+            recover_keyboard_state_with(
+                400,
+                || active.clone(),
+                || panic!("must not sample an inaccessible desktop"),
+            );
+            assert_eq!(DESKTOP_BOUNDARY.get(), Some(300));
+            assert_eq!(
+                process_with_context(|context| context
+                    .flags
+                    .recovery_pending
+                    .load(Ordering::Acquire)),
+                Some(true)
+            );
+        }
+        recover_keyboard_state_with(400, || Ok(true), || [false; 8]);
+        assert_eq!(DESKTOP_BOUNDARY.get(), None);
+        assert_eq!(
+            process_with_context(|context| context.flags.recovery_pending.load(Ordering::Acquire)),
+            Some(false)
+        );
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    #[test]
+    fn action_epoch_encoding_and_validation_use_the_same_wrap_mask() {
+        for generation in [0, 8, ACTION_EPOCH_MASK << 3, usize::MAX & !7] {
+            let flags = HookFlags::with_value(generation);
+            let action = action_wparam(ACTION_CLOSE_SELECTED, generation);
+            assert_eq!(action.0 & ACTION_CODE_MASK, ACTION_CLOSE_SELECTED);
+            assert_eq!(action.0 >> 8, (generation >> 3) & ACTION_EPOCH_MASK);
+            assert!(flags.action_is_current(action));
+            assert_eq!(
+                decode_action(action, LPARAM(0)),
+                Some(InputAction::CloseSelected)
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_suspension_restores_every_flag_combination_with_new_generations() {
+        for saved_flags in 0..=7 {
+            let flags = Arc::new(HookFlags::with_value(saved_flags));
+            let initial_generation = flags.load() & !7;
+            let guard = HookInterceptionGuard::new(Arc::clone(&flags));
+            let suspended = flags.load();
+            assert_eq!(suspended & 7, INTERCEPTION_SUSPENDED);
+            assert_ne!(suspended & !7, initial_generation);
+            assert!(!flags.update_overlay(initial_generation, true, true));
+            flags.set(SEARCH_ACTIVE, true);
+            flags.set(OVERLAY_ACTIVE, true);
+            drop(guard);
+            assert_eq!(flags.load() & 7, saved_flags);
+            assert_ne!(flags.load() & !7, suspended & !7);
+            assert!(!flags.update_overlay(suspended & !OVERLAY_FLAGS, true, true));
+        }
+    }
+
+    #[test]
+    fn nested_scoped_suspension_restores_outer_state_without_resuming_it() {
+        let flags = Arc::new(HookFlags::with_value(OVERLAY_FLAGS));
+        let outer = HookInterceptionGuard::new(Arc::clone(&flags));
+        flags.set(SEARCH_ACTIVE, true);
+        {
+            let _inner = HookInterceptionGuard::new(Arc::clone(&flags));
+            assert_eq!(flags.load() & 7, INTERCEPTION_SUSPENDED);
+            flags.set(OVERLAY_ACTIVE, true);
+        }
+        assert_eq!(flags.load() & 7, INTERCEPTION_SUSPENDED | SEARCH_ACTIVE);
+        drop(outer);
+        assert_eq!(flags.load() & 7, OVERLAY_FLAGS);
+    }
+
+    #[test]
+    fn scoped_suspension_restores_flags_during_unwinding() {
+        let flags = Arc::new(HookFlags::with_value(OVERLAY_FLAGS));
+        let result = std::panic::catch_unwind(|| {
+            let _guard = HookInterceptionGuard::new(Arc::clone(&flags));
+            panic!("modal call failed");
+        });
+        assert!(result.is_err());
+        assert_eq!(flags.load() & 7, OVERLAY_FLAGS);
+    }
+
+    #[test]
+    fn modal_boundaries_prevent_stale_flag_publication_and_preserve_restored_flags() {
+        let mut context = test_context();
+        let flags = Arc::clone(&context.flags);
+        let outcome = context.state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            context.settings,
+        );
+        flags.suspend(true);
+        assert!(!flags.update_overlay(0, true, true));
+        assert!(post_context_actions(&mut context, outcome, |_, _| panic!(
+            "suspended action was posted"
+        )));
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        flags.set(OVERLAY_ACTIVE, true);
+        flags.set(SEARCH_ACTIVE, true);
+        flags.suspend(false);
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
+        // The entire modal lifetime occurred between callbacks; its generation still cancels Tab.
+        assert_eq!(context.sync_interception(), OVERLAY_FLAGS);
+        let release = context.state.process_key(
+            KeyEvent::released(Key::Alt, Modifiers::default()),
+            context.settings,
+        );
+        assert!(release.actions().next().is_none());
+        assert!(!flags.update_overlay(0, false, false));
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
+    }
+
+    #[test]
+    fn repeated_ui_synchronization_does_not_cancel_a_live_gesture() {
+        let mut context = test_context();
+        let _tab = context.state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            context.settings,
+        );
+        context.flags.set(OVERLAY_ACTIVE, true);
+        context.flags.suspend(false);
+        assert_eq!(context.sync_interception(), OVERLAY_ACTIVE);
+        assert_eq!(
+            context
+                .state
+                .process_key(
+                    KeyEvent::released(Key::Alt, Modifiers::default()),
+                    context.settings
+                )
+                .actions()
+                .next(),
+            Some(InputAction::AltReleased)
+        );
+        context.flags.suspend(true);
+        let suspended_generation = context.flags.load();
+        context.flags.suspend(true);
+        assert_eq!(context.flags.load(), suspended_generation);
+    }
+
+    #[test]
+    fn suspension_during_mouse_action_delivery_stops_remaining_actions() {
+        let mut context = test_context();
+        let flags = Arc::clone(&context.flags);
+        let _down = context
+            .state
+            .process_mouse(MouseEvent::RightButtonPressed, context.settings);
+        let outcome = context
+            .state
+            .process_mouse(MouseEvent::Wheel(120), context.settings);
+        let mut posts = 0;
+        assert!(post_context_actions(&mut context, outcome, |_, action| {
+            posts += 1;
+            assert_eq!(action, InputAction::RightButtonPressed);
+            flags.suspend(true);
+            true
+        }));
+        assert_eq!(posts, 1);
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        assert_eq!(context.sync_interception(), 0);
+        let release = context
+            .state
+            .process_mouse(MouseEvent::RightButtonReleased, context.settings);
+        assert!(release.suppress);
+        assert!(release.actions().next().is_none());
+    }
+
+    #[test]
+    fn observed_modifiers_combine_both_sides_and_toggle_only_on_first_press() {
+        let mut state = KeyboardState::default();
+        for (aggregate, left, right) in [
+            (VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
+            (VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
+            (VK_MENU, VK_LMENU, VK_RMENU),
+        ] {
+            state.observe(u32::from(left.0), KeyTransition::Pressed);
+            state.observe(u32::from(right.0), KeyTransition::Pressed);
+            state.observe(u32::from(left.0), KeyTransition::Released);
+            assert_eq!(state.keys[usize::from(aggregate.0)], 0x80);
+            state.observe(u32::from(right.0), KeyTransition::Released);
+            assert_eq!(state.keys[usize::from(aggregate.0)], 0);
+        }
+        for key in [VK_CAPITAL, VK_NUMLOCK, VK_SCROLL] {
+            state.observe(u32::from(key.0), KeyTransition::Pressed);
+            state.commit_forwarded(u32::from(key.0), KeyTransition::Pressed);
+            state.observe(u32::from(key.0), KeyTransition::Pressed);
+            state.commit_forwarded(u32::from(key.0), KeyTransition::Pressed);
+            assert_eq!(state.keys[usize::from(key.0)], 0x81);
+            state.observe(u32::from(key.0), KeyTransition::Released);
+            state.commit_forwarded(u32::from(key.0), KeyTransition::Released);
+            assert_eq!(state.keys[usize::from(key.0)], 1);
+            state.observe(u32::from(key.0), KeyTransition::Pressed);
+            state.commit_forwarded(u32::from(key.0), KeyTransition::Pressed);
+            assert_eq!(state.keys[usize::from(key.0)], 0x80);
+        }
+    }
+
+    #[test]
+    fn translated_punctuation_uses_observed_shift_including_suppressed_presses() {
+        let data = KBDLLHOOKSTRUCT {
+            vkCode: u32::from(VK_1.0),
+            ..KBDLLHOOKSTRUCT::default()
+        };
+        let mut state = KeyboardState::default();
+        state.observe(data.vkCode, KeyTransition::Pressed);
+        let plain = translate_search_character(&data, 0, &state);
+        let mut expected = KeyboardState::default();
+        expected.keys[usize::from(VK_SHIFT.0)] = 0x80;
+        expected.keys[usize::from(VK_LSHIFT.0)] = 0x80;
+        expected.keys[usize::from(VK_1.0)] = 0x80;
+        let shifted = translate_search_character(&data, 0, &expected);
+        assert!(shifted.is_some());
+        assert_ne!(plain, shifted);
+        state.observe(u32::from(VK_LSHIFT.0), KeyTransition::Pressed);
+        state.observe(u32::from(VK_LMENU.0), KeyTransition::Pressed);
+        assert_eq!(translate_search_character(&data, 0, &state), shifted);
+        state.observe(data.vkCode, KeyTransition::Pressed);
+        assert_eq!(translate_search_character(&data, 0, &state), shifted);
+        state.observe(u32::from(VK_LSHIFT.0), KeyTransition::Released);
+        assert_eq!(translate_search_character(&data, 0, &state), plain);
+    }
+
+    #[test]
+    fn suspended_keyboard_callbacks_keep_modifier_and_caps_state_for_resume() {
+        let context = test_context();
+        let flags = Arc::clone(&context.flags);
+        flags.suspend(true);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        for key in [VK_LSHIFT, VK_CAPITAL, VK_CAPITAL] {
+            let data = KBDLLHOOKSTRUCT {
+                vkCode: u32::from(key.0),
+                ..KBDLLHOOKSTRUCT::default()
+            };
+            assert_eq!(
+                process_keyboard_message(
+                    WPARAM(WM_KEYDOWN as usize),
+                    LPARAM((&raw const data) as isize)
+                ),
+                Some(HookOutcome::default())
+            );
+            commit_keyboard_delivery(
+                WPARAM(WM_KEYDOWN as usize),
+                LPARAM((&raw const data) as isize),
+            );
+        }
+        flags.set(SEARCH_ACTIVE, true);
+        flags.suspend(false);
+        let context = CONTEXT.with(|slot| slot.borrow_mut().take());
+        let Some(mut context) = context else {
+            panic!("missing test context")
+        };
+        assert_eq!(context.sync_interception(), SEARCH_ACTIVE);
+        assert_eq!(context.keyboard_state.keys[usize::from(VK_SHIFT.0)], 0x80);
+        assert_eq!(context.keyboard_state.keys[usize::from(VK_CAPITAL.0)], 0x81);
+        let mut expected = KeyboardState::default();
+        expected.keys[usize::from(VK_SHIFT.0)] = 0x80;
+        expected.keys[usize::from(VK_CAPITAL.0)] = 1;
+        let data = KBDLLHOOKSTRUCT {
+            vkCode: u32::from(b'A'),
+            ..KBDLLHOOKSTRUCT::default()
+        };
+        let expected_text = translate_search_character(&data, 0, &expected);
+        assert!(expected_text.is_some());
+        assert_eq!(
+            translate_search_character(&data, 0, &context.keyboard_state),
+            expected_text
+        );
+    }
 
     #[test]
     fn arrow_virtual_keys_map_to_directional_hook_keys() {
@@ -925,18 +1973,19 @@ mod tests {
 
     #[test]
     fn posting_overlay_open_arms_typed_search_before_the_ui_acknowledges_visibility() {
-        let search_active = Arc::new(AtomicBool::new(false));
-        let overlay_active = Arc::new(AtomicBool::new(false));
+        let flags = Arc::new(HookFlags::default());
         let mut context = HookContext {
             target: HWND::default(),
             state: HookState::default(),
             settings: HookSettings::default(),
-            search_active: Arc::clone(&search_active),
-            overlay_active: Arc::clone(&overlay_active),
             remote_desktop_passthrough: Arc::new(AtomicBool::new(false)),
             target_thread_id: 0,
             hook_thread_id: 0,
             pending_errors: 0,
+            flags: Arc::clone(&flags),
+            interception_generation: 0,
+            keyboard_state: KeyboardState::default(),
+            recovering: false,
         };
         let outcome = context.state.process_key(
             KeyEvent::pressed(
@@ -950,8 +1999,7 @@ mod tests {
         );
 
         assert!(post_context_actions(&mut context, outcome, |_, _| true));
-        assert!(overlay_active.load(Ordering::Acquire));
-        assert!(search_active.load(Ordering::Relaxed));
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
     }
 
     #[test]
