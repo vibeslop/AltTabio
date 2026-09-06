@@ -171,6 +171,7 @@ pub struct SettingsDocument {
 impl SettingsDocument {
     #[must_use]
     pub fn parse(contents: &str) -> Self {
+        let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
         let mut entries = Vec::new();
         let mut section = String::new();
 
@@ -429,6 +430,28 @@ fn is_known(entry: &Entry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_bom_settings_round_trip_with_disabled_general_options_and_unknown_keys() {
+        let contents = "[General]\r\nAutostart=false\r\nReplaceAltTab=false\r\n\
+                        TypedSearch=false\r\nFutureSetting=keep\r\n[Plugin]\r\nMode=Fast\r\n";
+        let plain = SettingsDocument::parse(contents);
+        let document = SettingsDocument::parse(&format!("\u{feff}{contents}"));
+
+        assert_eq!(document, plain);
+        let settings = document.settings();
+        assert!(!settings.general.autostart);
+        assert!(!settings.general.replace_alt_tab);
+        assert!(!settings.general.typed_search);
+        let rendered = document.render(&settings);
+        assert!(rendered.contains("FutureSetting=keep"));
+        assert!(rendered.contains("[Plugin]\nMode=Fast"));
+        assert_eq!(SettingsDocument::parse(&rendered).settings(), settings);
+        assert_eq!(
+            SettingsDocument::parse(&rendered).render(&settings),
+            rendered
+        );
+    }
 
     #[test]
     fn missing_values_use_the_established_product_defaults() {
