@@ -1,9 +1,59 @@
+use alttabio::{
+    settings::Theme,
+    theme::{ResolvedTheme, resolve},
+};
 use std::mem::size_of;
 use windows::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::core::{Error, HRESULT, PCSTR, Result, w};
+
+pub(crate) fn resolve_current_theme(theme: Theme) -> ResolvedTheme {
+    resolve_with_system_theme(theme, read_windows_app_theme)
+}
+
+fn resolve_with_system_theme(
+    theme: Theme,
+    read_theme: impl FnOnce() -> Result<ResolvedTheme>,
+) -> ResolvedTheme {
+    if theme != Theme::Auto {
+        return resolve(theme, ResolvedTheme::Light);
+    }
+    let windows_theme = match read_theme() {
+        Ok(theme) => theme,
+        Err(error) => {
+            eprintln!("Could not read the Windows app theme; using Light: {error}");
+            ResolvedTheme::Light
+        }
+    };
+    resolve(theme, windows_theme)
+}
+
+fn read_windows_app_theme() -> Result<ResolvedTheme> {
+    let mut apps_use_light_theme = 1_u32;
+    let mut value_size = u32::try_from(size_of::<u32>()).unwrap_or_default();
+    let status = unsafe {
+        // SAFETY: the predefined current-user key is borrowed, both strings are static and
+        // null-terminated, and the DWORD buffer and byte count remain writable for the call.
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut apps_use_light_theme).cast()),
+            Some(&raw mut value_size),
+        )
+    };
+    status.ok()?;
+    Ok(if apps_use_light_theme == 0 {
+        ResolvedTheme::Dark
+    } else {
+        ResolvedTheme::Light
+    })
+}
 
 const ALLOW_DARK_MODE_FOR_WINDOW_ORDINAL: usize = 133;
 const SET_PREFERRED_APP_MODE_ORDINAL: usize = 135;
@@ -188,6 +238,32 @@ impl Drop for DarkModeApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_theme_never_queries_windows() {
+        for (theme, expected) in [
+            (Theme::Light, ResolvedTheme::Light),
+            (Theme::Dark, ResolvedTheme::Dark),
+        ] {
+            assert_eq!(
+                resolve_with_system_theme(theme, || panic!("unexpected system-theme query")),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn auto_theme_follows_windows_and_falls_back_to_light_on_failure() {
+        for theme in [ResolvedTheme::Light, ResolvedTheme::Dark] {
+            assert_eq!(resolve_with_system_theme(Theme::Auto, || Ok(theme)), theme);
+        }
+        assert_eq!(
+            resolve_with_system_theme(Theme::Auto, || {
+                Err(Error::from_hresult(HRESULT(0x8000_4005_u32.cast_signed())))
+            }),
+            ResolvedTheme::Light
+        );
+    }
 
     #[test]
     fn native_app_modes_follow_the_resolved_theme() {

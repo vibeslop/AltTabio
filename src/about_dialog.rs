@@ -1,3 +1,7 @@
+use crate::native_drawing::{
+    DRAW_TEXT_CENTER, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE, DRAW_TEXT_VCENTER, OwnedFont,
+    draw_text_with_font, fill_color, frame_color, rgb, system_color,
+};
 use crate::{app_icon, native_theme::DarkModeApi};
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
@@ -11,12 +15,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
-    BACKGROUND_MODE, BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_BTNFACE,
-    COLOR_BTNSHADOW, COLOR_HIGHLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT, CreateFontW,
-    CreateSolidBrush, DEFAULT_CHARSET, DeleteObject, EndPaint, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD,
-    FillRect, GetMonitorInfoW, GetSysColor, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, COLOR_BTNFACE, COLOR_BTNSHADOW, COLOR_HIGHLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT,
+    EndPaint, FW_NORMAL, FW_SEMIBOLD, GetMonitorInfoW, HDC, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
@@ -46,19 +47,10 @@ const CLIENT_WIDTH: i32 = 430;
 const CLIENT_HEIGHT: i32 = 344;
 const CONTENT_HORIZONTAL_MARGIN: i32 = 94;
 const BASE_DPI: u32 = 96;
-const DRAW_TEXT_CENTER: u32 = 0x0001;
-const DRAW_TEXT_VCENTER: u32 = 0x0004;
-const DRAW_TEXT_SINGLE_LINE: u32 = 0x0020;
-const DRAW_TEXT_NO_PREFIX: u32 = 0x0800;
 const WINDOW_STYLE_VALUE: WINDOW_STYLE =
     WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0);
 const WINDOW_EX_STYLE_VALUE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0);
 const WM_DESTROY_DIALOG: u32 = WM_APP + 20;
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn DrawTextW(dc: HDC, text: *const u16, count: i32, rect: *mut RECT, format: u32) -> i32;
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Rect {
@@ -705,7 +697,7 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
             DI_NORMAL,
         )?;
     }
-    draw_text(
+    draw_text_with_font(
         dc,
         "AltTabio",
         layout.title.as_native(),
@@ -719,7 +711,7 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
         ("Copyright (c) 2026 VibeSlop", layout.copyright),
         ("MIT License", layout.license),
     ] {
-        draw_text(
+        draw_text_with_font(
             dc,
             label,
             rect.as_native(),
@@ -728,7 +720,7 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
             state.fonts.body.0,
         )?;
     }
-    draw_text(
+    draw_text_with_font(
         dc,
         REPOSITORY_LABEL,
         layout.repository.as_native(),
@@ -751,7 +743,7 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
         state.palette.button_border,
         scale(1, state.dpi).max(1),
     )?;
-    draw_text(
+    draw_text_with_font(
         dc,
         "Close",
         layout.close_button.as_native(),
@@ -759,101 +751,6 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
         DRAW_TEXT_CENTER | DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
         state.fonts.body.0,
     )
-}
-
-fn draw_text(
-    dc: HDC,
-    label: &str,
-    mut rect: RECT,
-    color: COLORREF,
-    format: u32,
-    font: HFONT,
-) -> Result<()> {
-    let previous_font = unsafe {
-        // SAFETY: dc is live and font is owned by the dialog for this complete paint callback.
-        windows::Win32::Graphics::Gdi::SelectObject(dc, HGDIOBJ(font.0))
-    };
-    let previous_mode = unsafe {
-        // SAFETY: dc is live for the current paint callback.
-        SetBkMode(dc, TRANSPARENT)
-    };
-    let previous_color = unsafe {
-        // SAFETY: dc is live and color is a scalar COLORREF.
-        SetTextColor(dc, color)
-    };
-    let text = label.encode_utf16().collect::<Vec<_>>();
-    let drawn = unsafe {
-        // SAFETY: text and rect remain live throughout this synchronous GDI call.
-        DrawTextW(
-            dc,
-            text.as_ptr(),
-            i32::try_from(text.len()).unwrap_or(i32::MAX),
-            &raw mut rect,
-            format,
-        )
-    };
-    unsafe {
-        // SAFETY: these values came from the matching selection and color calls above.
-        if previous_font != HGDIOBJ::default() {
-            windows::Win32::Graphics::Gdi::SelectObject(dc, previous_font);
-        }
-        if previous_mode != 0 {
-            SetBkMode(
-                dc,
-                BACKGROUND_MODE(u32::try_from(previous_mode).unwrap_or(TRANSPARENT.0)),
-            );
-        }
-        if previous_color.0 != u32::MAX {
-            SetTextColor(dc, previous_color);
-        }
-    }
-    if drawn == 0 {
-        Err(Error::from_thread())
-    } else {
-        Ok(())
-    }
-}
-
-fn fill_color(dc: HDC, rect: RECT, color: COLORREF) -> Result<()> {
-    let brush = OwnedBrush::new(color)?;
-    let filled = unsafe {
-        // SAFETY: dc is live and brush remains owned for the synchronous fill.
-        FillRect(dc, &raw const rect, brush.0)
-    };
-    if filled == 0 {
-        Err(Error::from_thread())
-    } else {
-        Ok(())
-    }
-}
-
-fn frame_color(dc: HDC, rect: RECT, color: COLORREF, thickness: i32) -> Result<()> {
-    let thickness = thickness.max(1);
-    for edge in [
-        RECT {
-            right: rect.right,
-            bottom: rect.top.saturating_add(thickness),
-            ..rect
-        },
-        RECT {
-            top: rect.bottom.saturating_sub(thickness),
-            right: rect.right,
-            ..rect
-        },
-        RECT {
-            right: rect.left.saturating_add(thickness),
-            bottom: rect.bottom,
-            ..rect
-        },
-        RECT {
-            left: rect.right.saturating_sub(thickness),
-            bottom: rect.bottom,
-            ..rect
-        },
-    ] {
-        fill_color(dc, edge, color)?;
-    }
-    Ok(())
 }
 
 fn apply_window_theme(hwnd: HWND, theme: ResolvedTheme, dark_mode_api: Option<&DarkModeApi>) {
@@ -1019,18 +916,6 @@ fn scale(value: i32, dpi: u32) -> i32 {
     i32::try_from(numerator / i64::from(BASE_DPI)).unwrap_or(i32::MAX)
 }
 
-const fn rgb(red: u8, green: u8, blue: u8) -> COLORREF {
-    COLORREF(red as u32 | (green as u32) << 8 | (blue as u32) << 16)
-}
-
-fn system_color(index: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> COLORREF {
-    let color = unsafe {
-        // SAFETY: index is one of the documented system-color constants.
-        GetSysColor(index)
-    };
-    COLORREF(color)
-}
-
 struct DialogFonts {
     body: OwnedFont,
     title: OwnedFont,
@@ -1044,80 +929,6 @@ impl DialogFonts {
             title: OwnedFont::new(dpi, 17, FW_SEMIBOLD.0.cast_signed(), false)?,
             link: OwnedFont::new(dpi, 11, FW_NORMAL.0.cast_signed(), true)?,
         })
-    }
-}
-
-struct OwnedFont(HFONT);
-
-impl OwnedFont {
-    fn new(dpi: u32, points: u32, weight: i32, underline: bool) -> Result<Self> {
-        let point_height = i32::try_from((u64::from(points) * u64::from(dpi) + 36) / 72)
-            .unwrap_or(i32::MAX)
-            .max(1);
-        let font = unsafe {
-            // SAFETY: scalar values describe a standard Segoe UI font and the face name is static.
-            CreateFontW(
-                -point_height,
-                0,
-                0,
-                0,
-                weight,
-                0,
-                u32::from(u8::from(underline)),
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                u32::from(FF_DONTCARE.0),
-                w!("Segoe UI"),
-            )
-        };
-        if font == HFONT::default() {
-            Err(Error::from_thread())
-        } else {
-            Ok(Self(font))
-        }
-    }
-}
-
-impl Drop for OwnedFont {
-    fn drop(&mut self) {
-        let deleted = unsafe {
-            // SAFETY: this wrapper uniquely owns the font and no paint callback is active on drop.
-            DeleteObject(HGDIOBJ::from(self.0))
-        };
-        if !deleted.as_bool() {
-            eprintln!("Could not release an About font");
-        }
-    }
-}
-
-struct OwnedBrush(HBRUSH);
-
-impl OwnedBrush {
-    fn new(color: COLORREF) -> Result<Self> {
-        let brush = unsafe {
-            // SAFETY: color is a scalar COLORREF and the returned brush is uniquely owned.
-            CreateSolidBrush(color)
-        };
-        if brush == HBRUSH::default() {
-            Err(Error::from_thread())
-        } else {
-            Ok(Self(brush))
-        }
-    }
-}
-
-impl Drop for OwnedBrush {
-    fn drop(&mut self) {
-        let deleted = unsafe {
-            // SAFETY: this wrapper uniquely owns the brush and no fill is active on drop.
-            DeleteObject(HGDIOBJ::from(self.0))
-        };
-        if !deleted.as_bool() {
-            eprintln!("Could not release an About brush");
-        }
     }
 }
 

@@ -1,22 +1,29 @@
-use crate::{app_icon, native_theme::DarkModeApi};
+use crate::native_drawing::{
+    DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
+    DRAW_TEXT_VCENTER, OwnedBrush, OwnedFont, draw_text_with_font, fill_color, frame_color,
+    measure_text, rgb, system_color,
+};
+use crate::{
+    app_icon,
+    native_theme::{DarkModeApi, resolve_current_theme},
+};
 use alttabio::settings::{IconColor, Settings, Theme};
+use alttabio::theme::ResolvedTheme;
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::{size_of, size_of_val};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
-    SIZE, WPARAM,
+    WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
-    BACKGROUND_MODE, BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_BTNFACE,
-    COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW,
-    COLOR_WINDOWTEXT, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DeleteObject, EndPaint,
-    FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, FillRect, GetMonitorInfoW, GetSysColor,
-    GetTextExtentPoint32W, HBRUSH, HDC, HFONT, HGDIOBJ, HPEN, InvalidateRect,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, COLOR_BTNFACE, COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT,
+    COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT, DeleteObject, EndPaint, FW_NORMAL,
+    FW_SEMIBOLD, FillRect, GetMonitorInfoW, HBRUSH, HDC, HFONT, HGDIOBJ, HPEN, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, PAINTSTRUCT, SetBkColor, SetBkMode,
+    SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
@@ -58,37 +65,76 @@ const WINDOW_STYLE_VALUE: WINDOW_STYLE =
     WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0);
 const WINDOW_EX_STYLE_VALUE: WINDOW_EX_STYLE =
     WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0);
-const RRF_RT_REG_DWORD: u32 = 0x10;
-const ERROR_SUCCESS: i32 = 0;
-const HKEY_CURRENT_USER: isize = -2_147_483_647;
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
 const BUTTON_STATE_PUSHED: usize = 0x0004;
-const DRAW_TEXT_CENTER: u32 = 0x0001;
-const DRAW_TEXT_VCENTER: u32 = 0x0004;
-const DRAW_TEXT_SINGLE_LINE: u32 = 0x0020;
-const DRAW_TEXT_NO_PREFIX: u32 = 0x0800;
-const DRAW_TEXT_END_ELLIPSIS: u32 = 0x8000;
 const SOLID_PEN: i32 = 0;
 const WM_DESTROY_DIALOG: u32 = WM_APP + 21;
 
-const OPTION_LABELS: [&str; OPTION_COUNT] = [
-    "Start AltTabio when I sign in",
-    "Replace Alt+Tab",
-    "Replace Win+Tab",
-    "Enable typing to search tasks",
-    "Switch when Alt is released",
-    "Activate the selected task when the right mouse button is released",
-    "Use right mouse button + wheel switching",
-    "Select tasks when the mouse moves over them",
-    "Use a compact task list",
-    "Use large icons",
-    "Show number shortcuts",
-    "Show app names under titles",
-    "Visible borders",
-    "Show a live preview",
-    "Show the window in its position on the desktop",
-    "Only show tasks from the current monitor",
-];
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OptionGroup {
+    General,
+    Appearance,
+    Monitor,
+}
+
+// Declare each identity, field, label and placement together. Both directions of the
+// binding are generated from the same field, so reads and writes cannot drift apart.
+macro_rules! setting_options {
+    ($( $name:ident: $group:ident, $row:literal, $section:ident.$field:ident, $label:literal; )+) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum SettingOption { $( $name, )+ }
+
+        impl SettingOption {
+            const ALL: [Self; OPTION_COUNT] = [$( Self::$name, )+];
+
+            const fn label(self) -> &'static str {
+                match self { $( Self::$name => $label, )+ }
+            }
+
+            const fn group(self) -> OptionGroup {
+                match self { $( Self::$name => OptionGroup::$group, )+ }
+            }
+
+            fn rect(self, layout: &DialogLayout) -> ControlRect {
+                let row = match self { $( Self::$name => $row, )+ };
+                match self.group() {
+                    OptionGroup::General => layout.general_options[row],
+                    OptionGroup::Appearance => layout.appearance_options[row],
+                    OptionGroup::Monitor => layout.monitor_option,
+                }
+            }
+
+            fn read(self, settings: &Settings) -> bool {
+                match self { $( Self::$name => settings.$section.$field, )+ }
+            }
+
+            fn write(self, settings: &mut Settings, value: bool) {
+                match self { $( Self::$name => settings.$section.$field = value, )+ }
+            }
+
+            const fn control_id(self) -> usize { OPTION_ID_BASE + self as usize }
+        }
+    };
+}
+
+setting_options! {
+    Autostart: General, 0, general.autostart, "Start AltTabio when I sign in";
+    ReplaceAltTab: General, 1, general.replace_alt_tab, "Replace Alt+Tab";
+    ReplaceWinTab: General, 2, general.replace_win_tab, "Replace Win+Tab";
+    TypedSearch: General, 3, general.typed_search, "Enable typing to search tasks";
+    ReleaseAltSwitches: General, 4, general.release_alt_switches, "Switch when Alt is released";
+    ReleaseRightButtonSwitches: General, 5, general.release_right_button_switches, "Activate the selected task when the right mouse button is released";
+    RightButtonWheelSwitching: General, 6, general.right_button_wheel_switching, "Use right mouse button + wheel switching";
+    MouseOverSelection: General, 7, general.mouse_over_selection, "Select tasks when the mouse moves over them";
+    CompactList: Appearance, 0, appearance.compact_list, "Use a compact task list";
+    LargeIcons: Appearance, 1, appearance.large_icons, "Use large icons";
+    ShowNumbers: Appearance, 2, appearance.show_numbers, "Show number shortcuts";
+    ShowAppNames: Appearance, 3, appearance.show_app_names, "Show app names under titles";
+    VisibleBorders: Appearance, 4, appearance.visible_borders, "Visible borders";
+    Preview: Appearance, 5, appearance.preview, "Show a live preview";
+    FullDesktopPreview: Appearance, 6, appearance.full_desktop_preview, "Show the window in its position on the desktop";
+    CurrentMonitorFilter: Monitor, 0, monitor.use_current_monitor_filter, "Only show tasks from the current monitor";
+}
 const THEME_LABELS: [&str; 3] = ["Auto", "Light", "Dark"];
 const ICON_LABELS: [&str; 8] = [
     "Azure",
@@ -109,7 +155,6 @@ unsafe extern "system" {
 #[link(name = "user32")]
 unsafe extern "system" {
     fn GetComboBoxInfo(hwnd: HWND, info: *mut NativeComboBoxInfo) -> i32;
-    fn DrawTextW(dc: HDC, text: *const u16, count: i32, rect: *mut RECT, format: u32) -> i32;
 }
 
 type SubclassProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, usize, usize) -> LRESULT;
@@ -127,26 +172,6 @@ unsafe extern "system" {
     fn SelectObject(dc: HDC, object: HGDIOBJ) -> HGDIOBJ;
     fn MoveToEx(dc: HDC, x: i32, y: i32, previous: *mut c_void) -> BOOL;
     fn LineTo(dc: HDC, x: i32, y: i32) -> BOOL;
-}
-
-#[link(name = "advapi32")]
-unsafe extern "system" {
-    fn RegGetValueW(
-        key: *mut c_void,
-        sub_key: PCWSTR,
-        value: PCWSTR,
-        flags: u32,
-        value_type: *mut u32,
-        data: *mut c_void,
-        data_size: *mut u32,
-    ) -> i32;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ThemeChoice {
-    Auto,
-    Light,
-    Dark,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,41 +223,19 @@ struct NativeComboBoxInfo {
     list: HWND,
 }
 
-impl ThemeChoice {
-    const fn from_setting(value: Theme) -> Self {
-        match value {
-            Theme::Auto => Self::Auto,
-            Theme::Light => Self::Light,
-            Theme::Dark => Self::Dark,
-        }
+const fn theme_selector_index(theme: Theme) -> usize {
+    match theme {
+        Theme::Auto => 0,
+        Theme::Light => 1,
+        Theme::Dark => 2,
     }
+}
 
-    const fn setting_value(self) -> Theme {
-        match self {
-            Self::Auto => Theme::Auto,
-            Self::Light => Theme::Light,
-            Self::Dark => Theme::Dark,
-        }
-    }
-
-    const fn selector_index(self) -> usize {
-        match self {
-            Self::Auto => 0,
-            Self::Light => 1,
-            Self::Dark => 2,
-        }
-    }
-
-    const fn from_selector_index(index: usize) -> Self {
-        match index {
-            1 => Self::Light,
-            2 => Self::Dark,
-            _ => Self::Auto,
-        }
-    }
-
-    const fn label(self) -> &'static str {
-        THEME_LABELS[self.selector_index()]
+const fn theme_from_selector_index(index: usize) -> Theme {
+    match index {
+        1 => Theme::Light,
+        2 => Theme::Dark,
+        _ => Theme::Auto,
     }
 }
 
@@ -406,7 +409,7 @@ pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
     let layout = DialogLayout::for_dpi(dpi);
     let window_size = adjusted_window_size(layout.client, dpi)?;
     let window_origin = centered_window_origin(owner, window_size)?;
-    let initial_dark = effective_dark_theme(ThemeChoice::from_setting(settings.appearance.theme));
+    let initial_dark = resolve_current_theme(settings.appearance.theme) == ResolvedTheme::Dark;
     let dark_mode_api = match DarkModeApi::load(initial_dark) {
         Ok(api) => Some(api),
         Err(error) => {
@@ -535,15 +538,14 @@ struct DialogControls {
 }
 
 impl DialogControls {
+    fn option(&self, option: SettingOption) -> HWND {
+        self.options[option as usize]
+    }
+
     fn apply_layout(&self, layout: &DialogLayout, dpi: u32) -> Result<()> {
         move_control(self.general_group, layout.general_group)?;
-        for (control, rect) in self
-            .options
-            .iter()
-            .take(GENERAL_OPTION_COUNT)
-            .zip(layout.general_options)
-        {
-            move_control(*control, rect)?;
+        for option in SettingOption::ALL {
+            move_control(self.option(option), option.rect(layout))?;
         }
         move_control(self.appearance_group, layout.appearance_group)?;
         move_control(self.theme_label, layout.theme_label)?;
@@ -556,17 +558,7 @@ impl DialogControls {
             self.icon_selector,
             combo_window_rect(layout.icon_selector, dpi),
         )?;
-        for (control, rect) in self
-            .options
-            .iter()
-            .skip(GENERAL_OPTION_COUNT)
-            .take(APPEARANCE_OPTION_COUNT)
-            .zip(layout.appearance_options)
-        {
-            move_control(*control, rect)?;
-        }
         move_control(self.monitor_group, layout.monitor_group)?;
-        move_control(self.options[OPTION_COUNT - 1], layout.monitor_option)?;
         move_control(self.ok_button, layout.ok_button)?;
         move_control(self.cancel_button, layout.cancel_button)
     }
@@ -712,20 +704,8 @@ impl DialogState {
             layout.general_group,
             fonts.heading.0,
         )?;
-        let values = setting_values(&self.settings);
-        for (index, rect) in layout.general_options.into_iter().enumerate() {
-            self.controls.options[index] = create_checkbox(
-                parent,
-                instance,
-                OPTION_LABELS[index],
-                OPTION_ID_BASE + index,
-                rect,
-                values[index],
-                fonts.body.0,
-                index == 0,
-            )?;
-        }
-        self.create_appearance_controls(parent, instance, &layout, &fonts, &values)?;
+        self.create_options(parent, instance, &layout, &fonts, OptionGroup::General)?;
+        self.create_appearance_controls(parent, instance, &layout, &fonts)?;
         self.controls.monitor_group = create_group(
             parent,
             instance,
@@ -733,16 +713,7 @@ impl DialogState {
             layout.monitor_group,
             fonts.heading.0,
         )?;
-        self.controls.options[OPTION_COUNT - 1] = create_checkbox(
-            parent,
-            instance,
-            OPTION_LABELS[OPTION_COUNT - 1],
-            OPTION_ID_BASE + OPTION_COUNT - 1,
-            layout.monitor_option,
-            values[OPTION_COUNT - 1],
-            fonts.body.0,
-            false,
-        )?;
+        self.create_options(parent, instance, &layout, &fonts, OptionGroup::Monitor)?;
         self.controls.ok_button = create_button(
             parent,
             instance,
@@ -775,7 +746,6 @@ impl DialogState {
         instance: HINSTANCE,
         layout: &DialogLayout,
         fonts: &DialogFonts,
-        values: &[bool; OPTION_COUNT],
     ) -> Result<()> {
         self.controls.appearance_group = create_group(
             parent,
@@ -790,7 +760,7 @@ impl DialogState {
             parent,
             instance,
             combo_window_rect(layout.theme_selector, self.dpi),
-            ThemeChoice::from_setting(self.settings.appearance.theme),
+            self.settings.appearance.theme,
             fonts.body.0,
         )?;
         self.controls.icon_label =
@@ -802,17 +772,30 @@ impl DialogState {
             self.settings.appearance.icon,
             fonts.body.0,
         )?;
-        for (offset, rect) in layout.appearance_options.into_iter().enumerate() {
-            let index = GENERAL_OPTION_COUNT + offset;
-            self.controls.options[index] = create_checkbox(
+        self.create_options(parent, instance, layout, fonts, OptionGroup::Appearance)
+    }
+
+    fn create_options(
+        &mut self,
+        parent: HWND,
+        instance: HINSTANCE,
+        layout: &DialogLayout,
+        fonts: &DialogFonts,
+        group: OptionGroup,
+    ) -> Result<()> {
+        for option in SettingOption::ALL
+            .into_iter()
+            .filter(|option| option.group() == group)
+        {
+            self.controls.options[option as usize] = create_checkbox(
                 parent,
                 instance,
-                OPTION_LABELS[index],
-                OPTION_ID_BASE + index,
-                rect,
-                values[index],
+                option.label(),
+                option.control_id(),
+                option.rect(layout),
+                option.read(&self.settings),
                 fonts.body.0,
-                false,
+                option == SettingOption::Autostart,
             )?;
         }
         Ok(())
@@ -829,7 +812,7 @@ impl DialogState {
         Ok(())
     }
 
-    fn selected_theme(&self) -> ThemeChoice {
+    fn selected_theme(&self) -> Theme {
         let selected = unsafe {
             // SAFETY: theme_selector is a live drop-down-list control with scalar message payloads.
             SendMessageW(
@@ -841,9 +824,9 @@ impl DialogState {
         };
         let selected = i32::try_from(selected.0).unwrap_or(CB_ERR);
         if selected == CB_ERR {
-            ThemeChoice::from_setting(self.settings.appearance.theme)
+            self.settings.appearance.theme
         } else {
-            ThemeChoice::from_selector_index(usize::try_from(selected).unwrap_or_default())
+            theme_from_selector_index(usize::try_from(selected).unwrap_or_default())
         }
     }
 
@@ -866,16 +849,23 @@ impl DialogState {
     }
 
     fn sync_right_button_release_enabled(&self) {
-        let enabled = is_checked(self.controls.options[6]);
+        let enabled = is_checked(
+            self.controls
+                .option(SettingOption::RightButtonWheelSwitching),
+        );
         unsafe {
             // SAFETY: both option handles are live controls owned by this dialog.
-            let _was_enabled = EnableWindow(self.controls.options[5], enabled);
+            let _was_enabled = EnableWindow(
+                self.controls
+                    .option(SettingOption::ReleaseRightButtonSwitches),
+                enabled,
+            );
         }
     }
 
     fn apply_selected_theme(&mut self) {
         let theme = self.selected_theme();
-        let dark = effective_dark_theme(theme);
+        let dark = resolve_current_theme(theme) == ResolvedTheme::Dark;
         let palette = ThemePalette::new(dark);
         match OwnedBrush::new(palette.background) {
             Ok(brush) => self.background = Some(brush),
@@ -911,25 +901,11 @@ impl DialogState {
     }
 
     fn accept(&mut self) {
-        let values = self.controls.options.map(is_checked);
-        self.settings.general.autostart = values[0];
-        self.settings.general.replace_alt_tab = values[1];
-        self.settings.general.replace_win_tab = values[2];
-        self.settings.general.typed_search = values[3];
-        self.settings.general.release_alt_switches = values[4];
-        self.settings.general.release_right_button_switches = values[5];
-        self.settings.general.right_button_wheel_switching = values[6];
-        self.settings.general.mouse_over_selection = values[7];
+        for option in SettingOption::ALL {
+            option.write(&mut self.settings, is_checked(self.controls.option(option)));
+        }
         self.settings.appearance.icon = self.selected_icon();
-        self.settings.appearance.theme = self.selected_theme().setting_value();
-        self.settings.appearance.compact_list = values[8];
-        self.settings.appearance.large_icons = values[9];
-        self.settings.appearance.show_numbers = values[10];
-        self.settings.appearance.show_app_names = values[11];
-        self.settings.appearance.visible_borders = values[12];
-        self.settings.appearance.preview = values[13];
-        self.settings.appearance.full_desktop_preview = values[14];
-        self.settings.monitor.use_current_monitor_filter = values[15];
+        self.settings.appearance.theme = self.selected_theme();
         self.accepted = true;
     }
 
@@ -946,87 +922,9 @@ struct DialogFonts {
 impl DialogFonts {
     fn create(dpi: u32) -> Result<Self> {
         Ok(Self {
-            body: OwnedFont::new(dpi, FW_NORMAL.0.cast_signed())?,
-            heading: OwnedFont::new(dpi, FW_SEMIBOLD.0.cast_signed())?,
+            body: OwnedFont::new(dpi, 9, FW_NORMAL.0.cast_signed(), false)?,
+            heading: OwnedFont::new(dpi, 9, FW_SEMIBOLD.0.cast_signed(), false)?,
         })
-    }
-}
-
-struct OwnedFont(HFONT);
-
-impl OwnedFont {
-    fn new(dpi: u32, weight: i32) -> Result<Self> {
-        let point_height = i32::try_from((9_u64 * u64::from(dpi) + 36) / 72)
-            .unwrap_or(i32::MAX)
-            .max(1);
-        let font = unsafe {
-            // SAFETY: all scalar values describe a standard Segoe UI logical font; the face-name
-            // buffer is static for the duration of the synchronous call.
-            CreateFontW(
-                -point_height,
-                0,
-                0,
-                0,
-                weight,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                u32::from(FF_DONTCARE.0),
-                w!("Segoe UI"),
-            )
-        };
-        if font == HFONT::default() {
-            Err(Error::from_thread())
-        } else {
-            Ok(Self(font))
-        }
-    }
-}
-
-impl Drop for OwnedFont {
-    fn drop(&mut self) {
-        let deleted = unsafe {
-            // SAFETY: this wrapper uniquely owns the font and controls no longer use it when the
-            // dialog state is dropped or after a replacement font has been installed.
-            DeleteObject(HGDIOBJ::from(self.0))
-        };
-        if !deleted.as_bool() {
-            eprintln!("Could not release a settings font");
-        }
-    }
-}
-
-struct OwnedBrush(HBRUSH);
-
-impl OwnedBrush {
-    fn new(color: COLORREF) -> Result<Self> {
-        let brush = unsafe {
-            // SAFETY: color is a scalar COLORREF and CreateSolidBrush returns a uniquely owned GDI
-            // brush on success.
-            CreateSolidBrush(color)
-        };
-        if brush == HBRUSH::default() {
-            Err(Error::from_thread())
-        } else {
-            Ok(Self(brush))
-        }
-    }
-}
-
-impl Drop for OwnedBrush {
-    fn drop(&mut self) {
-        let deleted = unsafe {
-            // SAFETY: this wrapper uniquely owns the brush and no paint callback is active while
-            // the UI-thread-owned state replaces or drops it.
-            DeleteObject(HGDIOBJ::from(self.0))
-        };
-        if !deleted.as_bool() {
-            eprintln!("Could not release the settings background brush");
-        }
     }
 }
 
@@ -1067,57 +965,6 @@ impl ThemePalette {
                 accent_text: system_color(COLOR_HIGHLIGHTTEXT),
             }
         }
-    }
-}
-
-const fn rgb(red: u8, green: u8, blue: u8) -> COLORREF {
-    COLORREF(red as u32 | (green as u32) << 8 | (blue as u32) << 16)
-}
-
-fn system_color(index: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> COLORREF {
-    let color = unsafe {
-        // SAFETY: index is one of the documented system-color constants.
-        GetSysColor(index)
-    };
-    COLORREF(color)
-}
-
-fn effective_dark_theme(choice: ThemeChoice) -> bool {
-    match choice {
-        ThemeChoice::Light => false,
-        ThemeChoice::Dark => true,
-        ThemeChoice::Auto => match system_prefers_dark_theme() {
-            Ok(dark) => dark,
-            Err(error) => {
-                eprintln!("Could not read the Windows app theme; using Light: {error}");
-                false
-            }
-        },
-    }
-}
-
-fn system_prefers_dark_theme() -> Result<bool> {
-    let mut apps_use_light_theme = 1_u32;
-    let mut data_size = u32::try_from(size_of_val(&apps_use_light_theme)).unwrap_or(u32::MAX);
-    let status = unsafe {
-        // SAFETY: HKEY_CURRENT_USER is a predefined borrowed registry key; data and data_size are
-        // writable DWORD buffers for this synchronous read-only query.
-        RegGetValueW(
-            HKEY_CURRENT_USER as *mut c_void,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            w!("AppsUseLightTheme"),
-            RRF_RT_REG_DWORD,
-            std::ptr::null_mut(),
-            (&raw mut apps_use_light_theme).cast(),
-            &raw mut data_size,
-        )
-    };
-    if status == ERROR_SUCCESS {
-        Ok(apps_use_light_theme == 0)
-    } else {
-        Err(Error::from_hresult(HRESULT::from_win32(
-            status.cast_unsigned(),
-        )))
     }
 }
 
@@ -1207,27 +1054,6 @@ fn combo_list_window(combo: HWND) -> Result<HWND> {
     }
 }
 
-fn setting_values(settings: &Settings) -> [bool; OPTION_COUNT] {
-    [
-        settings.general.autostart,
-        settings.general.replace_alt_tab,
-        settings.general.replace_win_tab,
-        settings.general.typed_search,
-        settings.general.release_alt_switches,
-        settings.general.release_right_button_switches,
-        settings.general.right_button_wheel_switching,
-        settings.general.mouse_over_selection,
-        settings.appearance.compact_list,
-        settings.appearance.large_icons,
-        settings.appearance.show_numbers,
-        settings.appearance.show_app_names,
-        settings.appearance.visible_borders,
-        settings.appearance.preview,
-        settings.appearance.full_desktop_preview,
-        settings.monitor.use_current_monitor_filter,
-    ]
-}
-
 fn create_group(
     parent: HWND,
     instance: HINSTANCE,
@@ -1308,7 +1134,7 @@ fn create_theme_selector(
     parent: HWND,
     instance: HINSTANCE,
     rect: ControlRect,
-    selected: ThemeChoice,
+    selected: Theme,
     font: HFONT,
 ) -> Result<HWND> {
     create_selector(
@@ -1317,7 +1143,7 @@ fn create_theme_selector(
         THEME_ID,
         rect,
         &THEME_LABELS,
-        selected.selector_index(),
+        theme_selector_index(selected),
         font,
     )
 }
@@ -1538,22 +1364,20 @@ fn paint_settings_control(hwnd: HWND, dc: HDC, state: &DialogState) {
     }
     let result = if let Some(label) = group_label(&state.controls, hwnd) {
         paint_group_box(dc, client, label, state)
-    } else if let Some(index) = state
-        .controls
-        .options
-        .iter()
-        .position(|control| *control == hwnd)
+    } else if let Some(option) = SettingOption::ALL
+        .into_iter()
+        .find(|option| state.controls.option(*option) == hwnd)
     {
         paint_checkbox(
             dc,
             client,
-            OPTION_LABELS[index],
+            option.label(),
             is_checked(hwnd),
             is_control_enabled(hwnd),
             state,
         )
     } else if hwnd == state.controls.theme_selector {
-        paint_combo_box(dc, client, state.selected_theme().label(), state)
+        paint_combo_box(dc, client, state.selected_theme().as_ini_value(), state)
     } else if hwnd == state.controls.icon_selector {
         paint_combo_box(dc, client, state.selected_icon().as_ini_value(), state)
     } else if hwnd == state.controls.ok_button {
@@ -1779,48 +1603,6 @@ fn is_control_enabled(hwnd: HWND) -> bool {
     }
 }
 
-fn fill_color(dc: HDC, rect: RECT, color: COLORREF) -> Result<()> {
-    let brush = OwnedBrush::new(color)?;
-    let filled = unsafe {
-        // SAFETY: dc is live for the current paint and brush remains owned through the call.
-        FillRect(dc, &raw const rect, brush.0)
-    };
-    if filled == 0 {
-        Err(Error::from_thread())
-    } else {
-        Ok(())
-    }
-}
-
-fn frame_color(dc: HDC, rect: RECT, color: COLORREF, thickness: i32) -> Result<()> {
-    let thickness = thickness.max(1);
-    for edge in [
-        RECT {
-            right: rect.right,
-            bottom: rect.top.saturating_add(thickness),
-            ..rect
-        },
-        RECT {
-            top: rect.bottom.saturating_sub(thickness),
-            right: rect.right,
-            ..rect
-        },
-        RECT {
-            right: rect.left.saturating_add(thickness),
-            bottom: rect.bottom,
-            ..rect
-        },
-        RECT {
-            left: rect.right.saturating_sub(thickness),
-            bottom: rect.bottom,
-            ..rect
-        },
-    ] {
-        fill_color(dc, edge, color)?;
-    }
-    Ok(())
-}
-
 fn draw_text(
     dc: HDC,
     label: &str,
@@ -1833,83 +1615,6 @@ fn draw_text(
         return Err(Error::from_hresult(HRESULT(0x8000_4005_u32.cast_signed())));
     };
     draw_text_with_font(dc, label, rect, color, format, fonts.body.0)
-}
-
-fn draw_text_with_font(
-    dc: HDC,
-    label: &str,
-    mut rect: RECT,
-    color: COLORREF,
-    format: u32,
-    font: HFONT,
-) -> Result<()> {
-    let previous_font = unsafe {
-        // SAFETY: dc is live and the dialog owns this font for the complete paint callback.
-        SelectObject(dc, HGDIOBJ(font.0))
-    };
-    let previous_mode = unsafe {
-        // SAFETY: dc is live for the current paint callback.
-        SetBkMode(dc, TRANSPARENT)
-    };
-    let previous_color = unsafe {
-        // SAFETY: dc is live and color is a scalar COLORREF.
-        SetTextColor(dc, color)
-    };
-    let text = label.encode_utf16().collect::<Vec<_>>();
-    let drawn = unsafe {
-        // SAFETY: text and rect remain live throughout this synchronous GDI call.
-        DrawTextW(
-            dc,
-            text.as_ptr(),
-            i32::try_from(text.len()).unwrap_or(i32::MAX),
-            &raw mut rect,
-            format,
-        )
-    };
-    unsafe {
-        // SAFETY: these values were returned by the matching selection and color calls above.
-        if previous_font != HGDIOBJ::default() {
-            SelectObject(dc, previous_font);
-        }
-        if previous_mode != 0 {
-            SetBkMode(
-                dc,
-                BACKGROUND_MODE(u32::try_from(previous_mode).unwrap_or(TRANSPARENT.0)),
-            );
-        }
-        if previous_color.0 != u32::MAX {
-            SetTextColor(dc, previous_color);
-        }
-    }
-    if drawn == 0 {
-        Err(Error::from_thread())
-    } else {
-        Ok(())
-    }
-}
-
-fn measure_text(dc: HDC, label: &str, font: HFONT) -> Result<SIZE> {
-    let previous_font = unsafe {
-        // SAFETY: dc is live and the dialog owns this font for the complete paint callback.
-        SelectObject(dc, HGDIOBJ(font.0))
-    };
-    let text = label.encode_utf16().collect::<Vec<_>>();
-    let mut size = SIZE::default();
-    let measured = unsafe {
-        // SAFETY: text and size remain live for the synchronous measurement call.
-        GetTextExtentPoint32W(dc, &text, &raw mut size)
-    };
-    if previous_font != HGDIOBJ::default() {
-        unsafe {
-            // SAFETY: previous_font was returned by the matching selection above.
-            SelectObject(dc, previous_font);
-        }
-    }
-    if measured.as_bool() {
-        Ok(size)
-    } else {
-        Err(Error::from_thread())
-    }
 }
 
 fn draw_checkmark(dc: HDC, rect: RECT, color: COLORREF, dpi: u32) -> Result<()> {
@@ -2315,7 +2020,9 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
     } else if command == ICON_ID && high_word(wparam.0) == CBN_SELCHANGE as usize {
         state.apply_selected_icon();
         Some(LRESULT(0))
-    } else if command == OPTION_ID_BASE + 6 && high_word(wparam.0) == BN_CLICKED as usize {
+    } else if command == SettingOption::RightButtonWheelSwitching.control_id()
+        && high_word(wparam.0) == BN_CLICKED as usize
+    {
         state.sync_right_button_release_enabled();
         Some(LRESULT(0))
     } else {
@@ -2479,6 +2186,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_checkbox_reads_only_its_bound_setting() {
+        let fields: [fn(&mut Settings) -> &mut bool; 16] = [
+            |s| &mut s.general.autostart,
+            |s| &mut s.general.replace_alt_tab,
+            |s| &mut s.general.replace_win_tab,
+            |s| &mut s.general.typed_search,
+            |s| &mut s.general.release_alt_switches,
+            |s| &mut s.general.release_right_button_switches,
+            |s| &mut s.general.right_button_wheel_switching,
+            |s| &mut s.general.mouse_over_selection,
+            |s| &mut s.appearance.compact_list,
+            |s| &mut s.appearance.large_icons,
+            |s| &mut s.appearance.show_numbers,
+            |s| &mut s.appearance.show_app_names,
+            |s| &mut s.appearance.visible_borders,
+            |s| &mut s.appearance.preview,
+            |s| &mut s.appearance.full_desktop_preview,
+            |s| &mut s.monitor.use_current_monitor_filter,
+        ];
+        let baseline = Settings::default();
+        for (index, field) in fields.into_iter().enumerate() {
+            let mut changed = baseline.clone();
+            *field(&mut changed) = !*field(&mut changed);
+            let mut expected = SettingOption::ALL.map(|option| option.read(&baseline));
+            expected[index] = !expected[index];
+            assert_eq!(
+                SettingOption::ALL.map(|option| option.read(&changed)),
+                expected,
+                "option {index}"
+            );
+            let option = SettingOption::ALL[index];
+            let mut roundtrip = baseline.clone();
+            option.write(&mut roundtrip, option.read(&changed));
+            assert_eq!(roundtrip, changed, "write for {option:?}");
+            option.write(&mut roundtrip, option.read(&baseline));
+            assert_eq!(roundtrip, baseline, "restore for {option:?}");
+        }
+    }
+
+    #[test]
+    fn named_options_preserve_unique_ids_and_layout_rows_at_each_dpi() {
+        for dpi in [96, 120, 144, 192] {
+            let layout = DialogLayout::for_dpi(dpi);
+            let rows = layout
+                .general_options
+                .into_iter()
+                .chain(layout.appearance_options)
+                .chain([layout.monitor_option]);
+            for (index, (option, row)) in SettingOption::ALL.into_iter().zip(rows).enumerate() {
+                assert_eq!(option.control_id(), OPTION_ID_BASE + index);
+                assert_eq!(
+                    option.rect(&layout),
+                    row,
+                    "layout for {option:?} at {dpi} DPI"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn settings_window_is_not_owned_by_the_topmost_overlay() {
         let mut owner_storage = 0_u8;
         let owner = HWND(std::ptr::from_mut(&mut owner_storage).cast());
@@ -2564,38 +2331,38 @@ mod tests {
     fn visible_borders_option_tracks_the_appearance_setting() {
         let mut settings = Settings::default();
 
-        assert_eq!(OPTION_LABELS[12], "Visible borders");
-        assert!(!setting_values(&settings)[12]);
+        assert_eq!(SettingOption::VisibleBorders.label(), "Visible borders");
+        assert!(!SettingOption::VisibleBorders.read(&settings));
 
         settings.appearance.visible_borders = true;
-        assert!(setting_values(&settings)[12]);
+        assert!(SettingOption::VisibleBorders.read(&settings));
     }
 
     #[test]
     fn typed_search_option_tracks_the_general_setting() {
         let mut settings = Settings::default();
 
-        assert_eq!(OPTION_LABELS[3], "Enable typing to search tasks");
-        assert!(setting_values(&settings)[3]);
+        assert_eq!(
+            SettingOption::TypedSearch.label(),
+            "Enable typing to search tasks"
+        );
+        assert!(SettingOption::TypedSearch.read(&settings));
 
         settings.general.typed_search = false;
-        assert!(!setting_values(&settings)[3]);
+        assert!(!SettingOption::TypedSearch.read(&settings));
     }
 
     #[test]
     fn theme_values_map_to_selector_indices_and_canonical_settings() {
-        let cases = [
-            (Theme::Auto, ThemeChoice::Auto, 0),
-            (Theme::Light, ThemeChoice::Light, 1),
-            (Theme::Dark, ThemeChoice::Dark, 2),
-        ];
-
-        for (stored, choice, index) in cases {
-            assert_eq!(ThemeChoice::from_setting(stored), choice);
-            assert_eq!(choice.selector_index(), index);
-            assert_eq!(ThemeChoice::from_selector_index(index), choice);
-            assert_eq!(choice.setting_value(), stored);
+        for (index, theme) in [Theme::Auto, Theme::Light, Theme::Dark]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(theme_selector_index(theme), index);
+            assert_eq!(theme_from_selector_index(index), theme);
+            assert_eq!(THEME_LABELS[index], theme.as_ini_value());
         }
+        assert_eq!(theme_from_selector_index(usize::MAX), Theme::Auto);
     }
 
     #[test]

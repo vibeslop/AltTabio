@@ -6,6 +6,7 @@ compile_error!("AltTabio requires panic=unwind to contain panics at Win32 callba
 mod about_dialog;
 mod app_icon;
 mod hook;
+mod native_drawing;
 mod native_theme;
 mod preview;
 mod renderer;
