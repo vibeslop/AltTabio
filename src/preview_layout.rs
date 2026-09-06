@@ -69,6 +69,17 @@ pub struct DesktopWindowPreviewLayout {
     pub window_source: Rect,
 }
 
+/// WINDOWPLACEMENT uses workspace coordinates for ordinary top-level windows.
+#[must_use]
+pub fn workspace_to_screen(window: Rect, monitor: Rect, work_area: Rect) -> Rect {
+    Rect::new(
+        window.left + (work_area.left - monitor.left),
+        window.top + (work_area.top - monitor.top),
+        window.width,
+        window.height,
+    )
+}
+
 #[must_use]
 pub fn fit(bounds: Rect, content_size: Size) -> Rect {
     if bounds.is_empty() || content_size.width <= 0.0 || content_size.height <= 0.0 {
@@ -150,6 +161,41 @@ fn fallback_layout(desktop_destination: Rect, source_size: Size) -> DesktopWindo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimized_preview_accounts_for_taskbars_and_monitor_origins() {
+        for (monitor, work, restored, expected) in [
+            (
+                Rect::new(0.0, 0.0, 1920.0, 1080.0),
+                Rect::new(0.0, 40.0, 1920.0, 1040.0),
+                Rect::new(100.0, 100.0, 800.0, 600.0),
+                Rect::new(100.0, 140.0, 800.0, 600.0),
+            ),
+            (
+                Rect::new(-1920.0, 0.0, 1920.0, 1080.0),
+                Rect::new(-1880.0, 0.0, 1880.0, 1080.0),
+                Rect::new(-1800.0, 100.0, 800.0, 600.0),
+                Rect::new(-1760.0, 100.0, 800.0, 600.0),
+            ),
+            (
+                Rect::new(1920.0, -1080.0, 1920.0, 1080.0),
+                Rect::new(1920.0, -1040.0, 1920.0, 1040.0),
+                Rect::new(2000.0, -1000.0, 800.0, 600.0),
+                Rect::new(2000.0, -960.0, 800.0, 600.0),
+            ),
+        ] {
+            let screen = workspace_to_screen(restored, monitor, work);
+            assert_eq!(screen, expected);
+            let placement = calculate(
+                monitor,
+                monitor,
+                Rect::new(-32000.0, -32000.0, 160.0, 30.0),
+                Size::new(800.0, 600.0),
+                Some(screen),
+            );
+            assert_eq!(placement.window_destination, expected);
+        }
+    }
 
     #[test]
     fn fit_centers_content_without_distorting_aspect_ratio() {

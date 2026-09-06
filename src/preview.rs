@@ -1,5 +1,7 @@
 use alttabio::overlay_layout::{for_compact_list, layout_scale};
-use alttabio::preview_layout::{Rect as LayoutRect, Size as LayoutSize, calculate};
+use alttabio::preview_layout::{
+    Rect as LayoutRect, Size as LayoutSize, calculate, workspace_to_screen,
+};
 use std::mem::size_of;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
@@ -9,11 +11,12 @@ use windows::Win32::Graphics::Dwm::{
     DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect, MonitorFromWindow,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetWindowPlacement, GetWindowRect, IsIconic, WINDOWPLACEMENT,
+    GWL_EXSTYLE, GetClientRect, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic,
+    WINDOWPLACEMENT, WS_EX_TOOLWINDOW,
 };
 use windows::core::Result;
 
@@ -197,19 +200,9 @@ fn desktop_preview_layout(
     source_width: i32,
     source_height: i32,
 ) -> Option<PreviewPlacement> {
-    let restored = restored_window_bounds(source);
-    let monitor = if let Some(restored) = restored {
-        unsafe {
-            // SAFETY: restored is an initialized physical-pixel rectangle and the fallback flag
-            // guarantees a monitor for off-screen saved placements.
-            MonitorFromRect(&raw const restored, MONITOR_DEFAULTTONEAREST)
-        }
-    } else {
-        unsafe {
-            // SAFETY: source is a borrowed live HWND and the fallback flag requests the nearest
-            // monitor if the window is not currently intersecting one.
-            MonitorFromWindow(source, MONITOR_DEFAULTTONEAREST)
-        }
+    let monitor = unsafe {
+        // SAFETY: source is borrowed. For minimized windows Windows uses its pre-minimize rectangle.
+        MonitorFromWindow(source, MONITOR_DEFAULTTONEAREST)
     };
     if monitor.is_invalid() {
         return None;
@@ -225,6 +218,7 @@ fn desktop_preview_layout(
     if !monitor_read.as_bool() {
         return None;
     }
+    let restored = restored_window_bounds(source, &monitor_info);
     let window = source_window_bounds(source)?;
     let layout = calculate(
         to_layout_rect(host),
@@ -297,7 +291,7 @@ fn source_window_bounds(source: HWND) -> Option<RECT> {
     valid_rect(bounds).then_some(bounds)
 }
 
-fn restored_window_bounds(source: HWND) -> Option<RECT> {
+fn restored_window_bounds(source: HWND, monitor: &MONITORINFO) -> Option<RECT> {
     let minimized = unsafe {
         // SAFETY: source is a borrowed live HWND and IsIconic has no pointer preconditions.
         IsIconic(source).as_bool()
@@ -313,7 +307,19 @@ fn restored_window_bounds(source: HWND) -> Option<RECT> {
         // SAFETY: placement has a correct length and is writable for the synchronous call.
         GetWindowPlacement(source, &raw mut placement).ok()?;
     }
-    valid_rect(placement.rcNormalPosition).then_some(placement.rcNormalPosition)
+    if !valid_rect(placement.rcNormalPosition) {
+        return None;
+    }
+    // SAFETY: source is borrowed; this reads a scalar style without changing the window.
+    let style = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
+    if style & isize::try_from(WS_EX_TOOLWINDOW.0).unwrap_or_default() != 0 {
+        return Some(placement.rcNormalPosition);
+    }
+    Some(to_native_rect(workspace_to_screen(
+        to_layout_rect(placement.rcNormalPosition),
+        to_layout_rect(monitor.rcMonitor),
+        to_layout_rect(monitor.rcWork),
+    )))
 }
 
 const fn valid_rect(rectangle: RECT) -> bool {
