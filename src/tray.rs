@@ -91,7 +91,7 @@ impl TrayIcon {
         }
 
         let mut tip = [0_u16; 128];
-        copy_utf16(&mut tip, "AltTabio");
+        copy_utf16(&mut tip, concat!("AltTabio ", env!("CARGO_PKG_VERSION")));
         let data = NOTIFYICONDATAW {
             cbSize: u32::try_from(size_of::<NOTIFYICONDATAW>()).unwrap_or_default(),
             hWnd: hwnd,
