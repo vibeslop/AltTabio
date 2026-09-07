@@ -134,7 +134,7 @@ impl Default for Settings {
                 typed_search: true,
                 release_alt_switches: true,
                 release_right_button_switches: true,
-                right_button_wheel_switching: true,
+                right_button_wheel_switching: false,
                 mouse_over_selection: true,
             },
             appearance: AppearanceSettings {
@@ -458,6 +458,7 @@ mod tests {
         let settings = SettingsDocument::parse("").settings();
 
         assert_eq!(settings, Settings::default());
+        assert!(!settings.general.right_button_wheel_switching);
         assert_eq!(settings.appearance.icon, IconColor::Azure);
         assert!(settings.appearance.compact_list);
         assert!(!settings.appearance.show_app_names);
