@@ -1,5 +1,6 @@
 //! Testable application behavior for `AltTabio`.
 
+pub mod deferred_switch;
 pub mod input;
 pub mod overlay_layout;
 pub mod passthrough;

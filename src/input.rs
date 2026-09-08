@@ -310,6 +310,10 @@ impl HookState {
     /// The adapter calls this for every suspension generation, including a missed open/close.
     pub fn set_interception_suspended(&mut self, suspended: bool) {
         self.interception.suspended = suspended;
+        self.cancel_held_gestures();
+    }
+
+    fn cancel_held_gestures(&mut self) {
         for (passthrough, pressed) in self
             .interception
             .passthrough_keys
@@ -412,7 +416,9 @@ impl HookState {
             return outcome;
         }
         let pending_alt_keys = self.pending_alt_keys;
-        let alt_down = event.modifiers.alt || pending_alt_keys != 0 || is_alt(event.key);
+        // Suppressed Alt presses never set Windows' LLKHF_ALTDOWN flag. Keep using
+        // the observed physical press after the first Tab consumes pending_alt_keys.
+        let alt_down = event.modifiers.alt || self.any_alt_key_down();
         let alt_tab = switching_allowed
             && settings.replace_alt_tab
             && pressed
@@ -672,6 +678,12 @@ impl HookState {
         settings: HookSettings,
     ) -> Option<HookOutcome> {
         let mask = windows_key_mask(event.key)?;
+        if event.transition == KeyTransition::Pressed && self.alt_switch_gesture_active {
+            // Start owns the Windows key, including repeats and release. Cancel the
+            // switch while retaining the swallowed Alt/Tab releases until they arrive.
+            self.cancel_held_gestures();
+            return Some(HookOutcome::one(false, InputAction::DismissOverlay));
+        }
         if event.transition == KeyTransition::Released && self.pending_windows_keys & mask != 0 {
             self.pending_windows_keys &= !mask;
             self.replayed_key_events = [
@@ -1157,6 +1169,84 @@ fn owned_key_slot(key: Key) -> Option<(usize, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_alt_tab_cycles_without_windows_alt_flag() {
+        for alt in [Key::LeftAlt, Key::RightAlt] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            let modifiers = Modifiers::default();
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(alt, modifiers), settings)
+                    .suppress
+            );
+            for delta in [1, 1, -1, 1] {
+                if delta == -1 {
+                    let _ =
+                        state.process_key(KeyEvent::pressed(Key::LeftShift, modifiers), settings);
+                }
+                assert_eq!(
+                    state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings),
+                    HookOutcome::one(true, InputAction::Switch(delta))
+                );
+                assert!(
+                    state
+                        .process_key(KeyEvent::released(Key::Tab, modifiers), settings)
+                        .suppress
+                );
+                if delta == -1 {
+                    let _ =
+                        state.process_key(KeyEvent::released(Key::LeftShift, modifiers), settings);
+                }
+            }
+            assert_eq!(
+                state.process_key(KeyEvent::released(alt, modifiers), settings),
+                HookOutcome::one(true, InputAction::AltReleased)
+            );
+        }
+    }
+
+    #[test]
+    fn windows_key_cancels_alt_switch_without_losing_release_ownership() {
+        for windows in [Key::LeftWindows, Key::RightWindows] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            let modifiers = Modifiers::default();
+            let _ = state.process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings);
+            let _ = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
+            assert_eq!(
+                state.process_key(KeyEvent::pressed(windows, modifiers), settings),
+                HookOutcome::one(false, InputAction::DismissOverlay)
+            );
+            assert_eq!(
+                state.process_key(KeyEvent::pressed(windows, modifiers), settings),
+                HookOutcome::default()
+            );
+            assert!(
+                state
+                    .process_key(KeyEvent::released(Key::Tab, modifiers), settings)
+                    .suppress
+            );
+            assert_eq!(
+                state.process_key(KeyEvent::released(windows, modifiers), settings),
+                HookOutcome::default()
+            );
+            assert_eq!(state.take_replayed_key_events(), [None; 3]);
+            assert_eq!(
+                state.process_key(KeyEvent::released(Key::LeftAlt, modifiers), settings),
+                HookOutcome {
+                    suppress: true,
+                    ..HookOutcome::default()
+                }
+            );
+            let _ = state.process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings);
+            assert_eq!(
+                state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings),
+                HookOutcome::one(true, InputAction::Switch(1))
+            );
+        }
+    }
 
     #[test]
     fn rebased_shift_release_debt_does_not_swallow_a_fresh_forwarded_pair() {

@@ -15,7 +15,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::StationsAndDesktops::{
     GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
 };
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyboardLayout, GetKeyboardState, INPUT, INPUT_0, INPUT_KEYBOARD,
@@ -27,22 +27,24 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SNAPSHOT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, EVENT_SYSTEM_DESKTOPSWITCH, GetMessageW,
-    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, KillTimer, LLKHF_ALTDOWN, MSG,
-    MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW, PostThreadMessageW, SetTimer,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL,
-    WINEVENT_OUTOFCONTEXT, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+    AllowSetForegroundWindow, CallNextHookEx, DispatchMessageW, EVENT_SYSTEM_DESKTOPSWITCH,
+    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, KillTimer,
+    LLKHF_ALTDOWN, LLKHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
+    PostThreadMessageW, SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
+    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 use windows::core::{BOOL, Error};
 
 pub const WM_HOOK_ACTION: u32 = WM_APP + 1;
+pub const WM_HOOK_HOTKEY_ACTION: u32 = WM_APP + 21;
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
 const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
 const HOOK_ERROR_POST_ACTION: u8 = 2;
+const HOOK_ERROR_REGISTERED_SWITCH: u8 = 4;
 
 const ACTION_SWITCH: usize = 1;
 const ACTION_ACTIVATE_POSITION: usize = 2;
@@ -80,6 +82,7 @@ const fn action_wparam(code: usize, generation: usize) -> WPARAM {
 struct HookFlags {
     value: AtomicUsize,
     recovery_pending: AtomicBool,
+    shell_window: AtomicUsize,
 }
 
 impl HookFlags {
@@ -91,6 +94,7 @@ impl HookFlags {
         Self {
             value: AtomicUsize::new(value),
             recovery_pending: AtomicBool::new(false),
+            shell_window: AtomicUsize::new(0),
         }
     }
 
@@ -167,6 +171,8 @@ impl HookFlags {
 }
 
 struct HookContext {
+    registered_switch: Option<crate::switch_hotkey::PendingSwitch>,
+    registered_tab_down: bool,
     target: HWND,
     state: HookState,
     settings: HookSettings,
@@ -187,6 +193,7 @@ impl HookContext {
         let recovering = self.flags.recovery_pending.load(Ordering::Acquire);
         let suspended = flags & INTERCEPTION_SUSPENDED != 0 || recovering;
         if generation != self.interception_generation || recovering != self.recovering {
+            self.registered_switch = None;
             self.state.set_interception_suspended(suspended);
             self.interception_generation = generation;
             self.recovering = recovering;
@@ -248,6 +255,13 @@ impl Drop for HookInterceptionGuard {
 }
 
 impl HookThread {
+    pub fn set_shell_window(&self, window: Option<HWND>) {
+        self.flags.shell_window.store(
+            window.map_or(0, |window| window.0 as usize),
+            Ordering::Release,
+        );
+    }
+
     pub fn start(target: HWND, settings: HookSettings) -> Result<Self, String> {
         let target_thread_id = unsafe {
             // SAFETY: target is the live overlay HWND and no process-id output is requested.
@@ -274,6 +288,8 @@ impl HookThread {
                 let target = HWND(target_value as *mut core::ffi::c_void);
                 if let Err(error) = run_hook_thread(
                     HookContext {
+                        registered_switch: None,
+                        registered_tab_down: false,
                         target,
                         target_thread_id,
                         settings,
@@ -471,6 +487,11 @@ fn run_hook_thread(
         }
         if result.0 == 0 {
             break Ok(());
+        }
+        dispatch_registered_switch(None);
+        if message.message == WM_HOTKEY && crate::switch_hotkey::owns_id(message.wParam.0) {
+            dispatch_registered_switch(Some(message.wParam.0));
+            continue;
         }
         if message.message == WM_RECONCILE_KEYBOARD
             || (message.message == WM_TIMER && message.wParam.0 == recovery.timer)
@@ -829,6 +850,9 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     if !replay_key_events(replayed_key_events, &mut outcome) {
         record_callback_error(HOOK_ERROR_REPLAY_INPUT);
     }
+    outcome =
+        process_with_context(|context| route_registered_switch(context, outcome, data, transition))
+            .unwrap_or(outcome);
     Some(outcome)
 }
 
@@ -964,6 +988,132 @@ fn post_context_actions(
 }
 
 fn post_action(target: HWND, action: InputAction, generation: usize) -> bool {
+    post_action_message(target, action, generation, WM_HOOK_ACTION)
+}
+
+fn route_registered_switch(
+    context: &mut HookContext,
+    mut outcome: HookOutcome,
+    data: &KBDLLHOOKSTRUCT,
+    transition: KeyTransition,
+) -> HookOutcome {
+    if data.vkCode == u32::from(VK_TAB.0)
+        && transition == KeyTransition::Released
+        && context.registered_tab_down
+    {
+        // Windows received this physical down as a hotkey. Balance it even if the pure
+        // switcher would normally own the release of an intercepted Tab.
+        context.registered_tab_down = false;
+        outcome.suppress = false;
+    }
+    if context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
+        || outcome
+            .actions()
+            .any(|action| action == InputAction::DismissOverlay)
+    {
+        context.registered_switch = None;
+        return outcome;
+    }
+    if let Some(pending) = &mut context.registered_switch {
+        if !pending.actions.push(outcome) {
+            context.registered_switch = None;
+            context.state.reset_gestures();
+            let _cleared =
+                context
+                    .flags
+                    .update_overlay(context.interception_generation, false, false);
+            if !post_action(
+                context.target,
+                InputAction::DismissOverlay,
+                context.interception_generation,
+            ) {
+                context.record_error(HOOK_ERROR_POST_ACTION);
+            }
+            context.record_error(HOOK_ERROR_REGISTERED_SWITCH);
+        }
+        let mut deferred = HookOutcome::default();
+        deferred.suppress = outcome.suppress;
+        return deferred;
+    }
+    let shell_window = context.flags.shell_window.load(Ordering::Acquire);
+    if data.vkCode != u32::from(VK_TAB.0) || transition != KeyTransition::Pressed
+        || data.flags.contains(LLKHF_INJECTED)
+        || !outcome.actions().any(|action| matches!(action, InputAction::Switch(_)))
+        || shell_window == 0
+        // SAFETY: this bounded metadata query does not enumerate or send messages to windows.
+        || unsafe { GetForegroundWindow() }.0 as usize != shell_window
+    {
+        return outcome;
+    }
+    if let Ok(mut pending) =
+        crate::switch_hotkey::PendingSwitch::register(context.interception_generation)
+    {
+        if !context.flags.update_overlay(
+            context.interception_generation,
+            true,
+            context.settings.typed_search,
+        ) {
+            return outcome;
+        }
+        if !pending.actions.push(outcome) {
+            return outcome;
+        }
+        context.registered_switch = Some(pending);
+        context.registered_tab_down = true;
+        HookOutcome::default()
+    } else {
+        context.record_error(HOOK_ERROR_REGISTERED_SWITCH);
+        outcome
+    }
+}
+
+fn dispatch_registered_switch(hotkey_id: Option<usize>) {
+    let pending = process_with_context(|context| {
+        let ready = context.registered_switch.as_ref().is_some_and(|pending| {
+            hotkey_id.map_or_else(|| pending.expired(), |id| pending.matches_id(id))
+        });
+        if ready {
+            context.registered_switch.take()
+        } else {
+            None
+        }
+    })
+    .flatten();
+    let Some(mut pending) = pending else {
+        return;
+    };
+    let generation = pending.generation;
+    let native = hotkey_id.is_some();
+    if native {
+        // SAFETY: this thread received the physical registered hotkey. Explicitly share its
+        // activation permission with our process before notifying the separate UI thread.
+        let granted = unsafe { AllowSetForegroundWindow(GetCurrentProcessId()) };
+        if let Err(error) = granted {
+            eprintln!("Could not share physical hotkey activation permission: {error}");
+        }
+    }
+    let outcomes = pending.actions.take();
+    drop(pending);
+    for outcome in outcomes {
+        let _posted = process_with_context(|context| {
+            if context.interception_generation != generation {
+                return;
+            }
+            let message = if native {
+                WM_HOOK_HOTKEY_ACTION
+            } else {
+                WM_HOOK_ACTION
+            };
+            if !post_context_actions(context, outcome, |target, action| {
+                post_action_message(target, action, generation, message)
+            }) {
+                context.state.reset_gestures();
+            }
+        });
+    }
+}
+
+fn post_action_message(target: HWND, action: InputAction, generation: usize, message: u32) -> bool {
     let (code, value) = match action {
         InputAction::Switch(delta) => (ACTION_SWITCH, delta as isize),
         InputAction::Navigate(delta) => (ACTION_NAVIGATE, delta as isize),
@@ -994,7 +1144,7 @@ fn post_action(target: HWND, action: InputAction, generation: usize) -> bool {
         // integer payloads and retains no Rust references.
         PostMessageW(
             Some(target),
-            WM_HOOK_ACTION,
+            message,
             action_wparam(code, generation),
             LPARAM(value),
         )
@@ -1004,6 +1154,7 @@ fn post_action(target: HWND, action: InputAction, generation: usize) -> bool {
 
 fn reset_context() {
     let _outcome = process_with_context(|context| {
+        context.registered_switch = None;
         context.state.reset_gestures();
         HookOutcome::default()
     });
@@ -1014,6 +1165,12 @@ fn record_callback_error(error: u8) {
 }
 
 fn report_callback_errors() {
+    if let Some(error) = crate::switch_hotkey::take_registration_error() {
+        eprintln!("Could not register physical switch hotkey: {error}");
+    }
+    if let Some(error) = crate::switch_hotkey::take_cleanup_error() {
+        eprintln!("Could not unregister physical switch hotkey: {error}");
+    }
     let pending = process_with_context(|context| core::mem::take(&mut context.pending_errors))
         .unwrap_or_default();
     if pending & HOOK_ERROR_REPLAY_INPUT != 0 {
@@ -1021,6 +1178,9 @@ fn report_callback_errors() {
     }
     if pending & HOOK_ERROR_POST_ACTION != 0 {
         eprintln!("Could not post an input action from the input hook");
+    }
+    if pending & HOOK_ERROR_REGISTERED_SWITCH != 0 {
+        eprintln!("Could not route physical Tab through a registered switch hotkey");
     }
 }
 
@@ -1089,12 +1249,51 @@ fn replay_key_events(events: [Option<ReplayedKeyEvent>; 3], outcome: &mut HookOu
     })
 }
 
-fn replay_key_events_with(
-    events: [Option<ReplayedKeyEvent>; 3],
+/// Called on the UI thread before opening the overlay, never from an input callback.
+pub fn send_shell_escape() -> Result<(), String> {
+    send_shell_escape_with(
+        |key| key_pressed(key.0),
+        |inputs, input_size| unsafe {
+            // SAFETY: the replay helper supplies initialized INPUT records and SendInput copies
+            // them synchronously without retaining the borrowed slice.
+            SendInput(inputs, input_size)
+        },
+    )
+}
+
+fn send_shell_escape_with(
+    mut is_down: impl FnMut(VIRTUAL_KEY) -> bool,
+    sender: impl FnMut(&[INPUT], i32) -> u32,
+) -> Result<(), String> {
+    // Do not release a modifier forwarded to another application or send its Escape shortcut.
+    if [VK_MENU, VK_CONTROL, VK_LWIN, VK_RWIN]
+        .into_iter()
+        .any(&mut is_down)
+    {
+        return Err("Cannot dismiss Start while a system modifier is forwarded".to_owned());
+    }
+    let events = [
+        // Suppressing Alt can leave LLKHF_ALTDOWN set even while async state reports up.
+        // Clear that context on both sides before Escape. Our tagged releases bypass physical
+        // gesture tracking, so held-Alt cycling and the eventual real release remain intact.
+        Some(ReplayedKeyEvent::released(Key::LeftAlt)),
+        Some(ReplayedKeyEvent::released(Key::RightAlt)),
+        Some(ReplayedKeyEvent::pressed(Key::Escape)),
+        Some(ReplayedKeyEvent::released(Key::Escape)),
+    ];
+    if replay_key_events_with(events, &mut HookOutcome::default(), sender) {
+        Ok(())
+    } else {
+        Err("Could not send Escape to the Start/Search menu".to_owned())
+    }
+}
+
+fn replay_key_events_with<const N: usize>(
+    events: [Option<ReplayedKeyEvent>; N],
     outcome: &mut HookOutcome,
     mut sender: impl FnMut(&[INPUT], i32) -> u32,
 ) -> bool {
-    let mut inputs = [INPUT::default(); 3];
+    let mut inputs = [INPUT::default(); N];
     let mut input_count = 0;
     for event in events.into_iter().flatten() {
         let Some(slot) = inputs.get_mut(input_count) else {
@@ -1396,6 +1595,8 @@ mod tests {
 
     fn test_context() -> HookContext {
         HookContext {
+            registered_switch: None,
+            registered_tab_down: false,
             target: HWND::default(),
             state: HookState::default(),
             settings: HookSettings::default(),
@@ -1408,6 +1609,36 @@ mod tests {
             keyboard_state: KeyboardState::default(),
             recovering: false,
         }
+    }
+
+    #[test]
+    fn physical_hotkey_tab_release_is_balanced_when_a_modal_cancels_the_gesture() {
+        let mut context = test_context();
+        let modifiers = Modifiers::default();
+        let _ = context
+            .state
+            .process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), context.settings);
+        let _ = context
+            .state
+            .process_key(KeyEvent::pressed(Key::Tab, modifiers), context.settings);
+        context.registered_tab_down = true;
+        context.state.set_interception_suspended(true);
+        for (key, vk, expected_suppression) in
+            [(Key::Tab, VK_TAB, false), (Key::LeftAlt, VK_LMENU, true)]
+        {
+            let outcome = context
+                .state
+                .process_key(KeyEvent::released(key, modifiers), context.settings);
+            let data = KBDLLHOOKSTRUCT {
+                vkCode: u32::from(vk.0),
+                ..KBDLLHOOKSTRUCT::default()
+            };
+            let routed =
+                route_registered_switch(&mut context, outcome, &data, KeyTransition::Released);
+            assert_eq!(routed.suppress, expected_suppression);
+            assert!(routed.actions().next().is_none());
+        }
+        assert!(!context.registered_tab_down);
     }
 
     #[test]
@@ -1876,6 +2107,137 @@ mod tests {
     }
 
     #[test]
+    fn shell_escape_clears_suppressed_alt_context_before_escape() {
+        for held_alt in [VK_LMENU, VK_RMENU] {
+            // Captured failure: GetAsyncKeyState permitted dismissal, but both injected Escape
+            // events carried LLKHF_ALTDOWN and Start retained focus until the 500 ms timeout.
+            let mut alt_context = true;
+            let mut escapes = Vec::new();
+            assert!(
+                send_shell_escape_with(
+                    |_| false,
+                    |inputs, _| {
+                        for input in inputs {
+                            assert_eq!(input.r#type, INPUT_KEYBOARD);
+                            // SAFETY: the replay helper initializes the keyboard union member.
+                            let keyboard = unsafe { input.Anonymous.ki };
+                            assert_eq!(keyboard.dwExtraInfo, REPLAYED_INPUT_MARKER);
+                            if keyboard.wVk == held_alt
+                                && keyboard.dwFlags.contains(KEYEVENTF_KEYUP)
+                            {
+                                alt_context = false;
+                            }
+                            if keyboard.wVk == VK_ESCAPE {
+                                escapes.push((
+                                    keyboard.dwFlags.contains(KEYEVENTF_KEYUP),
+                                    alt_context,
+                                ));
+                            }
+                        }
+                        u32::try_from(inputs.len()).unwrap_or_default()
+                    },
+                )
+                .is_ok()
+            );
+            assert_eq!(
+                escapes,
+                [(false, false), (true, false)],
+                "Start must receive plain Escape, even when suppressed Alt is absent from async state"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_escape_preserves_forwarded_system_modifiers() {
+        for held in [VK_MENU, VK_CONTROL, VK_LWIN, VK_RWIN] {
+            assert!(
+                send_shell_escape_with(
+                    |key| key == held,
+                    |_, _| panic!("A forwarded modifier must prevent all injected input"),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn shell_escape_keeps_the_next_gesture_after_start_interrupts_alt_tab() {
+        for alt in [Key::LeftAlt, Key::RightAlt] {
+            let mut context = test_context();
+            let modifiers = Modifiers::default();
+            for event in [
+                KeyEvent::pressed(alt, modifiers),
+                KeyEvent::pressed(Key::Tab, modifiers),
+                KeyEvent::released(Key::Tab, modifiers),
+                KeyEvent::pressed(Key::LeftWindows, modifiers),
+                KeyEvent::released(Key::LeftWindows, modifiers),
+                KeyEvent::pressed(Key::Tab, modifiers),
+                KeyEvent::released(Key::Tab, modifiers),
+                KeyEvent::released(alt, modifiers),
+                KeyEvent::pressed(alt, modifiers),
+                KeyEvent::pressed(Key::Tab, modifiers),
+                KeyEvent::released(Key::Tab, modifiers),
+            ] {
+                let _outcome = context.state.process_key(event, context.settings);
+            }
+            CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+            let result = send_shell_escape_with(
+                |_| false,
+                |inputs, _| {
+                    for input in inputs {
+                        // SAFETY: send_shell_escape_with only constructs keyboard INPUT records.
+                        let keyboard = unsafe { input.Anonymous.ki };
+                        let data = KBDLLHOOKSTRUCT {
+                            vkCode: u32::from(keyboard.wVk.0),
+                            dwExtraInfo: keyboard.dwExtraInfo,
+                            ..KBDLLHOOKSTRUCT::default()
+                        };
+                        let message = if keyboard.dwFlags.contains(KEYEVENTF_KEYUP) {
+                            WM_KEYUP
+                        } else {
+                            WM_KEYDOWN
+                        };
+                        // Pass every injected release and Escape through the real adapter.
+                        assert_eq!(
+                            process_keyboard_message(
+                                WPARAM(message as usize),
+                                LPARAM((&raw const data) as isize)
+                            ),
+                            None
+                        );
+                    }
+                    u32::try_from(inputs.len()).unwrap_or_default()
+                },
+            );
+            let Some(mut context) = CONTEXT.with(|slot| slot.borrow_mut().take()) else {
+                panic!("test context disappeared");
+            };
+            assert!(result.is_ok());
+            for delta in [1, -1] {
+                if delta == -1 {
+                    let _shift = context.state.process_key(
+                        KeyEvent::pressed(Key::LeftShift, modifiers),
+                        context.settings,
+                    );
+                }
+                let outcome = context
+                    .state
+                    .process_key(KeyEvent::pressed(Key::Tab, modifiers), context.settings);
+                assert_eq!(outcome.actions().next(), Some(InputAction::Switch(delta)));
+                assert!(outcome.suppress);
+                let _release = context
+                    .state
+                    .process_key(KeyEvent::released(Key::Tab, modifiers), context.settings);
+            }
+            let release = context
+                .state
+                .process_key(KeyEvent::released(alt, modifiers), context.settings);
+            assert!(release.suppress);
+            assert_eq!(release.actions().next(), Some(InputAction::AltReleased));
+        }
+    }
+
+    #[test]
     fn replayed_windows_events_are_tagged_extended_keyboard_input() {
         for (event, expected_key_up) in [
             (ReplayedKeyEvent::pressed(Key::LeftWindows), false),
@@ -1975,6 +2337,8 @@ mod tests {
     fn posting_overlay_open_arms_typed_search_before_the_ui_acknowledges_visibility() {
         let flags = Arc::new(HookFlags::default());
         let mut context = HookContext {
+            registered_switch: None,
+            registered_tab_down: false,
             target: HWND::default(),
             state: HookState::default(),
             settings: HookSettings::default(),

@@ -6,6 +6,7 @@ use crate::process_info::ProcessInfo;
 use crate::renderer::{CloseButtonVisualState, RenderOptions, Renderer, TaskListHit};
 use crate::settings_dialog;
 use crate::settings_io::SettingsStore;
+use crate::shell_menu;
 use crate::single_instance::SingleInstance;
 use crate::startup;
 use crate::task_icon::TaskIcons;
@@ -18,6 +19,7 @@ use crate::win_events::{
 use crate::window_commands::{
     execute as execute_window_command, show_menu as show_window_command_menu,
 };
+use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
 use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
 };
@@ -57,7 +59,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetLastActivePopup, GetMessageW, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed, KillTimer,
     LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_HIDE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER,
+    RegisterClassExW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER,
     SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
     TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -74,6 +76,14 @@ const WM_DESTROY_APP: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
 const WM_SHOW_ABOUT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5;
 const WM_MOUSE_LEAVE: u32 = 0x02A3;
 const CLOSE_REFRESH_TIMER_ID: usize = 1;
+const SHELL_DISMISS_TIMER_ID: usize = 3;
+
+struct PendingShellDismissal {
+    window: HWND,
+    origin: Option<WPARAM>,
+    started: std::time::Instant,
+    input: DeferredSwitch,
+}
 const CLOSE_REFRESH_DELAY_MS: u32 = 250;
 
 pub fn run(
@@ -277,6 +287,7 @@ impl Drop for ComApartment {
 )]
 struct App {
     hwnd: HWND,
+    pending_shell: Option<PendingShellDismissal>,
     session: SwitcherSession,
     task_icons: TaskIcons,
     renderer: Renderer,
@@ -414,6 +425,7 @@ impl App {
         let session = SwitcherSession::new(switcher_session_settings(&settings));
         Ok(Self {
             hwnd: HWND::default(),
+            pending_shell: None,
             session,
             task_icons: TaskIcons::default(),
             renderer: Renderer::new(resolved_theme)?,
@@ -561,7 +573,7 @@ impl App {
             return Some(LRESULT(0));
         }
         match message {
-            WM_HOOK_ACTION => {
+            WM_HOOK_ACTION | crate::hook::WM_HOOK_HOTKEY_ACTION => {
                 if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
                     && !self.session.context_menu_open()
                     && self
@@ -570,7 +582,20 @@ impl App {
                         .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
-                    self.handle_input_action(action);
+                    let new_opening = self.pending_shell.is_none();
+                    if message == crate::hook::WM_HOOK_HOTKEY_ACTION
+                        && matches!(action, InputAction::Switch(_))
+                    {
+                        // The actual Tab was delivered as a registered hotkey. Taking focus
+                        // now dismisses the shell naturally, without injecting Escape first.
+                        self.stop_shell_dismissal();
+                        self.apply_input_action(action);
+                    } else {
+                        self.handle_input_action(action);
+                    }
+                    if new_opening && let Some(pending) = &mut self.pending_shell {
+                        pending.origin = Some(wparam);
+                    }
                 }
                 Some(LRESULT(0))
             }
@@ -594,6 +619,10 @@ impl App {
                 self.handle_listed_refresh_retry_timer();
                 Some(LRESULT(0))
             }
+            WM_TIMER if wparam.0 == SHELL_DISMISS_TIMER_ID => {
+                self.handle_shell_dismissal();
+                Some(LRESULT(0))
+            }
             _ => None,
         }
     }
@@ -612,7 +641,10 @@ impl App {
             _ => TrayAction::None,
         };
         match action {
-            TrayAction::Show => self.show_overlay(None),
+            TrayAction::Show => {
+                self.stop_shell_dismissal();
+                self.show_overlay(None);
+            }
             TrayAction::Settings => self.request_modal_dialog(WM_SHOW_SETTINGS, "Settings"),
             TrayAction::About => self.request_modal_dialog(WM_SHOW_ABOUT, "About"),
             TrayAction::Exit => self.request_close("the tray"),
@@ -623,12 +655,14 @@ impl App {
     fn handle_foreground_check(&mut self) {
         win_events::acknowledge_foreground_check();
         let policy = foreground_passthrough_policy(self.hwnd);
-        if policy.bypasses_local_switching() && self.is_visible() {
+        if policy.bypasses_local_switching() && (self.is_visible() || self.pending_shell.is_some())
+        {
             self.hide_overlay();
         }
         let Some(hooks) = self.hooks.as_ref() else {
             return;
         };
+        hooks.set_shell_window(shell_menu::foreground_host());
         if let Err(error) = hooks.set_remote_desktop_passthrough(policy) {
             eprintln!("{error}");
         }
@@ -643,6 +677,7 @@ impl App {
             &mut self.hooks,
             HookThread::start(self.hwnd, settings),
             |hooks| {
+                hooks.set_shell_window(shell_menu::foreground_host());
                 if let Err(error) = hooks.set_remote_desktop_passthrough(policy) {
                     eprintln!("{error}");
                 }
@@ -778,6 +813,7 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        self.stop_shell_dismissal();
         self.stop_listed_refresh_retry_timer();
         win_events::clear_notify_hwnd();
         self.win_event_watcher = None;
@@ -822,6 +858,25 @@ impl App {
     }
 
     fn handle_input_action(&mut self, action: InputAction) {
+        if let Some(pending) = &mut self.pending_shell {
+            if pending.input.push(action) {
+                self.preview_shell_switch();
+            } else {
+                self.hide_overlay();
+            }
+            return;
+        }
+        if !self.is_visible()
+            && matches!(action, InputAction::Switch(_))
+            && let Some(window) = shell_menu::foreground_menu()
+        {
+            self.begin_shell_dismissal(window, action);
+            return;
+        }
+        self.apply_input_action(action);
+    }
+
+    fn apply_input_action(&mut self, action: InputAction) {
         match self.session.handle_input(action) {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
@@ -832,6 +887,98 @@ impl App {
                 let outcome = self.execute_window_command(request);
                 self.task_refresh.apply_command_outcome(outcome);
                 self.run_pending_task_refresh();
+            }
+        }
+    }
+
+    fn begin_shell_dismissal(&mut self, window: HWND, first: InputAction) {
+        if let Some(hooks) = self.hooks.as_ref() {
+            hooks.set_shell_window(Some(window));
+        }
+        // SAFETY: this timer belongs to the live overlay; no callback pointer is retained.
+        if unsafe { SetTimer(Some(self.hwnd), SHELL_DISMISS_TIMER_ID, 16, None) } == 0 {
+            eprintln!(
+                "Could not start the shell dismissal timer: {}",
+                Error::from_thread()
+            );
+            self.hide_overlay();
+            return;
+        }
+        self.pending_shell = Some(PendingShellDismissal {
+            window,
+            origin: None,
+            started: std::time::Instant::now(),
+            input: DeferredSwitch::new(first),
+        });
+        if let Err(error) = shell_menu::dismiss(window) {
+            eprintln!("{error}");
+            self.hide_overlay();
+            return;
+        }
+        self.preview_shell_switch();
+    }
+
+    fn preview_shell_switch(&mut self) {
+        let Some(pending) = &mut self.pending_shell else {
+            return;
+        };
+        for action in pending.input.take_preview_actions() {
+            self.apply_input_action(action);
+        }
+    }
+
+    fn stop_shell_dismissal(&mut self) {
+        if self.pending_shell.take().is_none() {
+            return;
+        }
+        // SAFETY: this balances the timer started for the live overlay's pending opening.
+        if let Err(error) = unsafe { KillTimer(Some(self.hwnd), SHELL_DISMISS_TIMER_ID) } {
+            eprintln!("Could not stop the shell dismissal timer: {error}");
+        }
+    }
+
+    fn handle_shell_dismissal(&mut self) {
+        let Some(pending) = &mut self.pending_shell else {
+            return;
+        };
+        if !pending.origin.is_some_and(|origin| {
+            self.hooks
+                .as_ref()
+                .is_some_and(|hooks| hooks.action_is_current(origin))
+        }) {
+            self.hide_overlay();
+            return;
+        }
+        let shell_has_focus =
+            if let Some(window) = shell_menu::remaining_foreground_menu(pending.window) {
+                pending.window = window;
+                true
+            } else {
+                false
+            };
+        let poll = pending
+            .input
+            .poll(shell_has_focus, pending.started.elapsed());
+        match poll {
+            DeferredSwitchPoll::Wait => {}
+            DeferredSwitchPoll::RetryDismissal => {
+                if let Err(error) = shell_menu::dismiss(pending.window) {
+                    eprintln!("{error}");
+                    self.hide_overlay();
+                }
+            }
+            DeferredSwitchPoll::Cancel => {
+                eprintln!("Start/Search did not relinquish foreground within the switch deadline");
+                self.hide_overlay();
+            }
+            DeferredSwitchPoll::Ready(actions) => {
+                self.stop_shell_dismissal();
+                if self.is_visible() {
+                    self.focus_overlay();
+                }
+                for action in actions {
+                    self.handle_input_action(action);
+                }
             }
         }
     }
@@ -1243,10 +1390,8 @@ impl App {
                 self.task_icons = icons;
             }
             Err(error) => {
-                self.set_hook_search_active(false);
-                self.set_hook_overlay_active(self.is_visible());
                 eprintln!("Could not enumerate windows: {error}");
-                self.reset_hook_gestures();
+                self.hide_overlay();
                 return;
             }
         }
@@ -1260,11 +1405,17 @@ impl App {
         }
         unsafe {
             // SAFETY: the HWND is live and owned by this UI thread.
-            let _was_visible = ShowWindow(self.hwnd, SW_SHOW);
-            let _foreground = SetForegroundWindow(self.hwnd);
-            if let Err(error) = SetFocus(Some(self.hwnd)) {
-                eprintln!("Could not focus the overlay: {error}");
-            }
+            let _was_visible = ShowWindow(
+                self.hwnd,
+                if self.pending_shell.is_some() {
+                    SW_SHOWNA
+                } else {
+                    SW_SHOW
+                },
+            );
+        }
+        if self.pending_shell.is_none() {
+            self.focus_overlay();
         }
         self.sync_content_size();
         self.set_hook_search_active(true);
@@ -1272,7 +1423,20 @@ impl App {
         self.request_redraw();
     }
 
+    fn focus_overlay(&self) {
+        // SAFETY: the HWND is live and owned by this UI thread.
+        unsafe {
+            if !request_foreground(self.hwnd) {
+                eprintln!("Could not bring the overlay to the foreground");
+            }
+            if let Err(error) = SetFocus(Some(self.hwnd)) {
+                eprintln!("Could not focus the overlay: {error}");
+            }
+        }
+    }
+
     fn hide_overlay(&mut self) {
+        self.stop_shell_dismissal();
         self.task_refresh.clear_notices();
         self.session.hide();
         self.set_hook_search_active(false);
@@ -1315,14 +1479,9 @@ impl App {
         self.hide_overlay();
         let target = HWND(target as *mut c_void);
         if !activate_window(target) {
-            unsafe {
-                // SAFETY: the HWND is live and owned by this UI thread.
-                let _was_visible = ShowWindow(self.hwnd, SW_SHOW);
-            }
-            self.session.restore_visible();
-            self.set_hook_search_active(true);
-            self.set_hook_overlay_active(true);
-            self.request_redraw();
+            // The completed gesture has released ownership. Reopening here leaves an
+            // overlay with no matching Alt release left to dismiss it.
+            eprintln!("Could not activate the selected window");
         }
     }
 
@@ -1822,6 +1981,11 @@ const fn colorref(color: Rgb8) -> u32 {
     color.red as u32 | ((color.green as u32) << 8) | ((color.blue as u32) << 16)
 }
 
+fn request_foreground(window: HWND) -> bool {
+    // SAFETY: window is a borrowed overlay or selected application HWND.
+    unsafe { SetForegroundWindow(window).as_bool() }
+}
+
 fn activate_window(owner: HWND) -> bool {
     let popup = unsafe {
         // SAFETY: owner is a borrowed HWND selected from the current EnumWindows snapshot.
@@ -1877,10 +2041,7 @@ fn activate_window(owner: HWND) -> bool {
     } {
         eprintln!("Could not bring the selected window to the top: {error}");
     }
-    let activated = unsafe {
-        // SAFETY: target is borrowed; the attachment guards live through activation.
-        SetForegroundWindow(target).as_bool()
-    };
+    let activated = request_foreground(target);
     if let Err(error) = unsafe {
         // SAFETY: target is borrowed; temporary input attachments remain in scope.
         SetActiveWindow(target)
