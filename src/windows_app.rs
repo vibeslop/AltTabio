@@ -48,22 +48,21 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetActiveWindow, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_BACK, VK_SHIFT,
+    ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_BACK,
+    VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos,
-    GetForegroundWindow, GetLastActivePopup, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed, KillTimer,
-    LoadCursorW, MB_ICONERROR, MB_OK, MSG, MessageBoxW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER,
-    SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync,
-    TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
+    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetForegroundWindow,
+    GetLastActivePopup, GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK,
+    MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage,
+    WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
 };
@@ -1516,9 +1515,8 @@ impl App {
     }
 
     fn activate_target(&mut self, target: isize, reset_hook: bool) {
-        self.hide_overlay_with_reset(reset_hook);
         let target = HWND(target as *mut c_void);
-        if !activate_window(target) {
+        if !activate_and_hide(target, || self.hide_overlay_with_reset(reset_hook)) {
             // The completed gesture has released ownership. Reopening here leaves an
             // overlay with no matching Alt release left to dismiss it.
             eprintln!("Could not activate the selected window");
@@ -2026,6 +2024,14 @@ fn request_foreground(window: HWND) -> bool {
     unsafe { SetForegroundWindow(window).as_bool() }
 }
 
+fn activate_and_hide(target: HWND, hide: impl FnOnce()) -> bool {
+    // Keep the overlay's foreground permission until the target queue has received the
+    // activation request. Hiding first can return foreground ownership to another process.
+    let activated = activate_window(target);
+    hide();
+    activated
+}
+
 fn activate_window(owner: HWND) -> bool {
     let popup = unsafe {
         // SAFETY: owner is a borrowed HWND selected from the current EnumWindows snapshot.
@@ -2049,90 +2055,15 @@ fn activate_window(owner: HWND) -> bool {
         }
     }
 
-    // Hook input is delivered to our UI thread as an application message. That alone does
-    // not grant foreground permission, especially when the overlay could not take focus.
-    // Keep the temporary input-queue sharing used by ordinary switching before 5e9be7e.
-    let current_thread = unsafe {
-        // SAFETY: this query has no preconditions.
-        GetCurrentThreadId()
-    };
-    let foreground = unsafe {
-        // SAFETY: this query has no preconditions and returns a borrowed HWND.
-        GetForegroundWindow()
-    };
-    let foreground_thread = unsafe {
-        // SAFETY: foreground is borrowed; an expired or null HWND returns zero.
-        GetWindowThreadProcessId(foreground, None)
-    };
-    let target_thread = unsafe {
-        // SAFETY: target is borrowed; an expired HWND returns zero.
-        GetWindowThreadProcessId(target, None)
-    };
-    let _foreground_attachment = ThreadInputAttachment::new(current_thread, foreground_thread);
-    // The foreground and selected window can belong to the same thread. Attach that pair once.
-    let _target_attachment = (target_thread != foreground_thread)
-        .then(|| ThreadInputAttachment::new(current_thread, target_thread))
-        .flatten();
-
-    // Leave child keyboard focus to the target application's activation handling.
-    if let Err(error) = unsafe {
-        // SAFETY: target is a borrowed top-level or owned-popup HWND.
-        BringWindowToTop(target)
-    } {
-        eprintln!("Could not bring the selected window to the top: {error}");
-    }
+    // Separate queues make target activation asynchronous even if the target is hung.
+    // Ordinary switching still owns the foreground overlay here; Start/Search switching
+    // retains the permission supplied by the physical registered Tab hotkey.
     let activated = request_foreground(target);
-    if let Err(error) = unsafe {
-        // SAFETY: target is borrowed; temporary input attachments remain in scope.
-        SetActiveWindow(target)
-    } {
-        eprintln!("Could not set the selected window active: {error}");
-    }
     activated
         || unsafe {
             // SAFETY: GetForegroundWindow has no preconditions and returns a borrowed window.
             GetForegroundWindow()
         } == target
-}
-
-struct ThreadInputAttachment {
-    source: u32,
-    target: u32,
-}
-
-impl ThreadInputAttachment {
-    fn new(source: u32, target: u32) -> Option<Self> {
-        if source == 0 || target == 0 || source == target {
-            return None;
-        }
-        let attached = unsafe {
-            // SAFETY: these GUI thread ids were just queried; Windows rejects stale ids.
-            AttachThreadInput(source, target, true).as_bool()
-        };
-        if !attached {
-            eprintln!(
-                "Could not attach temporary window-activation input queues: {}",
-                Error::from_thread()
-            );
-            return None;
-        }
-        Some(Self { source, target })
-    }
-}
-
-impl Drop for ThreadInputAttachment {
-    fn drop(&mut self) {
-        let detached = unsafe {
-            // SAFETY: this guard balances exactly one successful attachment, on the UI thread.
-            AttachThreadInput(self.source, self.target, false).as_bool()
-        };
-        if !detached {
-            eprintln!(
-                "Could not detach temporary window-activation input queues: {}",
-                Error::from_thread()
-            );
-        }
-    }
 }
 
 fn activation_target(owner: HWND, popup: HWND, popup_is_visible: bool) -> HWND {
@@ -2214,6 +2145,10 @@ const fn high_word_usize(value: usize) -> u16 {
 fn null_terminated(value: &str) -> Vec<u16> {
     value.encode_utf16().chain([0]).collect()
 }
+
+#[cfg(test)]
+#[path = "activation_tests.rs"]
+mod activation_tests;
 
 #[cfg(test)]
 mod tests {
