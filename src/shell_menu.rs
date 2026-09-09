@@ -11,12 +11,6 @@ pub fn foreground_menu() -> Option<HWND> {
     remaining_foreground_menu(HWND::default())
 }
 
-pub fn foreground_host() -> Option<HWND> {
-    // SAFETY: this read-only query returns a borrowed HWND, including a cloaked shell host.
-    let window = unsafe { GetForegroundWindow() };
-    is_menu_window(window).then_some(window)
-}
-
 pub fn remaining_foreground_menu(known_menu: HWND) -> Option<HWND> {
     // SAFETY: this query transfers no ownership and has no preconditions.
     let window = unsafe { GetForegroundWindow() };

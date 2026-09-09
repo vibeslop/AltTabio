@@ -82,7 +82,6 @@ const fn action_wparam(code: usize, generation: usize) -> WPARAM {
 struct HookFlags {
     value: AtomicUsize,
     recovery_pending: AtomicBool,
-    shell_window: AtomicUsize,
 }
 
 impl HookFlags {
@@ -94,7 +93,6 @@ impl HookFlags {
         Self {
             value: AtomicUsize::new(value),
             recovery_pending: AtomicBool::new(false),
-            shell_window: AtomicUsize::new(0),
         }
     }
 
@@ -255,13 +253,6 @@ impl Drop for HookInterceptionGuard {
 }
 
 impl HookThread {
-    pub fn set_shell_window(&self, window: Option<HWND>) {
-        self.flags.shell_window.store(
-            window.map_or(0, |window| window.0 as usize),
-            Ordering::Release,
-        );
-    }
-
     pub fn start(target: HWND, settings: HookSettings) -> Result<Self, String> {
         let target_thread_id = unsafe {
             // SAFETY: target is the live overlay HWND and no process-id output is requested.
@@ -1021,9 +1012,28 @@ fn post_action(target: HWND, action: InputAction, generation: usize) -> bool {
 
 fn route_registered_switch(
     context: &mut HookContext,
+    outcome: HookOutcome,
+    data: &KBDLLHOOKSTRUCT,
+    transition: KeyTransition,
+) -> HookOutcome {
+    route_registered_switch_with(
+        context,
+        outcome,
+        data,
+        transition,
+        // SAFETY: this bounded metadata query neither sends window messages nor enumerates.
+        || unsafe { GetForegroundWindow() },
+        crate::switch_hotkey::PendingSwitch::register,
+    )
+}
+
+fn route_registered_switch_with(
+    context: &mut HookContext,
     mut outcome: HookOutcome,
     data: &KBDLLHOOKSTRUCT,
     transition: KeyTransition,
+    foreground: impl FnOnce() -> HWND,
+    register: impl FnOnce(usize) -> Result<crate::switch_hotkey::PendingSwitch, Error>,
 ) -> HookOutcome {
     if data.vkCode == u32::from(VK_TAB.0)
         && transition == KeyTransition::Released
@@ -1039,19 +1049,16 @@ fn route_registered_switch(
     {
         return outcome;
     }
-    let shell_window = context.flags.shell_window.load(Ordering::Acquire);
     if data.vkCode != u32::from(VK_TAB.0) || transition != KeyTransition::Pressed
         || data.flags.contains(LLKHF_INJECTED)
         || !outcome.actions().any(|action| matches!(action, InputAction::Switch(_)))
-        || shell_window == 0
-        // SAFETY: this bounded metadata query does not enumerate or send messages to windows.
-        || unsafe { GetForegroundWindow() }.0 as usize != shell_window
+        // Intercepting Tab is not input delivered to our UI. Receive the physical hotkey
+        // whenever another window owns foreground, including ordinary applications.
+        || foreground() == context.target
     {
         return outcome;
     }
-    if let Ok(mut pending) =
-        crate::switch_hotkey::PendingSwitch::register(context.interception_generation)
-    {
+    if let Ok(mut pending) = register(context.interception_generation) {
         if !context.flags.update_overlay(
             context.interception_generation,
             true,
@@ -1613,6 +1620,155 @@ mod tests {
             keyboard_state: KeyboardState::default(),
             recovering: false,
         }
+    }
+
+    #[test]
+    fn ordinary_alt_tab_requests_foreground_permission_before_replaying_release() {
+        let mut context = test_context();
+        context.target = HWND(10_usize as *mut core::ffi::c_void);
+        let other_app = HWND(20_usize as *mut core::ffi::c_void);
+        let modifiers = Modifiers::default();
+        let _alt = context
+            .state
+            .process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), context.settings);
+        let opening = context
+            .state
+            .process_key(KeyEvent::pressed(Key::Tab, modifiers), context.settings);
+        let data = KBDLLHOOKSTRUCT {
+            vkCode: u32::from(VK_TAB.0),
+            ..KBDLLHOOKSTRUCT::default()
+        };
+        let routed = route_registered_switch_with(
+            &mut context,
+            opening,
+            &data,
+            KeyTransition::Pressed,
+            || other_app,
+            |generation| {
+                Ok(crate::switch_hotkey::PendingSwitch::without_registration(
+                    generation,
+                ))
+            },
+        );
+        assert!(
+            context.registered_switch.is_some(),
+            "Ordinary Alt+Tab must receive physical hotkey permission when another app owns foreground"
+        );
+        assert!(
+            !routed.suppress,
+            "The actual Tab must reach hotkey processing"
+        );
+        assert!(routed.actions().next().is_none());
+        for (event, vk) in [
+            (KeyEvent::released(Key::Tab, modifiers), VK_TAB),
+            (KeyEvent::released(Key::LeftAlt, modifiers), VK_LMENU),
+        ] {
+            let outcome = context.state.process_key(event, context.settings);
+            let data = KBDLLHOOKSTRUCT {
+                vkCode: u32::from(vk.0),
+                ..KBDLLHOOKSTRUCT::default()
+            };
+            let routed = route_registered_switch_with(
+                &mut context,
+                outcome,
+                &data,
+                KeyTransition::Released,
+                || other_app,
+                |_| panic!("A key release must not register another hotkey"),
+            );
+            assert_eq!(routed.suppress, vk != VK_TAB);
+            assert!(post_context_actions(&mut context, routed, |_, _| {
+                panic!("The release must wait for the physical hotkey permission")
+            }));
+        }
+        let Some(mut pending) = context.registered_switch.take() else {
+            panic!("The physical hotkey must still own the buffered sequence")
+        };
+        let actions: Vec<_> = pending
+            .actions
+            .take()
+            .flat_map(|outcome| outcome.actions().collect::<Vec<_>>())
+            .collect();
+        assert_eq!(actions, [InputAction::Switch(1), InputAction::AltReleased]);
+    }
+
+    #[test]
+    fn focused_cycling_and_injected_input_do_not_register_a_hotkey() {
+        for (focused, injected) in [(true, false), (false, true)] {
+            let mut context = test_context();
+            context.target = HWND(10_usize as *mut core::ffi::c_void);
+            let foreground = if focused {
+                context.target
+            } else {
+                HWND::default()
+            };
+            let outcome = context.state.process_key(
+                KeyEvent::pressed(
+                    Key::Tab,
+                    Modifiers {
+                        alt: true,
+                        ..Modifiers::default()
+                    },
+                ),
+                context.settings,
+            );
+            let data = KBDLLHOOKSTRUCT {
+                vkCode: u32::from(VK_TAB.0),
+                flags: if injected {
+                    LLKHF_INJECTED
+                } else {
+                    windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT_FLAGS::default()
+                },
+                ..KBDLLHOOKSTRUCT::default()
+            };
+            let routed = route_registered_switch_with(
+                &mut context,
+                outcome,
+                &data,
+                KeyTransition::Pressed,
+                || foreground,
+                |_| panic!("This input must remain on the existing delivery path"),
+            );
+            assert_eq!(routed, outcome);
+            assert!(context.registered_switch.is_none());
+            assert!(!context.registered_tab_down);
+        }
+    }
+
+    #[test]
+    fn unavailable_hotkey_keeps_tab_owned_and_reports_the_failure() {
+        let mut context = test_context();
+        context.target = HWND(10_usize as *mut core::ffi::c_void);
+        let outcome = context.state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            context.settings,
+        );
+        let data = KBDLLHOOKSTRUCT {
+            vkCode: u32::from(VK_TAB.0),
+            ..KBDLLHOOKSTRUCT::default()
+        };
+        let routed = route_registered_switch_with(
+            &mut context,
+            outcome,
+            &data,
+            KeyTransition::Pressed,
+            HWND::default,
+            |_| Err(Error::from_hresult(windows::Win32::Foundation::E_FAIL)),
+        );
+        assert_eq!(routed, outcome);
+        assert!(
+            routed.suppress,
+            "Do not leak Tab to the foreground application"
+        );
+        assert!(context.registered_switch.is_none());
+        assert!(!context.registered_tab_down);
+        assert_ne!(context.pending_errors & HOOK_ERROR_REGISTERED_SWITCH, 0);
     }
 
     #[test]

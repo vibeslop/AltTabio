@@ -682,7 +682,6 @@ impl App {
         let Some(hooks) = self.hooks.as_ref() else {
             return;
         };
-        hooks.set_shell_window(shell_menu::foreground_host());
         if let Err(error) = hooks.set_remote_desktop_passthrough(policy) {
             eprintln!("{error}");
         }
@@ -697,7 +696,6 @@ impl App {
             &mut self.hooks,
             HookThread::start(self.hwnd, settings),
             |hooks| {
-                hooks.set_shell_window(shell_menu::foreground_host());
                 if let Err(error) = hooks.set_remote_desktop_passthrough(policy) {
                     eprintln!("{error}");
                 }
@@ -921,9 +919,6 @@ impl App {
     }
 
     fn begin_shell_dismissal(&mut self, window: HWND, first: InputAction, origin: WPARAM) {
-        if let Some(hooks) = self.hooks.as_ref() {
-            hooks.set_shell_window(Some(window));
-        }
         // SAFETY: this timer belongs to the live overlay; no callback pointer is retained.
         if unsafe { SetTimer(Some(self.hwnd), SHELL_DISMISS_TIMER_ID, 16, None) } == 0 {
             eprintln!(
