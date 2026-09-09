@@ -19,7 +19,7 @@ use crate::win_events::{
 use crate::window_commands::{
     execute as execute_window_command, show_menu as show_window_command_menu,
 };
-use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
+use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll, SwitchResume};
 use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
 };
@@ -80,7 +80,7 @@ const SHELL_DISMISS_TIMER_ID: usize = 3;
 
 struct PendingShellDismissal {
     window: HWND,
-    origin: Option<WPARAM>,
+    origin: WPARAM,
     started: std::time::Instant,
     input: DeferredSwitch,
 }
@@ -582,19 +582,40 @@ impl App {
                         .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
-                    let new_opening = self.pending_shell.is_none();
                     if message == crate::hook::WM_HOOK_HOTKEY_ACTION
                         && matches!(action, InputAction::Switch(_))
                     {
                         // The actual Tab was delivered as a registered hotkey. Taking focus
                         // now dismisses the shell naturally, without injecting Escape first.
-                        self.stop_shell_dismissal();
-                        self.apply_input_action(action);
+                        let pending = self.pending_shell.take();
+                        if pending.is_some() {
+                            self.kill_shell_dismissal_timer();
+                        }
+                        let pending = pending.filter(|pending| {
+                            let current = self
+                                .hooks
+                                .as_ref()
+                                .is_some_and(|hooks| hooks.action_is_current(pending.origin));
+                            if !current {
+                                // A new physical gesture must not replay actions from before
+                                // a desktop or modal boundary, or inherit its selection.
+                                self.session.hide();
+                            }
+                            current
+                        });
+                        DeferredSwitch::resume_with_hotkey(
+                            pending.map(|pending| pending.input),
+                            action,
+                            |step| match step {
+                                SwitchResume::FocusOverlay => self.focus_overlay(),
+                                SwitchResume::Replay(action) => {
+                                    self.apply_input_action_with_reset(action, false);
+                                }
+                                SwitchResume::Input(action) => self.apply_input_action(action),
+                            },
+                        );
                     } else {
-                        self.handle_input_action(action);
-                    }
-                    if new_opening && let Some(pending) = &mut self.pending_shell {
-                        pending.origin = Some(wparam);
+                        self.handle_hook_input(action, wparam);
                     }
                 }
                 Some(LRESULT(0))
@@ -866,23 +887,32 @@ impl App {
             }
             return;
         }
-        if !self.is_visible()
-            && matches!(action, InputAction::Switch(_))
-            && let Some(window) = shell_menu::foreground_menu()
-        {
-            self.begin_shell_dismissal(window, action);
-            return;
-        }
         self.apply_input_action(action);
     }
 
+    fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
+        if self.pending_shell.is_none()
+            && !self.is_visible()
+            && matches!(action, InputAction::Switch(_))
+            && let Some(window) = shell_menu::foreground_menu()
+        {
+            self.begin_shell_dismissal(window, action, origin);
+            return;
+        }
+        self.handle_input_action(action);
+    }
+
     fn apply_input_action(&mut self, action: InputAction) {
+        self.apply_input_action_with_reset(action, true);
+    }
+
+    fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
         match self.session.handle_input(action) {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
-            SwitcherEffect::Hide => self.hide_overlay(),
+            SwitcherEffect::Hide => self.hide_overlay_with_reset(reset_hook),
             SwitcherEffect::Redraw => self.request_redraw(),
-            SwitcherEffect::Activate(target) => self.activate_target(target),
+            SwitcherEffect::Activate(target) => self.activate_target(target, reset_hook),
             SwitcherEffect::Execute(request) => {
                 let outcome = self.execute_window_command(request);
                 self.task_refresh.apply_command_outcome(outcome);
@@ -891,7 +921,7 @@ impl App {
         }
     }
 
-    fn begin_shell_dismissal(&mut self, window: HWND, first: InputAction) {
+    fn begin_shell_dismissal(&mut self, window: HWND, first: InputAction, origin: WPARAM) {
         if let Some(hooks) = self.hooks.as_ref() {
             hooks.set_shell_window(Some(window));
         }
@@ -906,7 +936,7 @@ impl App {
         }
         self.pending_shell = Some(PendingShellDismissal {
             window,
-            origin: None,
+            origin,
             started: std::time::Instant::now(),
             input: DeferredSwitch::new(first),
         });
@@ -931,6 +961,10 @@ impl App {
         if self.pending_shell.take().is_none() {
             return;
         }
+        self.kill_shell_dismissal_timer();
+    }
+
+    fn kill_shell_dismissal_timer(&self) {
         // SAFETY: this balances the timer started for the live overlay's pending opening.
         if let Err(error) = unsafe { KillTimer(Some(self.hwnd), SHELL_DISMISS_TIMER_ID) } {
             eprintln!("Could not stop the shell dismissal timer: {error}");
@@ -941,11 +975,11 @@ impl App {
         let Some(pending) = &mut self.pending_shell else {
             return;
         };
-        if !pending.origin.is_some_and(|origin| {
-            self.hooks
-                .as_ref()
-                .is_some_and(|hooks| hooks.action_is_current(origin))
-        }) {
+        if !self
+            .hooks
+            .as_ref()
+            .is_some_and(|hooks| hooks.action_is_current(pending.origin))
+        {
             self.hide_overlay();
             return;
         }
@@ -1436,11 +1470,17 @@ impl App {
     }
 
     fn hide_overlay(&mut self) {
+        self.hide_overlay_with_reset(true);
+    }
+
+    fn hide_overlay_with_reset(&mut self, reset_hook: bool) {
         self.stop_shell_dismissal();
         self.task_refresh.clear_notices();
         self.session.hide();
         self.set_hook_search_active(false);
-        self.reset_hook_gestures();
+        if reset_hook {
+            self.reset_hook_gestures();
+        }
         if let Some(preview) = &mut self.preview {
             preview.clear();
         }
@@ -1475,8 +1515,8 @@ impl App {
         }
     }
 
-    fn activate_target(&mut self, target: isize) {
-        self.hide_overlay();
+    fn activate_target(&mut self, target: isize, reset_hook: bool) {
+        self.hide_overlay_with_reset(reset_hook);
         let target = HWND(target as *mut c_void);
         if !activate_window(target) {
             // The completed gesture has released ownership. Reopening here leaves an
