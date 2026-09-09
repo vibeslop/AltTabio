@@ -951,6 +951,34 @@ fn post_context_actions(
     outcome: HookOutcome,
     mut post: impl FnMut(HWND, InputAction) -> bool,
 ) -> bool {
+    if context.flags.recovery_pending.load(Ordering::Acquire)
+        || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
+        || context.interception_generation & INTERCEPTION_SUSPENDED != 0
+    {
+        context.registered_switch = None;
+        return true;
+    }
+    if outcome
+        .actions()
+        .any(|action| action == InputAction::DismissOverlay)
+    {
+        context.registered_switch = None;
+    }
+    if let Some(pending) = &mut context.registered_switch {
+        if !pending.actions.push(outcome) {
+            context.registered_switch = None;
+            context.state.reset_gestures();
+            let _cleared =
+                context
+                    .flags
+                    .update_overlay(context.interception_generation, false, false);
+            if !post(context.target, InputAction::DismissOverlay) {
+                context.record_error(HOOK_ERROR_POST_ACTION);
+            }
+            context.record_error(HOOK_ERROR_REGISTERED_SWITCH);
+        }
+        return true;
+    }
     for action in outcome.actions() {
         if context.flags.recovery_pending.load(Ordering::Acquire)
             || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
@@ -1006,34 +1034,10 @@ fn route_registered_switch(
         context.registered_tab_down = false;
         outcome.suppress = false;
     }
-    if context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
-        || outcome
-            .actions()
-            .any(|action| action == InputAction::DismissOverlay)
+    if context.registered_switch.is_some()
+        || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
     {
-        context.registered_switch = None;
         return outcome;
-    }
-    if let Some(pending) = &mut context.registered_switch {
-        if !pending.actions.push(outcome) {
-            context.registered_switch = None;
-            context.state.reset_gestures();
-            let _cleared =
-                context
-                    .flags
-                    .update_overlay(context.interception_generation, false, false);
-            if !post_action(
-                context.target,
-                InputAction::DismissOverlay,
-                context.interception_generation,
-            ) {
-                context.record_error(HOOK_ERROR_POST_ACTION);
-            }
-            context.record_error(HOOK_ERROR_REGISTERED_SWITCH);
-        }
-        let mut deferred = HookOutcome::default();
-        deferred.suppress = outcome.suppress;
-        return deferred;
     }
     let shell_window = context.flags.shell_window.load(Ordering::Acquire);
     if data.vkCode != u32::from(VK_TAB.0) || transition != KeyTransition::Pressed
@@ -1608,6 +1612,136 @@ mod tests {
             interception_generation: 0,
             keyboard_state: KeyboardState::default(),
             recovering: false,
+        }
+    }
+
+    #[test]
+    fn registered_switch_keeps_mouse_and_keyboard_actions_in_physical_order() {
+        use alttabio::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+
+        let mut context = test_context();
+        let mut pending = crate::switch_hotkey::PendingSwitch::without_registration(0);
+        let _alt = context.state.process_key(
+            KeyEvent::pressed(Key::LeftAlt, Modifiers::default()),
+            context.settings,
+        );
+        let opening = context.state.process_key(
+            KeyEvent::pressed(Key::Tab, Modifiers::default()),
+            context.settings,
+        );
+        assert!(pending.actions.push(opening));
+        context.registered_switch = Some(pending);
+        let settings = HookSettings {
+            right_button_wheel_switching: true,
+            ..context.settings
+        };
+        let _press = context
+            .state
+            .process_mouse(MouseEvent::RightButtonPressed, settings);
+        let mouse = context
+            .state
+            .process_mouse(MouseEvent::Wheel(120), settings);
+        let mut delivered = Vec::new();
+        assert!(post_context_actions(&mut context, mouse, |_, action| {
+            delivered.push(action);
+            true
+        }));
+        let release = context.state.process_key(
+            KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+            context.settings,
+        );
+        let release = route_registered_switch(
+            &mut context,
+            release,
+            &KBDLLHOOKSTRUCT {
+                vkCode: u32::from(VK_LMENU.0),
+                ..KBDLLHOOKSTRUCT::default()
+            },
+            KeyTransition::Released,
+        );
+        assert!(post_context_actions(&mut context, release, |_, action| {
+            delivered.push(action);
+            true
+        }));
+        let Some(mut pending) = context.registered_switch.take() else {
+            panic!("pending switch lost")
+        };
+        for outcome in pending.actions.take() {
+            assert!(post_context_actions(&mut context, outcome, |_, action| {
+                delivered.push(action);
+                true
+            }));
+        }
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        let mut activated = None;
+        for action in delivered {
+            match session.handle_input(action) {
+                SwitcherEffect::Open { selection_delta } => session.open(
+                    [
+                        SwitchTask::new(1, 10, "First", "first"),
+                        SwitchTask::new(2, 20, "Second", "second"),
+                        SwitchTask::new(3, 30, "Third", "third"),
+                    ],
+                    selection_delta,
+                ),
+                SwitcherEffect::Activate(target) => activated = Some(target),
+                SwitcherEffect::Redraw | SwitcherEffect::None => {}
+                effect => panic!("unexpected effect: {effect:?}"),
+            }
+        }
+        assert_eq!(activated, Some(30));
+        assert!(
+            !session.is_visible(),
+            "Alt release must complete the pending switch"
+        );
+    }
+
+    #[test]
+    fn pending_registered_actions_are_discarded_at_cancellation_and_modal_boundaries() {
+        for modal in [false, true] {
+            let mut context = test_context();
+            let _alt = context.state.process_key(
+                KeyEvent::pressed(Key::LeftAlt, Modifiers::default()),
+                context.settings,
+            );
+            let opening = context.state.process_key(
+                KeyEvent::pressed(Key::Tab, Modifiers::default()),
+                context.settings,
+            );
+            let mut pending = crate::switch_hotkey::PendingSwitch::without_registration(0);
+            assert!(pending.actions.push(opening));
+            context.registered_switch = Some(pending);
+            let dismissal = context.state.process_key(
+                KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
+                context.settings,
+            );
+            if modal {
+                context.flags.suspend(true);
+            }
+            let mut delivered = Vec::new();
+            assert!(post_context_actions(
+                &mut context,
+                dismissal,
+                |_, action| {
+                    delivered.push(action);
+                    true
+                }
+            ));
+            assert!(context.registered_switch.is_none());
+            assert_eq!(
+                delivered,
+                if modal {
+                    vec![]
+                } else {
+                    vec![InputAction::DismissOverlay]
+                }
+            );
         }
     }
 

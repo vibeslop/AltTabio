@@ -62,6 +62,16 @@ pub struct PendingSwitch {
 }
 
 impl PendingSwitch {
+    #[cfg(test)]
+    pub fn without_registration(generation: usize) -> Self {
+        Self {
+            id: -1,
+            generation,
+            actions: ActionBuffer::default(),
+            started: Instant::now(),
+        }
+    }
+
     pub fn register(generation: usize) -> Result<Self, Error> {
         let id = i32::try_from(FIRST_ID + NEXT_ID.fetch_add(1, Ordering::Relaxed) % ID_COUNT)
             .map_err(|_| Error::from_hresult(HRESULT(0x8007_0057_u32.cast_signed())))?;
@@ -101,6 +111,10 @@ impl PendingSwitch {
 
 impl Drop for PendingSwitch {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if self.id == -1 {
+            return;
+        }
         // SAFETY: the registration is owned and released once on the hook thread. Cleanup can
         // occur in a callback, so errors are published for the message loop, never logged here.
         if let Err(error) = unsafe { UnregisterHotKey(None, self.id) } {
