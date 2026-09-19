@@ -74,9 +74,16 @@ The macOS build switches between **windows**, not apps, which is what people mis
 
 | Input | Action |
 | --- | --- |
-| Cmd+Tab or Option+Tab | Open and move through the switcher |
-| Release Cmd (or Option) | Activate the selected window |
-| Everything else | Same keys as on Windows: arrows, 1-9, typing, Enter, Escape, F4-F9 |
+| Cmd+Tab or Option+Tab | Open the switcher and step through the windows; Shift steps back |
+| Release Cmd (or Option) | Switch to the selected window |
+| 1-9 while holding Cmd | Switch to that row; the row numbers turn into keycaps while Cmd is down |
+| W, M, H, Q while holding Cmd | Close or minimize the selected window; hide or quit its app |
+| ` (backtick) while holding Cmd | Step through the windows of the selected window's app |
+| K while holding Cmd | Open the actions panel: every window command with its shortcut, driven by arrows and Enter or the mouse |
+| After releasing Cmd | The list stays open when "Switch when the modifier is released" is off, or whenever the actions panel is open: arrows move, typing searches, Enter switches, Cmd+1-9 and Cmd+W/M/H/Q/K still act on the selected row |
+| Everything else | Same keys as on Windows: Home, End, Escape, F4-F9 |
+
+An action bar under the list works like a launcher's: a short status on the left ("Release ⌘ to switch · 1–9 jumps", the match count while searching) and "Switch ↵" plus "Actions ⌘K" on the right. It can be turned off in the settings, which also carry a Shortcuts tab with the full list. Rows carry a badge when the window is minimized, its app is hidden, or it lives on another Space. Typed searches appear in a search row above the list with the matched text emphasized. On a trackpad the list works by hovering, clicking, scrolling, and right-clicking once the list stays open.
 
 Terminate (F8) force-quits the selected window's app. Run (F9) starts another instance of it.
 
@@ -97,6 +104,7 @@ Xcode is not required; the Command Line Tools and the Rust toolchain are enough.
 scripts/mac/run.sh                 # build target/mac/AltTabio.app and start it with its log in the terminal
 scripts/mac/run.sh -- --preview    # show the overlay once without taking over Cmd+Tab
 scripts/mac/run.sh -- --list       # print the windows AltTabio sees and exit
+scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
 
