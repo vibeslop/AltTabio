@@ -1,35 +1,55 @@
-//! Settings window with the Windows build's options, macOS labels, and permission shortcuts.
+//! Settings window: a tabbed, System Settings-style form over the shared `Settings`.
+//!
+//! Every tab is an `NSStackView` built from the same section helpers so the spacing is uniform;
+//! the window sizes itself once to the tallest tab and never resizes.
 
-use super::{autostart, permissions};
+use super::{autostart, permissions, shortcuts};
 use alttabio::settings::{Settings, Theme};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlStateValueOff,
-    NSControlStateValueOn, NSFont, NSLayoutAttribute, NSPopUpButton, NSStackView, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBorderType, NSButton, NSColor,
+    NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontWeightMedium,
+    NSGridCellPlacement, NSGridRowAlignment, NSGridView, NSImage, NSImageSymbolConfiguration,
+    NSImageView, NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityRequired,
+    NSLineBreakMode, NSPopUpButton, NSScrollView, NSStackView, NSStackViewDistribution, NSTabView,
+    NSTabViewItem, NSTextAlignment, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
+    NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSEdgeInsets, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
+    NSArray, NSEdgeInsets, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+
+const WINDOW_WIDTH: f64 = 520.0;
+/// Inset between the window edge and the tab view, and between a tab's edge and its content.
+const MARGIN: f64 = 20.0;
+const SECTION_SPACING: f64 = 18.0;
+const CONTROL_SPACING: f64 = 8.0;
+/// A tab taller than this scrolls instead of growing the window.
+const MAX_TAB_HEIGHT: f64 = 560.0;
+/// Where a checkbox title starts relative to the control's leading edge (14pt box plus gap), so
+/// a description underneath lines up with the title rather than the box.
+const CHECKBOX_TITLE_INDENT: f64 = 18.0;
+const STATUS_DOT_SIZE: f64 = 10.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingKey {
     Autostart,
     CommandTab,
     OptionTab,
-    TypedSearch,
     ReleaseSwitches,
-    ReleaseRightButtonSwitches,
-    RightButtonWheel,
+    TypedSearch,
     MouseOverSelection,
+    RightButtonWheel,
+    ReleaseRightButtonSwitches,
     CompactList,
     LargeIcons,
     ShowNumbers,
     ShowAppNames,
+    ShowHints,
     VisibleBorders,
     Preview,
     FullDesktopPreview,
@@ -37,41 +57,42 @@ pub enum SettingKey {
 }
 
 impl SettingKey {
-    const GENERAL: [Self; 8] = [
+    /// Every key once; the index doubles as the checkbox tag.
+    const ALL: [Self; 17] = [
         Self::Autostart,
         Self::CommandTab,
         Self::OptionTab,
-        Self::TypedSearch,
         Self::ReleaseSwitches,
-        Self::ReleaseRightButtonSwitches,
-        Self::RightButtonWheel,
+        Self::TypedSearch,
         Self::MouseOverSelection,
-    ];
-    const APPEARANCE: [Self; 7] = [
+        Self::RightButtonWheel,
+        Self::ReleaseRightButtonSwitches,
         Self::CompactList,
         Self::LargeIcons,
         Self::ShowNumbers,
         Self::ShowAppNames,
+        Self::ShowHints,
         Self::VisibleBorders,
         Self::Preview,
         Self::FullDesktopPreview,
+        Self::CurrentDisplayOnly,
     ];
-    const DISPLAY: [Self; 1] = [Self::CurrentDisplayOnly];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Autostart => "Launch at login",
             Self::CommandTab => "Replace ⌘ Tab",
             Self::OptionTab => "Also open with ⌥ Tab",
-            Self::TypedSearch => "Type to search",
             Self::ReleaseSwitches => "Switch when the modifier is released",
-            Self::ReleaseRightButtonSwitches => "Switch when the right mouse button is released",
-            Self::RightButtonWheel => "Right mouse button + wheel switching",
+            Self::TypedSearch => "Type to search",
             Self::MouseOverSelection => "Select on mouse over",
+            Self::RightButtonWheel => "Right mouse button + wheel switching",
+            Self::ReleaseRightButtonSwitches => "Switch when the right mouse button is released",
             Self::CompactList => "Compact list",
             Self::LargeIcons => "Large icons",
             Self::ShowNumbers => "Show numbers",
             Self::ShowAppNames => "Show app names",
+            Self::ShowHints => "Show the action bar",
             Self::VisibleBorders => "Visible borders",
             Self::Preview => "Live preview",
             Self::FullDesktopPreview => "Show the preview on the full desktop",
@@ -79,23 +100,40 @@ impl SettingKey {
         }
     }
 
+    /// A secondary line under the checkbox, only where the title alone leaves the effect unclear.
+    const fn description(self) -> Option<&'static str> {
+        match self {
+            Self::CommandTab => Some("AltTabio opens instead of the system app switcher"),
+            Self::ReleaseSwitches => Some("Off keeps the list open until you press Return"),
+            Self::TypedSearch => {
+                Some("After releasing the modifier, typing filters by title and app")
+            }
+            Self::ShowHints => {
+                Some("A bar under the list with the main action and the ⌘K actions menu")
+            }
+            _ => None,
+        }
+    }
+
+    /// The checkbox that has to be on for this one to do anything.
+    const fn enabled_by(self) -> Option<Self> {
+        match self {
+            Self::ReleaseRightButtonSwitches => Some(Self::RightButtonWheel),
+            Self::FullDesktopPreview => Some(Self::Preview),
+            _ => None,
+        }
+    }
+
     fn tag(self) -> isize {
-        Self::GENERAL
+        Self::ALL
             .iter()
-            .chain(Self::APPEARANCE.iter())
-            .chain(Self::DISPLAY.iter())
             .position(|key| *key == self)
             .and_then(|index| isize::try_from(index).ok())
             .unwrap_or_default()
     }
 
     fn from_tag(tag: isize) -> Option<Self> {
-        Self::GENERAL
-            .iter()
-            .chain(Self::APPEARANCE.iter())
-            .chain(Self::DISPLAY.iter())
-            .nth(usize::try_from(tag).ok()?)
-            .copied()
+        Self::ALL.get(usize::try_from(tag).ok()?).copied()
     }
 
     fn get(self, settings: &Settings) -> bool {
@@ -103,15 +141,16 @@ impl SettingKey {
             Self::Autostart => settings.general.autostart,
             Self::CommandTab => settings.general.replace_alt_tab,
             Self::OptionTab => settings.general.replace_win_tab,
-            Self::TypedSearch => settings.general.typed_search,
             Self::ReleaseSwitches => settings.general.release_alt_switches,
-            Self::ReleaseRightButtonSwitches => settings.general.release_right_button_switches,
-            Self::RightButtonWheel => settings.general.right_button_wheel_switching,
+            Self::TypedSearch => settings.general.typed_search,
             Self::MouseOverSelection => settings.general.mouse_over_selection,
+            Self::RightButtonWheel => settings.general.right_button_wheel_switching,
+            Self::ReleaseRightButtonSwitches => settings.general.release_right_button_switches,
             Self::CompactList => settings.appearance.compact_list,
             Self::LargeIcons => settings.appearance.large_icons,
             Self::ShowNumbers => settings.appearance.show_numbers,
             Self::ShowAppNames => settings.appearance.show_app_names,
+            Self::ShowHints => settings.appearance.show_hints,
             Self::VisibleBorders => settings.appearance.visible_borders,
             Self::Preview => settings.appearance.preview,
             Self::FullDesktopPreview => settings.appearance.full_desktop_preview,
@@ -124,17 +163,18 @@ impl SettingKey {
             Self::Autostart => settings.general.autostart = value,
             Self::CommandTab => settings.general.replace_alt_tab = value,
             Self::OptionTab => settings.general.replace_win_tab = value,
-            Self::TypedSearch => settings.general.typed_search = value,
             Self::ReleaseSwitches => settings.general.release_alt_switches = value,
+            Self::TypedSearch => settings.general.typed_search = value,
+            Self::MouseOverSelection => settings.general.mouse_over_selection = value,
+            Self::RightButtonWheel => settings.general.right_button_wheel_switching = value,
             Self::ReleaseRightButtonSwitches => {
                 settings.general.release_right_button_switches = value;
             }
-            Self::RightButtonWheel => settings.general.right_button_wheel_switching = value,
-            Self::MouseOverSelection => settings.general.mouse_over_selection = value,
             Self::CompactList => settings.appearance.compact_list = value,
             Self::LargeIcons => settings.appearance.large_icons = value,
             Self::ShowNumbers => settings.appearance.show_numbers = value,
             Self::ShowAppNames => settings.appearance.show_app_names = value,
+            Self::ShowHints => settings.appearance.show_hints = value,
             Self::VisibleBorders => settings.appearance.visible_borders = value,
             Self::Preview => settings.appearance.preview = value,
             Self::FullDesktopPreview => settings.appearance.full_desktop_preview = value,
@@ -143,6 +183,58 @@ impl SettingKey {
     }
 }
 
+/// A titled group of checkboxes on a tab.
+struct CheckboxSection {
+    title: &'static str,
+    keys: &'static [SettingKey],
+}
+
+const GENERAL_SECTIONS: &[CheckboxSection] = &[
+    CheckboxSection {
+        title: "Startup",
+        keys: &[SettingKey::Autostart],
+    },
+    CheckboxSection {
+        title: "Hotkeys",
+        keys: &[SettingKey::CommandTab, SettingKey::OptionTab],
+    },
+    CheckboxSection {
+        title: "Switching",
+        keys: &[SettingKey::ReleaseSwitches, SettingKey::TypedSearch],
+    },
+    CheckboxSection {
+        title: "Mouse and trackpad",
+        keys: &[
+            SettingKey::MouseOverSelection,
+            SettingKey::RightButtonWheel,
+            SettingKey::ReleaseRightButtonSwitches,
+        ],
+    },
+];
+
+/// The Appearance tab after its theme row.
+const APPEARANCE_SECTIONS: &[CheckboxSection] = &[
+    CheckboxSection {
+        title: "List",
+        keys: &[
+            SettingKey::CompactList,
+            SettingKey::LargeIcons,
+            SettingKey::ShowNumbers,
+            SettingKey::ShowAppNames,
+            SettingKey::ShowHints,
+            SettingKey::VisibleBorders,
+        ],
+    },
+    CheckboxSection {
+        title: "Preview",
+        keys: &[SettingKey::Preview, SettingKey::FullDesktopPreview],
+    },
+    CheckboxSection {
+        title: "Displays",
+        keys: &[SettingKey::CurrentDisplayOnly],
+    },
+];
+
 #[derive(Clone, Debug)]
 pub enum SettingsEvent {
     Changed(Settings),
@@ -150,12 +242,29 @@ pub enum SettingsEvent {
     OpenScreenRecording,
 }
 
+/// The live parts of one Permissions row: the colored dot and the "name: state" label.
+struct PermissionRow {
+    name: &'static str,
+    dot: Retained<NSImageView>,
+    status: Retained<NSTextField>,
+}
+
+impl PermissionRow {
+    fn update(&self, granted: bool) {
+        let state = if granted { "granted" } else { "not granted" };
+        self.status
+            .setStringValue(&NSString::from_str(&format!("{}: {state}", self.name)));
+        self.dot.setImage(status_dot(granted).as_deref());
+    }
+}
+
 pub struct ControllerIvars {
     handler: Rc<dyn Fn(SettingsEvent)>,
     settings: RefCell<Settings>,
-    accessibility_label: RefCell<Option<Retained<NSTextField>>>,
-    screen_recording_label: RefCell<Option<Retained<NSTextField>>>,
-    autostart_button: RefCell<Option<Retained<NSButton>>>,
+    checkboxes: RefCell<Vec<(SettingKey, Retained<NSButton>)>>,
+    theme: RefCell<Option<Retained<NSPopUpButton>>>,
+    accessibility: RefCell<Option<PermissionRow>>,
+    screen_recording: RefCell<Option<PermissionRow>>,
 }
 
 define_class!(
@@ -187,6 +296,7 @@ define_class!(
                 key.set(&mut settings, value);
                 settings.clone()
             };
+            self.apply_dependencies(&settings);
             (self.ivars().handler)(SettingsEvent::Changed(settings));
         }
 
@@ -220,8 +330,8 @@ define_class!(
         }
 
         #[unsafe(method(refreshStatus:))]
-        fn refresh_status(&self, _sender: Option<&AnyObject>) {
-            self.refresh_labels();
+        fn refresh_status_timer(&self, _sender: Option<&AnyObject>) {
+            self.refresh_status();
         }
     }
 );
@@ -235,9 +345,10 @@ impl SettingsController {
         let this = Self::alloc(mtm).set_ivars(ControllerIvars {
             handler,
             settings: RefCell::new(settings),
-            accessibility_label: RefCell::new(None),
-            screen_recording_label: RefCell::new(None),
-            autostart_button: RefCell::new(None),
+            checkboxes: RefCell::new(Vec::new()),
+            theme: RefCell::new(None),
+            accessibility: RefCell::new(None),
+            screen_recording: RefCell::new(None),
         });
         unsafe {
             // SAFETY: init is NSObject's designated initializer.
@@ -245,53 +356,85 @@ impl SettingsController {
         }
     }
 
-    fn refresh_labels(&self) {
+    /// Pushes `settings` into every control, including the dependent enabled states.
+    fn load(&self, settings: &Settings) {
+        *self.ivars().settings.borrow_mut() = settings.clone();
+        for (key, button) in self.ivars().checkboxes.borrow().iter() {
+            button.setState(control_state(key.get(settings)));
+        }
+        if let Some(theme) = self.ivars().theme.borrow().as_ref() {
+            theme.selectItemAtIndex(theme_index(settings.appearance.theme));
+        }
+        self.apply_dependencies(settings);
+        self.refresh_status();
+    }
+
+    fn apply_dependencies(&self, settings: &Settings) {
+        for (key, button) in self.ivars().checkboxes.borrow().iter() {
+            if let Some(parent) = key.enabled_by() {
+                button.setEnabled(parent.get(settings));
+            }
+        }
+    }
+
+    /// Re-reads what the system says, since permissions and login items change outside the app.
+    fn refresh_status(&self) {
         let status = permissions::status();
-        if let Some(label) = self.ivars().accessibility_label.borrow().as_ref() {
-            label.setStringValue(&NSString::from_str(&permission_text(
-                "Accessibility",
-                status.accessibility,
-            )));
+        if let Some(row) = self.ivars().accessibility.borrow().as_ref() {
+            row.update(status.accessibility);
         }
-        if let Some(label) = self.ivars().screen_recording_label.borrow().as_ref() {
-            label.setStringValue(&NSString::from_str(&permission_text(
-                "Screen Recording",
-                status.screen_recording,
-            )));
+        if let Some(row) = self.ivars().screen_recording.borrow().as_ref() {
+            row.update(status.screen_recording);
         }
-        if let Some(button) = self.ivars().autostart_button.borrow().as_ref() {
-            let enabled = autostart::is_enabled();
-            button.setState(if enabled {
-                NSControlStateValueOn
-            } else {
-                NSControlStateValueOff
-            });
+        let enabled = autostart::is_enabled();
+        for (key, button) in self.ivars().checkboxes.borrow().iter() {
+            if *key == SettingKey::Autostart {
+                button.setState(control_state(enabled));
+            }
         }
     }
 }
 
-fn permission_text(name: &str, granted: bool) -> String {
-    if granted {
-        format!("{name}: granted")
-    } else {
-        format!("{name}: not granted")
+define_class!(
+    // SAFETY:
+    // - NSView has no subclassing requirements beyond calling the designated initializer.
+    // - FlippedView does not implement Drop.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AltTabioFlippedView"]
+    pub struct FlippedView;
+
+    // SAFETY: NSObjectProtocol has no safety requirements.
+    unsafe impl NSObjectProtocol for FlippedView {}
+
+    impl FlippedView {
+        // SAFETY: the signature matches the NSView declaration.
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+    }
+);
+
+impl FlippedView {
+    /// A scroll view's document view that starts at the top instead of the bottom.
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        unsafe {
+            // SAFETY: initWithFrame: is NSView's designated initializer.
+            msg_send![super(this), initWithFrame: frame]
+        }
     }
 }
 
 pub struct SettingsWindow {
     window: Retained<NSWindow>,
     controller: Retained<SettingsController>,
-    checkboxes: Vec<(SettingKey, Retained<NSButton>)>,
-    theme: Retained<NSPopUpButton>,
     _timer: Retained<NSTimer>,
     mtm: MainThreadMarker,
 }
 
 impl SettingsWindow {
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the form is one linear list of controls; splitting it would hide the order"
-    )]
     pub fn new(
         mtm: MainThreadMarker,
         settings: &Settings,
@@ -299,98 +442,70 @@ impl SettingsWindow {
         handler: Rc<dyn Fn(SettingsEvent)>,
     ) -> Self {
         let controller = SettingsController::new(mtm, settings.clone(), handler);
-        let stack = NSStackView::new(mtm);
-        stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        stack.setAlignment(NSLayoutAttribute::Leading);
-        stack.setSpacing(6.0);
-        stack.setEdgeInsets(NSEdgeInsets {
-            top: 20.0,
-            left: 20.0,
-            bottom: 20.0,
-            right: 20.0,
+        let tab_width = WINDOW_WIDTH - 2.0 * MARGIN;
+
+        let tab_view = NSTabView::new(mtm);
+        let tabs: [(&str, Retained<NSView>); 4] = [
+            ("General", general_tab(mtm, settings, &controller)),
+            ("Appearance", appearance_tab(mtm, settings, &controller)),
+            ("Shortcuts", shortcuts_tab(mtm)),
+            ("Permissions", permissions_tab(mtm, &controller)),
+        ];
+        // The tab strip and bezel take a fixed amount around the content; measure it once with
+        // a probe frame so the tallest tab's height can be turned into a frame height.
+        let probe = NSSize::new(tab_width, 100.0);
+        tab_view.setFrameSize(probe);
+        let content = tab_view.contentRect();
+        let chrome_height = probe.height - content.size.height;
+        let mut content_height: f64 = 0.0;
+        for (label, view) in tabs {
+            view.layoutSubtreeIfNeeded();
+            let height = view.fittingSize().height;
+            content_height = content_height.max(height.min(MAX_TAB_HEIGHT));
+            // The item's view is final before it joins the tab view; the selected item does
+            // not pick up a view swapped in afterwards.
+            let wrapped = if height > MAX_TAB_HEIGHT {
+                scrollable(mtm, &view, NSSize::new(content.size.width, height))
+            } else {
+                top_pinned(mtm, &view)
+            };
+            let item = NSTabViewItem::new();
+            item.setLabel(&NSString::from_str(label));
+            item.setView(Some(&wrapped));
+            tab_view.addTabViewItem(&item);
+        }
+        tab_view.setTranslatesAutoresizingMaskIntoConstraints(false);
+        tab_view
+            .widthAnchor()
+            .constraintEqualToConstant(tab_width)
+            .setActive(true);
+        tab_view
+            .heightAnchor()
+            .constraintEqualToConstant(content_height + chrome_height)
+            .setActive(true);
+
+        let root = vertical_stack(mtm, 10.0);
+        root.setEdgeInsets(NSEdgeInsets {
+            top: MARGIN,
+            left: MARGIN,
+            bottom: 14.0,
+            right: MARGIN,
         });
-
-        let mut checkboxes = Vec::new();
-        stack.addArrangedSubview(&heading(mtm, "General"));
-        for key in SettingKey::GENERAL {
-            let button = checkbox(mtm, key, settings, &controller);
-            if key == SettingKey::Autostart {
-                *controller.ivars().autostart_button.borrow_mut() = Some(button.clone());
-            }
-            stack.addArrangedSubview(&button);
-            checkboxes.push((key, button));
-        }
-
-        stack.addArrangedSubview(&spacer(mtm));
-        stack.addArrangedSubview(&heading(mtm, "Appearance"));
-        let theme_row = NSStackView::new(mtm);
-        theme_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        theme_row.setSpacing(8.0);
-        theme_row.addArrangedSubview(&NSTextField::labelWithString(
-            &NSString::from_str("Theme"),
-            mtm,
-        ));
-        let theme = NSPopUpButton::new(mtm);
-        for name in ["Follow macOS", "Light", "Dark"] {
-            theme.addItemWithTitle(&NSString::from_str(name));
-        }
-        theme.selectItemAtIndex(theme_index(settings.appearance.theme));
-        unsafe {
-            // SAFETY: the selector exists on SettingsController with a matching signature.
-            theme.setTarget(Some(&controller));
-            theme.setAction(Some(sel!(themeChanged:)));
-        }
-        theme_row.addArrangedSubview(&theme);
-        stack.addArrangedSubview(&theme_row);
-        for key in SettingKey::APPEARANCE {
-            let button = checkbox(mtm, key, settings, &controller);
-            stack.addArrangedSubview(&button);
-            checkboxes.push((key, button));
-        }
-
-        stack.addArrangedSubview(&spacer(mtm));
-        stack.addArrangedSubview(&heading(mtm, "Displays"));
-        for key in SettingKey::DISPLAY {
-            let button = checkbox(mtm, key, settings, &controller);
-            stack.addArrangedSubview(&button);
-            checkboxes.push((key, button));
-        }
-
-        stack.addArrangedSubview(&spacer(mtm));
-        stack.addArrangedSubview(&heading(mtm, "Permissions"));
-        let accessibility = permission_row(
-            mtm,
-            &controller,
-            sel!(openAccessibility:),
-            "Accessibility lets AltTabio see ⌘ Tab and control windows.",
-        );
-        *controller.ivars().accessibility_label.borrow_mut() = Some(accessibility.0);
-        stack.addArrangedSubview(&accessibility.1);
-        let screen_recording = permission_row(
-            mtm,
-            &controller,
-            sel!(openScreenRecording:),
-            "Screen Recording lets AltTabio show live previews.",
-        );
-        *controller.ivars().screen_recording_label.borrow_mut() = Some(screen_recording.0);
-        stack.addArrangedSubview(&screen_recording.1);
-
-        stack.addArrangedSubview(&spacer(mtm));
-        let note = NSTextField::labelWithString(
-            &NSString::from_str(&format!("Settings are stored in {settings_path}")),
-            mtm,
-        );
-        note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-        note.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        root.addArrangedSubview(&tab_view);
+        let note = secondary_label(mtm, &format!("Settings are stored in {settings_path}"));
         note.setSelectable(true);
-        stack.addArrangedSubview(&note);
-        controller.refresh_labels();
+        note.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        note.widthAnchor()
+            .constraintEqualToConstant(tab_width)
+            .setActive(true);
+        root.addArrangedSubview(&note);
+        controller.load(settings);
 
         let window = unsafe {
             // SAFETY: releasedWhenClosed is disabled right after creation so the Retained owns it.
             NSWindow::initWithContentRect_styleMask_backing_defer(
                 NSWindow::alloc(mtm),
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(480.0, 640.0)),
+                NSRect::new(NSPoint::ZERO, NSSize::new(WINDOW_WIDTH, 400.0)),
                 NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
                 NSBackingStoreType::Buffered,
                 false,
@@ -401,11 +516,11 @@ impl SettingsWindow {
             window.setReleasedWhenClosed(false);
         }
         window.setTitle(&NSString::from_str("AltTabio Settings"));
-        stack.layoutSubtreeIfNeeded();
-        let size = stack.fittingSize();
+        root.layoutSubtreeIfNeeded();
+        let size = root.fittingSize();
         window.setContentSize(size);
-        stack.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), size));
-        window.setContentView(Some(&stack));
+        root.setFrame(NSRect::new(NSPoint::ZERO, size));
+        window.setContentView(Some(&root));
         window.center();
 
         let timer = unsafe {
@@ -421,25 +536,13 @@ impl SettingsWindow {
         Self {
             window,
             controller,
-            checkboxes,
-            theme,
             _timer: timer,
             mtm,
         }
     }
 
     pub fn show(&self, settings: &Settings) {
-        *self.controller.ivars().settings.borrow_mut() = settings.clone();
-        for (key, button) in &self.checkboxes {
-            button.setState(if key.get(settings) {
-                NSControlStateValueOn
-            } else {
-                NSControlStateValueOff
-            });
-        }
-        self.theme
-            .selectItemAtIndex(theme_index(settings.appearance.theme));
-        self.controller.refresh_labels();
+        self.controller.load(settings);
         self.window.makeKeyAndOrderFront(None);
         #[allow(
             deprecated,
@@ -449,32 +552,117 @@ impl SettingsWindow {
     }
 }
 
-fn theme_index(theme: Theme) -> isize {
-    match theme {
-        Theme::Auto => 0,
-        Theme::Light => 1,
-        Theme::Dark => 2,
+fn general_tab(
+    mtm: MainThreadMarker,
+    settings: &Settings,
+    controller: &SettingsController,
+) -> Retained<NSView> {
+    let tab = tab_stack(mtm);
+    for section in GENERAL_SECTIONS {
+        tab.addArrangedSubview(&checkbox_section(mtm, section, settings, controller));
     }
+    Retained::into_super(tab)
 }
 
-fn heading(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+fn appearance_tab(
+    mtm: MainThreadMarker,
+    settings: &Settings,
+    controller: &SettingsController,
+) -> Retained<NSView> {
+    let tab = tab_stack(mtm);
+    let theme = section(mtm, "Theme");
+    theme.addArrangedSubview(&theme_row(mtm, settings, controller));
+    tab.addArrangedSubview(&theme);
+    for section in APPEARANCE_SECTIONS {
+        tab.addArrangedSubview(&checkbox_section(mtm, section, settings, controller));
+    }
+    Retained::into_super(tab)
+}
+
+fn shortcuts_tab(mtm: MainThreadMarker) -> Retained<NSView> {
+    let tab = tab_stack(mtm);
+    for shortcut_section in shortcuts::SECTIONS {
+        let stack = section(mtm, shortcut_section.title);
+        stack.addArrangedSubview(&shortcut_grid(mtm, shortcut_section.rows));
+        tab.addArrangedSubview(&stack);
+    }
+    Retained::into_super(tab)
+}
+
+fn permissions_tab(mtm: MainThreadMarker, controller: &SettingsController) -> Retained<NSView> {
+    let tab = tab_stack(mtm);
+    let accessibility = permission_block(
+        mtm,
+        &tab,
+        controller,
+        "Accessibility",
+        "Lets AltTabio see ⌘ Tab and control windows.",
+        None,
+        sel!(openAccessibility:),
+    );
+    *controller.ivars().accessibility.borrow_mut() = Some(accessibility);
+    let screen_recording = permission_block(
+        mtm,
+        &tab,
+        controller,
+        "Screen Recording",
+        "Lets AltTabio show live window previews.",
+        Some("After granting, quit and reopen AltTabio."),
+        sel!(openScreenRecording:),
+    );
+    *controller.ivars().screen_recording.borrow_mut() = Some(screen_recording);
+    Retained::into_super(tab)
+}
+
+/// The content stack of one tab: sections stacked top-down with the window margin all around.
+fn tab_stack(mtm: MainThreadMarker) -> Retained<NSStackView> {
+    let stack = vertical_stack(mtm, SECTION_SPACING);
+    stack.setEdgeInsets(NSEdgeInsets {
+        top: MARGIN,
+        left: MARGIN,
+        bottom: MARGIN,
+        right: MARGIN,
+    });
+    stack
+}
+
+fn vertical_stack(mtm: MainThreadMarker, spacing: f64) -> Retained<NSStackView> {
+    let stack = NSStackView::new(mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+    stack.setAlignment(NSLayoutAttribute::Leading);
+    stack.setSpacing(spacing);
+    stack
+}
+
+/// A bold title with its controls underneath; callers append the controls.
+fn section(mtm: MainThreadMarker, title: &str) -> Retained<NSStackView> {
+    let stack = vertical_stack(mtm, CONTROL_SPACING);
+    let label = NSTextField::labelWithString(&NSString::from_str(title), mtm);
     label.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
-    label
+    stack.addArrangedSubview(&label);
+    stack
 }
 
-fn spacer(mtm: MainThreadMarker) -> Retained<NSView> {
-    let view = NSView::new(mtm);
-    view.setFrameSize(NSSize::new(1.0, 6.0));
-    view
+fn checkbox_section(
+    mtm: MainThreadMarker,
+    section_spec: &CheckboxSection,
+    settings: &Settings,
+    controller: &SettingsController,
+) -> Retained<NSStackView> {
+    let stack = section(mtm, section_spec.title);
+    for key in section_spec.keys {
+        stack.addArrangedSubview(&checkbox_group(mtm, *key, settings, controller));
+    }
+    stack
 }
 
-fn checkbox(
+/// A checkbox, with its description underneath when the key has one.
+fn checkbox_group(
     mtm: MainThreadMarker,
     key: SettingKey,
     settings: &Settings,
     controller: &SettingsController,
-) -> Retained<NSButton> {
+) -> Retained<NSView> {
     let button = unsafe {
         // SAFETY: the selector exists on SettingsController with a matching signature.
         NSButton::checkboxWithTitle_target_action(
@@ -485,43 +673,245 @@ fn checkbox(
         )
     };
     button.setTag(key.tag());
-    button.setState(if key.get(settings) {
-        NSControlStateValueOn
-    } else {
-        NSControlStateValueOff
-    });
-    button
+    button.setState(control_state(key.get(settings)));
+    controller
+        .ivars()
+        .checkboxes
+        .borrow_mut()
+        .push((key, button.clone()));
+    let Some(description) = key.description() else {
+        return Retained::into_super(Retained::into_super(button));
+    };
+    let group = vertical_stack(mtm, 2.0);
+    group.addArrangedSubview(&button);
+    group.addArrangedSubview(&indented(
+        mtm,
+        &secondary_label(mtm, description),
+        CHECKBOX_TITLE_INDENT,
+    ));
+    Retained::into_super(group)
 }
 
-fn permission_row(
+fn theme_row(
     mtm: MainThreadMarker,
+    settings: &Settings,
     controller: &SettingsController,
-    action: objc2::runtime::Sel,
-    description: &str,
-) -> (Retained<NSTextField>, Retained<NSStackView>) {
-    let column = NSStackView::new(mtm);
-    column.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-    column.setAlignment(NSLayoutAttribute::Leading);
-    column.setSpacing(2.0);
+) -> Retained<NSStackView> {
     let row = NSStackView::new(mtm);
     row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-    row.setSpacing(8.0);
-    let label = NSTextField::labelWithString(&NSString::from_str(""), mtm);
-    row.addArrangedSubview(&label);
+    row.setAlignment(NSLayoutAttribute::CenterY);
+    row.setSpacing(CONTROL_SPACING);
+    row.addArrangedSubview(&NSTextField::labelWithString(
+        &NSString::from_str("Theme"),
+        mtm,
+    ));
+    let popup = NSPopUpButton::new(mtm);
+    for name in ["Follow macOS", "Light", "Dark"] {
+        popup.addItemWithTitle(&NSString::from_str(name));
+    }
+    popup.selectItemAtIndex(theme_index(settings.appearance.theme));
+    unsafe {
+        // SAFETY: the selector exists on SettingsController with a matching signature.
+        popup.setTarget(Some(controller));
+        popup.setAction(Some(sel!(themeChanged:)));
+    }
+    row.addArrangedSubview(&popup);
+    *controller.ivars().theme.borrow_mut() = Some(popup);
+    row
+}
+
+/// Keys right-aligned in a monospaced column, descriptions to their right.
+fn shortcut_grid(mtm: MainThreadMarker, rows: &[shortcuts::ShortcutRow]) -> Retained<NSGridView> {
+    let grid = NSGridView::gridViewWithNumberOfColumns_rows(2, 0, mtm);
+    grid.setColumnSpacing(16.0);
+    grid.setRowSpacing(4.0);
+    grid.setRowAlignment(NSGridRowAlignment::FirstBaseline);
+    grid.columnAtIndex(0)
+        .setXPlacement(NSGridCellPlacement::Trailing);
+    let key_font = unsafe {
+        // SAFETY: the font weight constant is a static value exported by AppKit.
+        NSFont::monospacedSystemFontOfSize_weight(12.0, NSFontWeightMedium)
+    };
+    for row in rows {
+        let keys = NSTextField::labelWithString(&NSString::from_str(row.keys), mtm);
+        keys.setFont(Some(&key_font));
+        keys.setAlignment(NSTextAlignment::Right);
+        let description = NSTextField::labelWithString(&NSString::from_str(row.description), mtm);
+        let keys: &NSView = &keys;
+        let description: &NSView = &description;
+        grid.addRowWithViews(&NSArray::from_slice(&[keys, description]));
+    }
+    grid
+}
+
+/// One permission: a status dot, "name: state", the System Settings button at the trailing
+/// edge, then the description (and note) indented under the label.
+fn permission_block(
+    mtm: MainThreadMarker,
+    tab: &NSStackView,
+    controller: &SettingsController,
+    name: &'static str,
+    description: &str,
+    note: Option<&str>,
+    action: Sel,
+) -> PermissionRow {
+    let header = NSStackView::new(mtm);
+    header.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    header.setAlignment(NSLayoutAttribute::CenterY);
+    header.setSpacing(CONTROL_SPACING);
+    header.setDistribution(NSStackViewDistribution::Fill);
+    let dot = NSImageView::new(mtm);
+    dot.widthAnchor()
+        .constraintEqualToConstant(STATUS_DOT_SIZE)
+        .setActive(true);
+    dot.setContentHuggingPriority_forOrientation(
+        NSLayoutPriorityRequired,
+        NSLayoutConstraintOrientation::Horizontal,
+    );
+    let status = NSTextField::labelWithString(&NSString::from_str(name), mtm);
+    // The label gives way so the button lands at the trailing edge.
+    status.setContentHuggingPriority_forOrientation(1.0, NSLayoutConstraintOrientation::Horizontal);
     let button = unsafe {
         // SAFETY: the selector exists on SettingsController with a matching signature.
         NSButton::buttonWithTitle_target_action(
-            &NSString::from_str("Open System Settings"),
+            &NSString::from_str("Open System Settings…"),
             Some(controller),
             Some(action),
             mtm,
         )
     };
-    row.addArrangedSubview(&button);
-    column.addArrangedSubview(&row);
-    let note = NSTextField::labelWithString(&NSString::from_str(description), mtm);
-    note.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-    note.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    column.addArrangedSubview(&note);
-    (label, column)
+    button.setContentHuggingPriority_forOrientation(
+        NSLayoutPriorityRequired,
+        NSLayoutConstraintOrientation::Horizontal,
+    );
+    header.addArrangedSubview(&dot);
+    header.addArrangedSubview(&status);
+    header.addArrangedSubview(&button);
+
+    let column = vertical_stack(mtm, 4.0);
+    column.addArrangedSubview(&header);
+    let text_indent = STATUS_DOT_SIZE + CONTROL_SPACING;
+    column.addArrangedSubview(&indented(
+        mtm,
+        &secondary_label(mtm, description),
+        text_indent,
+    ));
+    if let Some(note) = note {
+        column.addArrangedSubview(&indented(mtm, &secondary_label(mtm, note), text_indent));
+    }
+    tab.addArrangedSubview(&column);
+    // Both views are in the tab's subtree now, so cross-view constraints can be installed.
+    header
+        .widthAnchor()
+        .constraintEqualToAnchor(&column.widthAnchor())
+        .setActive(true);
+    column
+        .widthAnchor()
+        .constraintEqualToAnchor_constant(&tab.widthAnchor(), -2.0 * MARGIN)
+        .setActive(true);
+    PermissionRow { name, dot, status }
+}
+
+/// Wraps `content` in a vertical scroll view whose document starts at the top.
+/// Wraps a tab's content so it keeps its own height at the top of the tab. The tab view sizes
+/// every item's view to the tallest tab, and a stack that fills that frame hands the spare
+/// height to whichever nested stacks hug least, which stretched the description rows.
+fn top_pinned(mtm: MainThreadMarker, content: &NSView) -> Retained<NSView> {
+    let container = NSView::new(mtm);
+    content.setTranslatesAutoresizingMaskIntoConstraints(false);
+    container.addSubview(content);
+    content
+        .topAnchor()
+        .constraintEqualToAnchor(&container.topAnchor())
+        .setActive(true);
+    content
+        .leadingAnchor()
+        .constraintEqualToAnchor(&container.leadingAnchor())
+        .setActive(true);
+    content
+        .trailingAnchor()
+        .constraintEqualToAnchor(&container.trailingAnchor())
+        .setActive(true);
+    container
+}
+
+fn scrollable(mtm: MainThreadMarker, content: &NSView, size: NSSize) -> Retained<NSView> {
+    let frame = NSRect::new(NSPoint::ZERO, size);
+    content.setFrame(frame);
+    content.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    let document = FlippedView::new(mtm, frame);
+    document.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    document.addSubview(content);
+    let scroll = NSScrollView::new(mtm);
+    scroll.setDrawsBackground(false);
+    scroll.setBorderType(NSBorderType::NoBorder);
+    scroll.setHasVerticalScroller(true);
+    scroll.setAutohidesScrollers(true);
+    scroll.setDocumentView(Some(&document));
+    Retained::into_super(scroll)
+}
+
+/// Shifts `view` right by `indent` so it lines up with text rather than a control's edge.
+fn indented(mtm: MainThreadMarker, view: &NSView, indent: f64) -> Retained<NSStackView> {
+    let stack = NSStackView::new(mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    stack.setEdgeInsets(NSEdgeInsets {
+        top: 0.0,
+        left: indent,
+        bottom: 0.0,
+        right: 0.0,
+    });
+    stack.addArrangedSubview(view);
+    stack
+}
+
+fn secondary_label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    label
+}
+
+/// A filled circle in the system green or red, or None when SF Symbols are unavailable.
+fn status_dot(granted: bool) -> Option<Retained<NSImage>> {
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str("circle.fill"),
+        Some(&NSString::from_str(if granted {
+            "granted"
+        } else {
+            "not granted"
+        })),
+    )?;
+    let color = if granted {
+        NSColor::systemGreenColor()
+    } else {
+        NSColor::systemRedColor()
+    };
+    let configuration = unsafe {
+        // SAFETY: the font weight constant is a static value exported by AppKit.
+        NSImageSymbolConfiguration::configurationWithPointSize_weight(
+            STATUS_DOT_SIZE,
+            NSFontWeightMedium,
+        )
+    };
+    let configuration = configuration.configurationByApplyingConfiguration(
+        &NSImageSymbolConfiguration::configurationWithHierarchicalColor(&color),
+    );
+    image.imageWithSymbolConfiguration(&configuration)
+}
+
+fn control_state(on: bool) -> NSControlStateValue {
+    if on {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    }
+}
+
+fn theme_index(theme: Theme) -> isize {
+    match theme {
+        Theme::Auto => 0,
+        Theme::Light => 1,
+        Theme::Dark => 2,
+    }
 }
