@@ -21,7 +21,7 @@ mod window_list;
 
 use crate::settings_io::SettingsStore;
 use alttabio::input::{InputAction, WindowCommand};
-use alttabio::overlay_layout::{OverlayLayout, for_compact_list};
+use alttabio::overlay_layout::{OverlayLayout, for_macos};
 use alttabio::settings::Settings;
 use alttabio::switcher::{
     ProcessIdentity, SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
@@ -944,7 +944,7 @@ impl App {
         } else {
             0.0
         };
-        for_compact_list(self.settings.appearance.compact_list)
+        for_macos(self.settings.appearance.compact_list)
             .with_search_row(search_row)
             .with_footer(footer)
     }
