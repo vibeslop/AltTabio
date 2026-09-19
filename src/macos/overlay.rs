@@ -6,7 +6,7 @@ use super::shortcuts::{ACTIONS, Footer};
 use alttabio::input::WindowCommand;
 use alttabio::overlay_layout::OverlayLayout;
 use alttabio::switcher::filter_match;
-use alttabio::theme::{ResolvedTheme, Rgb8};
+use alttabio::theme::{ResolvedTheme, Rgb8, Rgba, SwitcherTokens};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{
@@ -40,7 +40,7 @@ const CORNER_RADIUS: f64 = 16.0;
 const PREVIEW_RADIUS: f64 = 8.0;
 const SEARCH_RADIUS: f64 = 8.0;
 const KEYCAP_RADIUS: f64 = 5.0;
-const KEYCAP_MINIMUM_WIDTH: f64 = 22.0;
+const KEYCAP_MINIMUM_WIDTH: f64 = 24.0;
 const BADGE_POINT_SIZE: f64 = 11.0;
 const HINT_GAP: f64 = 16.0;
 /// Width of the footer's trailing "Actions ⌘K" hit area.
@@ -112,7 +112,7 @@ pub struct FrameModel {
     pub rows: Vec<RowModel>,
     pub layout: OverlayLayout,
     pub options: RenderOptions,
-    pub theme: ResolvedTheme,
+    pub tokens: SwitcherTokens,
     pub close_state: CloseButtonVisualState,
     pub preview: Option<Retained<NSImage>>,
     pub preview_message: Option<String>,
@@ -618,7 +618,7 @@ impl Overlay {
 
     /// Applies the resolved theme: the panel appearance so system colors resolve to it, and the
     /// glass tint that keeps the switcher's own dark or light surface.
-    pub fn set_theme(&self, theme: ResolvedTheme) {
+    pub fn set_theme(&self, theme: ResolvedTheme, tokens: SwitcherTokens) {
         let name = unsafe {
             // SAFETY: the appearance name constants are static strings exported by AppKit.
             match theme {
@@ -631,7 +631,7 @@ impl Overlay {
         if let Some(glass) = &self.glass {
             // A translucent tint keeps AltTabio's own dark or light surface while the glass
             // still refracts whatever sits behind the switcher.
-            glass.setTintColor(Some(&color(theme.palette().background, 0.62)));
+            glass.setTintColor(Some(&rgba(tokens.canvas)));
         }
     }
 
@@ -770,42 +770,42 @@ impl Overlay {
     }
 }
 
-/// Colors resolved from the system for the current appearance: the user's accent color for
-/// fills, label colors for text, and pure black or white rings for edges.
+/// The frame's colors as `NSColor`s, straight from the shared semantic tokens.
 ///
 /// Text is never drawn in the accent color: the accent also tints the selected row, and accent
-/// text on an accent tint drops well under the readable lightness gap. Text is always the label
-/// color, at full strength or at a still-legible fraction for secondary lines.
+/// text on an accent tint drops well under the readable lightness gap.
 struct Colors {
-    accent: Retained<NSColor>,
+    canvas_tokens: SwitcherTokens,
     label: Retained<NSColor>,
-    /// Secondary text. The system secondary label color is too faint over glass for 11pt
-    /// text, so this keeps two thirds of the label strength instead.
     secondary: Retained<NSColor>,
-    /// Edge rings and image outlines: white on dark surfaces, black on light, never tinted.
     ring: Retained<NSColor>,
-    /// Inset wells (preview, search row, keycaps) as a translucent tint of the label color.
     well: Retained<NSColor>,
-    /// An almost opaque surface in the theme's own background color for the action panel.
     surface: Retained<NSColor>,
+    surface_edge: Retained<NSColor>,
+    selection: Retained<NSColor>,
+    raised: Retained<NSColor>,
+    raised_edge: Retained<NSColor>,
+    raised_base: Retained<NSColor>,
 }
 
-fn colors(theme: ResolvedTheme) -> Colors {
-    let dark = theme == ResolvedTheme::Dark;
-    let label = NSColor::labelColor();
-    let ring = if dark {
-        NSColor::whiteColor().colorWithAlphaComponent(0.10)
-    } else {
-        NSColor::blackColor().colorWithAlphaComponent(0.10)
-    };
+fn colors(tokens: SwitcherTokens) -> Colors {
     Colors {
-        accent: NSColor::controlAccentColor(),
-        well: label.colorWithAlphaComponent(if dark { 0.07 } else { 0.05 }),
-        secondary: label.colorWithAlphaComponent(0.68),
-        surface: color(theme.palette().background, 0.96),
-        label,
-        ring,
+        canvas_tokens: tokens,
+        label: color(tokens.text, 1.0),
+        secondary: color(tokens.text_secondary, 1.0),
+        ring: rgba(tokens.ring),
+        well: rgba(tokens.well),
+        surface: rgba(tokens.surface),
+        surface_edge: rgba(tokens.surface_edge),
+        selection: rgba(tokens.selection),
+        raised: color(tokens.raised, 1.0),
+        raised_edge: rgba(tokens.raised_edge),
+        raised_base: rgba(tokens.raised_base),
     }
+}
+
+fn rgba(value: Rgba) -> Retained<NSColor> {
+    color(value.color, value.alpha)
 }
 
 fn color(value: Rgb8, alpha: f64) -> Retained<NSColor> {
@@ -899,15 +899,6 @@ fn draw_text(text: &str, bounds: Rect, font: &NSFont, color: &NSColor, alignment
     unsafe {
         // SAFETY: drawing happens inside drawRect: with a current graphics context.
         string.drawInRect_withAttributes(centered(bounds, size.height).ns(), Some(&attributes));
-    }
-}
-
-/// The selected row's accent tint: strong enough to read as selection on glass while leaving
-/// label text on it above the readable lightness gap.
-const fn selection_alpha(theme: ResolvedTheme) -> f64 {
-    match theme {
-        ResolvedTheme::Dark => 0.28,
-        ResolvedTheme::Light => 0.20,
     }
 }
 
@@ -1023,8 +1014,21 @@ fn symbol(name: &str, point_size: f64, color: &NSColor) -> Option<Retained<NSIma
 
 struct KeycapStyle<'a> {
     fill: &'a NSColor,
-    ring: &'a NSColor,
+    edge: &'a NSColor,
+    /// The bottom edge, darker than the fill, that gives the key its height.
+    base: &'a NSColor,
     text: &'a NSColor,
+}
+
+impl<'a> KeycapStyle<'a> {
+    fn raised(colors: &'a Colors) -> Self {
+        Self {
+            fill: &colors.raised,
+            edge: &colors.raised_edge,
+            base: &colors.raised_base,
+            text: &colors.label,
+        }
+    }
 }
 
 /// Draws a key chip of the measured width at `left`, vertically centered in `bounds`; returns
@@ -1038,17 +1042,36 @@ fn draw_keycap(
     style: &KeycapStyle<'_>,
 ) -> f64 {
     let size = measure(text, font);
-    let width = (size.width + 10.0).max(minimum_width).round();
-    let height = (size.height + 4.0).round();
+    let width = (size.width + 12.0).max(minimum_width).round();
+    let height = (size.height + 5.0).round();
     let chip = Rect {
         left,
         top: (bounds.top + (bounds.height - height) / 2.0).round(),
         width,
         height,
     };
+    // The base is a second, slightly taller rounded rect underneath so the bottom edge reads
+    // as the side of a raised key rather than as a border.
+    fill_rounded(
+        Rect {
+            top: chip.top + 1.0,
+            ..chip
+        },
+        KEYCAP_RADIUS,
+        style.base,
+    );
     fill_rounded(chip, KEYCAP_RADIUS, style.fill);
-    ring_rounded(chip, KEYCAP_RADIUS, style.ring);
-    draw_text(text, chip, font, style.text, NSTextAlignment::Center);
+    ring_rounded(chip, KEYCAP_RADIUS, style.edge);
+    draw_text(
+        text,
+        Rect {
+            top: chip.top - 0.5,
+            ..chip
+        },
+        font,
+        style.text,
+        NSTextAlignment::Center,
+    );
     chip.left + chip.width
 }
 
@@ -1139,11 +1162,7 @@ fn draw_footer(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Col
     if footer.height <= 0.0 {
         return;
     }
-    let style = KeycapStyle {
-        fill: &colors.well,
-        ring: &colors.ring,
-        text: &colors.label,
-    };
+    let style = KeycapStyle::raised(colors);
     // Trailing hints are laid out from the right, label then key like a launcher's action bar;
     // the last one sits inside the actions button hit area.
     let mut right = footer.left + footer.width - 4.0;
@@ -1195,7 +1214,7 @@ fn draw_action_panel(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors
     let panel = action_panel_rect(size, model.layout);
     // The panel floats over the preview well, so it needs its own nearly opaque surface.
     fill_rounded(panel, ACTION_PANEL_RADIUS, &colors.surface);
-    ring_rounded(panel, ACTION_PANEL_RADIUS, &colors.ring);
+    ring_rounded(panel, ACTION_PANEL_RADIUS, &colors.surface_edge);
     draw_text(
         &panel_model.target,
         Rect {
@@ -1208,20 +1227,14 @@ fn draw_action_panel(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors
         &colors.secondary,
         NSTextAlignment::Left,
     );
-    let style = KeycapStyle {
-        fill: &colors.well,
-        ring: &colors.ring,
-        text: &colors.label,
-    };
+    let style = KeycapStyle::raised(colors);
     for (index, action) in ACTIONS.iter().enumerate() {
         let row = action_row_rect(panel, index);
         if index == panel_model.selected {
             fill_rounded(
                 row,
                 ACTION_PANEL_RADIUS - ACTION_PANEL_PADDING,
-                &colors
-                    .accent
-                    .colorWithAlphaComponent(selection_alpha(model.theme)),
+                &colors.selection,
             );
         }
         let chip_width =
@@ -1273,8 +1286,8 @@ fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
     let layout = model.layout;
     let background = match model.close_state {
         CloseButtonVisualState::Normal => None,
-        CloseButtonVisualState::Hovered => Some(colors.label.colorWithAlphaComponent(0.10)),
-        CloseButtonVisualState::Pressed => Some(colors.label.colorWithAlphaComponent(0.18)),
+        CloseButtonVisualState::Hovered => Some(rgba(colors.canvas_tokens.control_hover)),
+        CloseButtonVisualState::Pressed => Some(rgba(colors.canvas_tokens.control_pressed)),
     };
     if let Some(background) = background {
         fill_rounded(
@@ -1323,19 +1336,11 @@ fn draw_row(
 ) {
     let layout = model.layout;
     let flashing = model.flash_position == Some(item.position);
-    if flashing {
+    if item.selected || flashing {
         fill_rounded(
             bounds,
             f64::from(layout.selection_radius),
-            &colors.accent.colorWithAlphaComponent(0.42),
-        );
-    } else if item.selected {
-        fill_rounded(
-            bounds,
-            f64::from(layout.selection_radius),
-            &colors
-                .accent
-                .colorWithAlphaComponent(selection_alpha(model.theme)),
+            &colors.selection,
         );
     }
     let mut left = bounds.left;
@@ -1347,29 +1352,37 @@ fn draw_row(
             height: bounds.height,
         };
         let text = item.position.to_string();
-        if model.held_modifier.is_some() && item.position <= 9 {
-            // Under the modifier the digit is a key the user can press: draw it as a keycap.
-            // The flash inverts it to a solid accent with white text, the system's own pairing
-            // for pressed accent controls.
-            let (fill, ring) = if flashing {
+        if item.position <= 9 {
+            // The number is a key the user can press, so it is drawn as one: neutral at rest,
+            // tinted toward the accent while the modifier is down, solid accent the instant it
+            // was pressed.
+            let tokens = colors.canvas_tokens;
+            let (fill, edge, base, text_color) = if flashing {
                 (
-                    colors.accent.colorWithAlphaComponent(0.95),
-                    colors.accent.colorWithAlphaComponent(1.0),
+                    color(tokens.keycap_pressed, 1.0),
+                    color(tokens.keycap_pressed, 1.0),
+                    color(tokens.keycap_pressed, 1.0),
+                    color(tokens.keycap_pressed_text, 1.0),
+                )
+            } else if model.held_modifier.is_some() {
+                (
+                    color(tokens.keycap_active, 1.0),
+                    color(tokens.keycap_active_edge, 1.0),
+                    color(tokens.keycap_active_edge, 1.0),
+                    colors.label.clone(),
                 )
             } else {
                 (
-                    colors.accent.colorWithAlphaComponent(0.24),
-                    colors.accent.colorWithAlphaComponent(0.5),
+                    colors.raised.clone(),
+                    colors.raised_edge.clone(),
+                    colors.raised_base.clone(),
+                    colors.label.clone(),
                 )
-            };
-            let text_color = if flashing {
-                NSColor::whiteColor()
-            } else {
-                colors.label.clone()
             };
             let style = KeycapStyle {
                 fill: &fill,
-                ring: &ring,
+                edge: &edge,
+                base: &base,
                 text: &text_color,
             };
             let width = KEYCAP_MINIMUM_WIDTH;
@@ -1486,7 +1499,7 @@ fn draw_frame(bounds: NSRect, model: &FrameModel) {
     let size = (bounds.size.width, bounds.size.height);
     let layout = model.layout;
     let fonts = fonts(model.options.compact_list);
-    let colors = colors(model.theme);
+    let colors = colors(model.tokens);
 
     if model.options.visible_borders {
         draw_panel_ring(size, &colors);
