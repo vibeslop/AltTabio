@@ -5,6 +5,7 @@
 #   scripts/mac/run.sh                       start the switcher
 #   scripts/mac/run.sh -- --preview          show the overlay once without hooking Command+Tab
 #   scripts/mac/run.sh -- --list             print the windows AltTabio sees and exit
+#   scripts/mac/run.sh -- --settings         start and open the settings window right away
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

@@ -14,6 +14,7 @@ mod overlay;
 mod permissions;
 mod preview;
 mod settings_window;
+mod shortcuts;
 mod single_instance;
 mod status_item;
 mod window_list;
@@ -26,7 +27,7 @@ use alttabio::switcher::{
     ProcessIdentity, SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
     WindowCommandRequest,
 };
-use alttabio::theme::{ResolvedTheme, ThemePalette, resolve};
+use alttabio::theme::{ResolvedTheme, resolve};
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use event_tap::EventTap;
@@ -48,10 +49,12 @@ use objc2_foundation::{
 };
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{
-    CloseButtonVisualState, FrameModel, Hit, Overlay, RenderOptions, RowModel, ViewEvent,
+    ActionPanelModel, CloseButtonVisualState, FrameModel, Hit, Overlay, RenderOptions, RowModel,
+    ViewEvent, WindowState,
 };
 use preview::{CaptureRequest, PreviewResult, PreviewSource};
 use settings_window::{SettingsEvent, SettingsWindow};
+use shortcuts::{ACTIONS, ActionKind, FooterContext};
 use status_item::{MenuAction, StatusItem};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -64,6 +67,8 @@ use std::time::Duration;
 use window_list::{EnumerationOptions, WindowRecord, merge_order};
 
 const PREVIEW_INTERVAL_SECONDS: f64 = 0.15;
+// A number key lights its row for about a menu blink before the switch happens.
+const FLASH_SECONDS: f64 = 0.08;
 const BACKGROUND_REFRESH_SECONDS: f64 = 2.0;
 // How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
@@ -122,6 +127,7 @@ fn run_later(work: impl FnOnce() + 'static) {
 
 pub fn run(arguments: &[OsString]) {
     let preview_mode = arguments.iter().any(|argument| argument == "--preview");
+    let settings_mode = arguments.iter().any(|argument| argument == "--settings");
     if arguments.iter().any(|argument| argument == "--list") {
         print_window_list();
         return;
@@ -169,6 +175,9 @@ pub fn run(arguments: &[OsString]) {
     )));
     APP.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&app)));
     app.borrow_mut().start();
+    if settings_mode {
+        app.borrow_mut().show_settings();
+    }
     ns_app.run();
 }
 
@@ -341,8 +350,42 @@ pub struct App {
     tap_retry_timer: Option<Retained<NSTimer>>,
     close_button: CloseButton,
     pressed_row: Option<usize>,
+    // The row a number key picked; its switch waits for the flash timer.
+    flash_position: Option<usize>,
+    flash_timer: Option<Retained<NSTimer>>,
+    // The selected entry of the ⌘K action panel while it is open.
+    action_panel: Option<usize>,
     // Preview mode shows the overlay as soon as the first window list arrives.
     show_when_listed: bool,
+}
+
+/// Which rows the list shows: the first visible index and how many rows fit, minus one row for
+/// the overflow note when the list does not fit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RowWindow {
+    start: usize,
+    rows: usize,
+    hidden_above: usize,
+    hidden_below: usize,
+}
+
+fn row_window(
+    total: usize,
+    fits: usize,
+    range_for: impl Fn(usize) -> std::ops::Range<usize>,
+) -> RowWindow {
+    let rows = if total > fits {
+        fits.saturating_sub(1).max(1)
+    } else {
+        fits
+    };
+    let range = range_for(rows);
+    RowWindow {
+        start: range.start,
+        rows,
+        hidden_above: range.start,
+        hidden_below: total.saturating_sub(range.end),
+    }
 }
 
 impl App {
@@ -383,6 +426,9 @@ impl App {
             tap_retry_timer: None,
             close_button: CloseButton::default(),
             pressed_row: None,
+            flash_position: None,
+            flash_timer: None,
+            action_panel: None,
             show_when_listed: false,
         }
     }
@@ -609,7 +655,13 @@ impl App {
             },
             other => other,
         };
+        let held_before = self.hotkey.held_modifier();
         let outcome = self.hotkey.process(event, self.hotkey_settings);
+        if self.hotkey.held_modifier() != held_before && self.session.is_visible() {
+            // The keycaps and hint bar follow the modifier; nothing else changes on a bare
+            // modifier transition, so the switcher session is not involved.
+            post_to_app(App::redraw);
+        }
         if tracing() {
             eprintln!(
                 "tap {event:?} -> suppress={} actions={:?}",
@@ -627,6 +679,28 @@ impl App {
     }
 
     pub fn apply_action(&mut self, action: InputAction) {
+        if self.session.is_visible() && self.route_to_action_panel(action) {
+            return;
+        }
+        if let InputAction::ActivateVisiblePosition(position) = action
+            && self.session.is_visible()
+            && self.flash_position.is_none()
+            && self
+                .session
+                .switcher_mut()
+                .select_visible_position(position)
+        {
+            self.flash_position = Some(position);
+            self.redraw();
+            let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
+                let _ = with_app(App::finish_flash);
+            });
+            self.flash_timer = Some(unsafe {
+                // SAFETY: scheduled from the main thread onto the main run loop.
+                NSTimer::scheduledTimerWithTimeInterval_repeats_block(FLASH_SECONDS, false, &block)
+            });
+            return;
+        }
         let selected_before = self.selected_window();
         let effect = self.session.handle_input(action);
         if tracing() {
@@ -647,6 +721,107 @@ impl App {
         }
     }
 
+    /// Handles `action` for the ⌘K panel; true when the panel consumed it.
+    fn route_to_action_panel(&mut self, action: InputAction) -> bool {
+        if action == InputAction::ToggleActionPanel {
+            self.action_panel = if self.action_panel.is_some() {
+                None
+            } else {
+                self.session.switcher().selected_task().map(|_| 0)
+            };
+            self.redraw();
+            return true;
+        }
+        let Some(selected) = self.action_panel else {
+            return false;
+        };
+        let last = ACTIONS.len().saturating_sub(1);
+        match action {
+            InputAction::Navigate(delta) | InputAction::Switch(delta) => {
+                self.action_panel = Some(
+                    usize::try_from(i64::try_from(selected).unwrap_or_default() + i64::from(delta))
+                        .unwrap_or_default()
+                        .min(last),
+                );
+                self.redraw();
+            }
+            InputAction::MouseWheel(delta) => {
+                self.action_panel = Some(if delta > 0 {
+                    selected.saturating_sub(1)
+                } else {
+                    (selected + 1).min(last)
+                });
+                self.redraw();
+            }
+            InputAction::SelectFirst => {
+                self.action_panel = Some(0);
+                self.redraw();
+            }
+            InputAction::SelectLast => {
+                self.action_panel = Some(last);
+                self.redraw();
+            }
+            InputAction::ActivateSelected => self.run_action(selected),
+            InputAction::DismissOverlay => {
+                self.action_panel = None;
+                self.redraw();
+            }
+            // Letting go of the modifier while choosing an action must not switch windows; the
+            // list simply stays open, which is where the panel leads anyway.
+            InputAction::AltReleased
+            | InputAction::RightButtonReleased
+            | InputAction::AppendSearchCharacter(_)
+            | InputAction::BackspaceSearch
+            | InputAction::RightButtonPressed
+            | InputAction::ToggleActionPanel => {}
+            // Shortcuts and number keys work as they do without the panel; it just closes.
+            InputAction::CloseSelected
+            | InputAction::WindowCommand(_)
+            | InputAction::SwitchWithinProcess(_)
+            | InputAction::ActivateVisiblePosition(_) => {
+                self.action_panel = None;
+                return false;
+            }
+        }
+        true
+    }
+
+    fn run_action(&mut self, index: usize) {
+        self.action_panel = None;
+        let Some(action) = ACTIONS.get(index) else {
+            self.redraw();
+            return;
+        };
+        let input = match action.kind {
+            ActionKind::Activate => InputAction::ActivateSelected,
+            ActionKind::Command(command) => InputAction::WindowCommand(command),
+            ActionKind::NextWindowOfApp => InputAction::SwitchWithinProcess(1),
+        };
+        self.apply_action(input);
+        if self.session.is_visible() {
+            self.redraw();
+        }
+    }
+
+    fn finish_flash(&mut self) {
+        self.flash_timer = None;
+        if self.flash_position.take().is_none() {
+            return;
+        }
+        // The row was selected when the flash started; activating the selection rather than the
+        // position keeps the choice even if the list changed underneath in the meantime.
+        if self.session.is_visible() {
+            self.apply_action(InputAction::ActivateSelected);
+        }
+    }
+
+    fn clear_flash(&mut self) {
+        self.flash_position = None;
+        if let Some(timer) = self.flash_timer.take() {
+            timer.invalidate();
+        }
+    }
+
     fn selected_window(&self) -> Option<isize> {
         self.session
             .switcher()
@@ -663,9 +838,11 @@ impl App {
         }
         self.close_button = CloseButton::default();
         self.pressed_row = None;
-        let palette = self.palette();
+        self.clear_flash();
+        self.action_panel = None;
+        let theme = self.resolved_theme();
         if let Some(overlay) = &self.overlay {
-            overlay.set_palette(palette);
+            overlay.set_theme(theme);
             overlay.show_on_cursor_screen();
         }
         self.hotkey.set_overlay_active(true);
@@ -687,6 +864,8 @@ impl App {
         self.hotkey.set_overlay_active(false);
         self.close_button = CloseButton::default();
         self.pressed_row = None;
+        self.clear_flash();
+        self.action_panel = None;
         self.preview_image = None;
         self.preview_window = None;
         if let Some(timer) = self.preview_timer.take() {
@@ -731,7 +910,7 @@ impl App {
         }
     }
 
-    fn palette(&self) -> ThemePalette {
+    fn resolved_theme(&self) -> ResolvedTheme {
         let appearance = NSApplication::sharedApplication(self.mtm).effectiveAppearance();
         let (aqua, dark) = unsafe {
             // SAFETY: the appearance name constants are static strings exported by AppKit.
@@ -746,11 +925,54 @@ impl App {
         } else {
             ResolvedTheme::Light
         };
-        resolve(self.settings.appearance.theme, system).palette()
+        resolve(self.settings.appearance.theme, system)
     }
 
     fn layout(&self) -> OverlayLayout {
+        let search_row = if self.session.switcher().filter().is_empty() {
+            0.0
+        } else {
+            overlay::SEARCH_ROW_HEIGHT
+        };
+        let footer = if self.settings.appearance.show_hints {
+            overlay::FOOTER_HEIGHT
+        } else {
+            0.0
+        };
         for_compact_list(self.settings.appearance.compact_list)
+            .with_search_row(search_row)
+            .with_footer(footer)
+    }
+
+    fn row_window(&self, size: (f64, f64), layout: OverlayLayout) -> RowWindow {
+        let switcher = self.session.switcher();
+        row_window(
+            switcher.visible_task_count(),
+            overlay::visible_rows(size, layout),
+            |rows| switcher.visible_range(rows),
+        )
+    }
+
+    fn footer_context(&self) -> FooterContext {
+        let switcher = self.session.switcher();
+        if !switcher.filter().is_empty() {
+            FooterContext::Searching {
+                matches: switcher.visible_task_count(),
+            }
+        } else if let Some(modifier) = self.hotkey.held_modifier() {
+            FooterContext::Held(modifier)
+        } else {
+            FooterContext::Released
+        }
+    }
+
+    fn window_state(&self, window_handle: isize) -> WindowState {
+        match self.record(window_handle) {
+            Some(record) if record.is_minimized => WindowState::Minimized,
+            Some(record) if record.is_hidden => WindowState::Hidden,
+            Some(record) if !record.is_on_screen => WindowState::OtherSpace,
+            _ => WindowState::Normal,
+        }
     }
 
     fn render_options(&self) -> RenderOptions {
@@ -771,14 +993,13 @@ impl App {
         };
         let size = overlay.content_size();
         let layout = self.layout();
-        let visible_rows = overlay::visible_rows(size, layout);
+        let window = self.row_window(size, layout);
         let switcher = self.session.switcher();
-        let start = switcher.visible_range(visible_rows).start;
         let selected = switcher.selected_task().map(|task| task.window_handle);
         let rows = switcher
             .positioned_visible_tasks()
-            .skip(start)
-            .take(visible_rows)
+            .skip(window.start)
+            .take(window.rows)
             .map(|(position, task)| RowModel {
                 position,
                 title: task.title.clone(),
@@ -787,24 +1008,50 @@ impl App {
                     .ok()
                     .and_then(|pid| self.icons.get(&pid).cloned()),
                 selected: selected == Some(task.window_handle),
+                state: self.window_state(task.window_handle),
             })
             .collect();
-        let preview_message = if self.preview_image.is_some() {
+        let no_selection = switcher.selected_task().is_none();
+        let preview_message = if no_selection {
+            Some("No windows match".to_owned())
+        } else if self.preview_image.is_some() {
             None
         } else if !permissions::screen_recording_granted() {
             Some("Allow Screen Recording in System Settings to see live previews".to_owned())
         } else {
             self.preview_message.map(str::to_owned)
         };
+        let footer = self
+            .settings
+            .appearance
+            .show_hints
+            .then(|| shortcuts::footer(self.footer_context(), self.action_panel.is_some()));
+        let action_panel = self.action_panel.map(|selected| ActionPanelModel {
+            selected,
+            target: switcher
+                .selected_task()
+                .map(|task| task.title.clone())
+                .unwrap_or_default(),
+        });
         overlay.present(FrameModel {
             rows,
             layout,
             options: self.render_options(),
-            palette: self.palette(),
+            theme: self.resolved_theme(),
             close_state: self.close_button.visual_state(),
-            preview: self.preview_image.clone(),
+            preview: if no_selection {
+                None
+            } else {
+                self.preview_image.clone()
+            },
             preview_message,
             filter: switcher.filter().to_owned(),
+            held_modifier: self.hotkey.held_modifier(),
+            flash_position: self.flash_position,
+            hidden_above: window.hidden_above,
+            hidden_below: window.hidden_below,
+            footer,
+            action_panel,
         });
     }
 
@@ -912,20 +1159,36 @@ impl App {
         };
         let size = overlay.content_size();
         let layout = self.layout();
-        let visible_rows = overlay::visible_rows(size, layout);
-        let start = self.session.switcher().visible_range(visible_rows).start;
+        let window = self.row_window(size, layout);
+        let (start, visible_rows) = (window.start, window.rows);
         let selected_row = self
             .session
             .switcher()
             .selected_visible_index()
             .and_then(|index| index.checked_sub(start))
             .filter(|row| *row < visible_rows);
+        let panel_open = self.action_panel.is_some();
+        // The overflow note occupies the last fitted slot; it is not a row.
+        let hit_test = |x: f64, y: f64| {
+            overlay::hit_test(size, layout, selected_row, panel_open, x, y).filter(
+                |hit| match hit {
+                    Hit::Row(row) | Hit::CloseButton(row) => *row < visible_rows,
+                    Hit::ActionsButton | Hit::ActionRow(_) => true,
+                },
+            )
+        };
         match event {
             ViewEvent::MouseMoved(x, y) => {
-                let hit = overlay::hit_test(size, layout, selected_row, x, y);
+                let hit = hit_test(x, y);
                 let hovered = matches!(hit, Some(Hit::CloseButton(_)));
                 let mut changed = hovered != self.close_button.hovered;
                 self.close_button.hovered = hovered;
+                if let Some(Hit::ActionRow(index)) = hit
+                    && self.action_panel.is_some_and(|selected| selected != index)
+                {
+                    self.action_panel = Some(index);
+                    changed = true;
+                }
                 if let Some(Hit::Row(row)) = hit
                     && self.settings.general.mouse_over_selection
                     && !self.close_button.pressed
@@ -943,40 +1206,11 @@ impl App {
                 }
             }
             ViewEvent::MouseDown(x, y) => {
-                match overlay::hit_test(size, layout, selected_row, x, y) {
-                    Some(Hit::CloseButton(_)) => {
-                        self.close_button.pressed = true;
-                        self.redraw();
-                    }
-                    Some(Hit::Row(row)) => {
-                        self.pressed_row = Some(row);
-                        let switcher = self.session.switcher_mut();
-                        switcher.pin_visible_range(visible_rows);
-                        if switcher.select_visible_position(start + row + 1) {
-                            self.redraw();
-                            self.request_preview_capture();
-                        }
-                    }
-                    None => {}
-                }
+                self.handle_mouse_down(hit_test(x, y), start, visible_rows);
             }
-            ViewEvent::MouseUp(x, y) => {
-                let hit = overlay::hit_test(size, layout, selected_row, x, y);
-                if self.close_button.pressed {
-                    self.close_button.pressed = false;
-                    if matches!(hit, Some(Hit::CloseButton(_))) {
-                        self.apply_action(InputAction::CloseSelected);
-                    }
-                    self.redraw();
-                } else if let (Some(Hit::Row(row)), Some(pressed)) = (hit, self.pressed_row)
-                    && row == pressed
-                {
-                    self.apply_action(InputAction::ActivateSelected);
-                }
-                self.pressed_row = None;
-            }
+            ViewEvent::MouseUp(x, y) => self.handle_mouse_up(hit_test(x, y)),
             ViewEvent::RightMouseDown(x, y) => {
-                if let Some(Hit::Row(row)) = overlay::hit_test(size, layout, selected_row, x, y) {
+                if let Some(Hit::Row(row)) = hit_test(x, y) {
                     let switcher = self.session.switcher_mut();
                     switcher.pin_visible_range(visible_rows);
                     if switcher.select_visible_position(start + row + 1) {
@@ -998,6 +1232,43 @@ impl App {
             }
             ViewEvent::Scroll(delta) => self.apply_action(InputAction::MouseWheel(delta)),
         }
+    }
+
+    fn handle_mouse_down(&mut self, hit: Option<Hit>, start: usize, visible_rows: usize) {
+        match hit {
+            Some(Hit::ActionsButton) => self.apply_action(InputAction::ToggleActionPanel),
+            Some(Hit::ActionRow(index)) => self.run_action(index),
+            Some(Hit::CloseButton(_)) => {
+                self.close_button.pressed = true;
+                self.redraw();
+            }
+            Some(Hit::Row(row)) => {
+                self.pressed_row = Some(row);
+                self.action_panel = None;
+                let switcher = self.session.switcher_mut();
+                switcher.pin_visible_range(visible_rows);
+                if switcher.select_visible_position(start + row + 1) {
+                    self.redraw();
+                    self.request_preview_capture();
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn handle_mouse_up(&mut self, hit: Option<Hit>) {
+        if self.close_button.pressed {
+            self.close_button.pressed = false;
+            if matches!(hit, Some(Hit::CloseButton(_))) {
+                self.apply_action(InputAction::CloseSelected);
+            }
+            self.redraw();
+        } else if let (Some(Hit::Row(row)), Some(pressed)) = (hit, self.pressed_row)
+            && row == pressed
+        {
+            self.apply_action(InputAction::ActivateSelected);
+        }
+        self.pressed_row = None;
     }
 
     fn finish_context_menu(&mut self, command: Option<WindowCommand>) {
@@ -1046,7 +1317,7 @@ impl App {
         }
         if self.session.is_visible() {
             if let Some(overlay) = &self.overlay {
-                overlay.set_palette(self.palette());
+                overlay.set_theme(self.resolved_theme());
             }
             self.redraw();
         }
@@ -1054,6 +1325,7 @@ impl App {
 
     fn shutdown(&mut self) {
         self.event_tap = None;
+        self.clear_flash();
         if let Some(timer) = self.preview_timer.take() {
             timer.invalidate();
         }
@@ -1163,5 +1435,37 @@ fn hotkey_settings(settings: &Settings) -> HotkeySettings {
         option_tab: settings.general.replace_win_tab,
         typed_search: settings.general.typed_search,
         right_button_wheel_switching: settings.general.right_button_wheel_switching,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RowWindow, row_window};
+
+    #[test]
+    fn lists_that_fit_show_every_row_without_an_overflow_slot() {
+        assert_eq!(
+            row_window(5, 8, |rows| 0..5.min(rows)),
+            RowWindow {
+                start: 0,
+                rows: 8,
+                hidden_above: 0,
+                hidden_below: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn overflowing_lists_give_up_one_row_for_the_note_and_count_the_rest() {
+        assert_eq!(
+            row_window(20, 8, |rows| 3..3 + rows),
+            RowWindow {
+                start: 3,
+                rows: 7,
+                hidden_above: 3,
+                hidden_below: 10,
+            }
+        );
+        assert_eq!(row_window(3, 1, |rows| 1..1 + rows).rows, 1);
     }
 }

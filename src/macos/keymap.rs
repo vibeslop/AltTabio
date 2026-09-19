@@ -6,6 +6,32 @@
 
 use alttabio::input::Key;
 
+/// Letter chords the switcher owns while the gesture modifier is down.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Chord {
+    Close,
+    Minimize,
+    Quit,
+    Hide,
+    NextWindowOfApp,
+    Actions,
+}
+
+/// The chord for a letter key code, matching the system habits: Command with W, M, Q, H, and
+/// the backtick, plus K for the actions panel as launchers use it.
+#[must_use]
+pub const fn chord_for_code(code: u16) -> Option<Chord> {
+    match code {
+        13 => Some(Chord::Close),
+        46 => Some(Chord::Minimize),
+        12 => Some(Chord::Quit),
+        4 => Some(Chord::Hide),
+        50 => Some(Chord::NextWindowOfApp),
+        40 => Some(Chord::Actions),
+        _ => None,
+    }
+}
+
 #[must_use]
 pub const fn key_for_code(code: u16) -> Key {
     match code {
@@ -79,5 +105,16 @@ mod tests {
         assert_eq!(key_for_code(55), Key::LeftAlt);
         assert_eq!(key_for_code(58), Key::LeftWindows);
         assert_eq!(key_for_code(0), Key::Other(0));
+    }
+
+    #[test]
+    fn chords_follow_the_system_letter_shortcuts() {
+        assert_eq!(chord_for_code(13), Some(Chord::Close));
+        assert_eq!(chord_for_code(46), Some(Chord::Minimize));
+        assert_eq!(chord_for_code(12), Some(Chord::Quit));
+        assert_eq!(chord_for_code(4), Some(Chord::Hide));
+        assert_eq!(chord_for_code(50), Some(Chord::NextWindowOfApp));
+        assert_eq!(chord_for_code(40), Some(Chord::Actions));
+        assert_eq!(chord_for_code(0), None);
     }
 }
