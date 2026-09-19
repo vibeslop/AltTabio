@@ -27,7 +27,7 @@ use alttabio::switcher::{
     ProcessIdentity, SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
     WindowCommandRequest,
 };
-use alttabio::theme::{ResolvedTheme, resolve};
+use alttabio::theme::{ResolvedTheme, Rgb8, SwitcherTokens, resolve};
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use event_tap::EventTap;
@@ -37,10 +37,11 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-    NSApplicationActivationPolicy, NSImage, NSRunningApplication, NSScreen, NSWorkspace,
-    NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidActivateApplicationNotification,
-    NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
-    NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
+    NSApplicationActivationPolicy, NSColor, NSColorSpace, NSImage, NSRunningApplication, NSScreen,
+    NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification,
+    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidHideApplicationNotification,
+    NSWorkspaceDidLaunchApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
+    NSWorkspaceDidUnhideApplicationNotification,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_foundation::{
@@ -842,7 +843,7 @@ impl App {
         self.action_panel = None;
         let theme = self.resolved_theme();
         if let Some(overlay) = &self.overlay {
-            overlay.set_theme(theme);
+            overlay.set_theme(theme, Self::tokens(theme));
             overlay.show_on_cursor_screen();
         }
         self.hotkey.set_overlay_active(true);
@@ -926,6 +927,10 @@ impl App {
             ResolvedTheme::Light
         };
         resolve(self.settings.appearance.theme, system)
+    }
+
+    fn tokens(theme: ResolvedTheme) -> SwitcherTokens {
+        SwitcherTokens::new(theme, accent_color())
     }
 
     fn layout(&self) -> OverlayLayout {
@@ -1037,7 +1042,7 @@ impl App {
             rows,
             layout,
             options: self.render_options(),
-            theme: self.resolved_theme(),
+            tokens: Self::tokens(self.resolved_theme()),
             close_state: self.close_button.visual_state(),
             preview: if no_selection {
                 None
@@ -1317,7 +1322,8 @@ impl App {
         }
         if self.session.is_visible() {
             if let Some(overlay) = &self.overlay {
-                overlay.set_theme(self.resolved_theme());
+                let theme = self.resolved_theme();
+                overlay.set_theme(theme, Self::tokens(theme));
             }
             self.redraw();
         }
@@ -1385,6 +1391,27 @@ fn show_about(mtm: MainThreadMarker) {
     {
         eprintln!("Could not open {GITHUB_URL}");
     }
+}
+
+/// The user's accent color in sRGB, falling back to the system blue.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "components are clamped to 0..=1 before scaling to a byte"
+)]
+fn accent_color() -> Rgb8 {
+    let fallback = Rgb8::new(0, 122, 255);
+    let Some(color) =
+        NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
+    else {
+        return fallback;
+    };
+    let byte = |value: f64| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Rgb8::new(
+        byte(color.redComponent()),
+        byte(color.greenComponent()),
+        byte(color.blueComponent()),
+    )
 }
 
 fn application_icon(pid: i32) -> Option<Retained<NSImage>> {
