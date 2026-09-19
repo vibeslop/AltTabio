@@ -32,9 +32,31 @@ pub struct OverlayLayout {
     pub close_button_size: f32,
     pub close_button_inset: f32,
     pub close_button_gap: f32,
+    /// Height of the search row above the list; zero when no search text is shown.
+    pub search_row_height: f32,
+    /// Height of the hint bar below the list and preview; zero when hints are off.
+    pub footer_height: f32,
 }
 
 impl OverlayLayout {
+    #[must_use]
+    pub const fn with_search_row(mut self, height: f32) -> Self {
+        self.search_row_height = height;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_footer(mut self, height: f32) -> Self {
+        self.footer_height = height;
+        self
+    }
+
+    /// Bottom edge of the row area, above the footer.
+    #[must_use]
+    pub const fn list_bottom(self, client_height: f32) -> f32 {
+        client_height - self.outer_padding - self.footer_height
+    }
+
     #[must_use]
     pub fn list_width(self, client_width: f32, scale: f32) -> f32 {
         let scale = scale.max(1.0);
@@ -50,13 +72,13 @@ impl OverlayLayout {
     )]
     pub fn visible_row_count(self, client_height: f32) -> usize {
         let available_height =
-            (client_height - self.list_top() - self.outer_padding).max(self.row_height);
+            (self.list_bottom(client_height) - self.list_top()).max(self.row_height);
         ((available_height + self.row_gap) / (self.row_height + self.row_gap)) as usize
     }
 
     #[must_use]
     pub const fn list_top(self) -> f32 {
-        self.outer_padding
+        self.outer_padding + self.search_row_height
     }
 
     #[must_use]
@@ -95,6 +117,8 @@ pub const fn for_compact_list(compact: bool) -> OverlayLayout {
             close_button_size: 24.0,
             close_button_inset: 8.0,
             close_button_gap: 6.0,
+            search_row_height: 0.0,
+            footer_height: 0.0,
         }
     } else {
         OverlayLayout {
@@ -112,6 +136,8 @@ pub const fn for_compact_list(compact: bool) -> OverlayLayout {
             close_button_size: 30.0,
             close_button_inset: 8.0,
             close_button_gap: 8.0,
+            search_row_height: 0.0,
+            footer_height: 0.0,
         }
     }
 }
@@ -177,6 +203,19 @@ mod tests {
         assert_eq!(layout.visible_row_at(600.0, 18.0), Some(0));
         assert_eq!(layout.visible_row_at(600.0, 64.0), Some(1));
         assert_eq!(layout.visible_row_at(600.0, 62.0), None);
+    }
+
+    #[test]
+    fn search_row_and_footer_take_rows_away_from_the_list() {
+        let layout = for_compact_list(true)
+            .with_search_row(34.0)
+            .with_footer(30.0);
+
+        assert!((layout.list_top() - 52.0).abs() < f32::EPSILON);
+        assert!((layout.list_bottom(600.0) - 552.0).abs() < f32::EPSILON);
+        assert_eq!(layout.visible_row_count(600.0), 10);
+        assert_eq!(layout.visible_row_at(600.0, 40.0), None);
+        assert_eq!(layout.visible_row_at(600.0, 52.0), Some(0));
     }
 
     #[test]
