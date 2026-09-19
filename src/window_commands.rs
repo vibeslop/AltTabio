@@ -84,6 +84,8 @@ pub fn execute(
         WindowCommand::Restore => show_window(window, SW_RESTORE),
         WindowCommand::Terminate => terminate_window_process(window, process_identity),
         WindowCommand::Run => run_window_process(window, process_identity),
+        // Only the macOS chords produce these; the Windows hook never encodes them.
+        WindowCommand::Quit | WindowCommand::Hide => false,
     }
 }
 
