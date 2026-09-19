@@ -4,7 +4,8 @@
 //! menu focus quirks at bay. macOS delivers modifiers as flag changes and never focuses menus on
 //! a bare modifier, so this smaller machine only decides which events the switcher owns.
 
-use alttabio::input::{InputAction, Key, OverlayKeyEvent, overlay_key_action};
+use super::keymap::{Chord, chord_for_code};
+use alttabio::input::{InputAction, Key, OverlayKeyEvent, WindowCommand, overlay_key_action};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(
@@ -95,6 +96,23 @@ enum Gesture {
     Option,
 }
 
+/// Which switch modifier is down while the overlay shows; drives keycaps and hints.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HeldModifier {
+    Command,
+    Option,
+}
+
+impl HeldModifier {
+    #[must_use]
+    pub const fn glyph(self) -> &'static str {
+        match self {
+            Self::Command => "⌘",
+            Self::Option => "⌥",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum RightButton {
     #[default]
@@ -118,6 +136,19 @@ impl HotkeyState {
         self.overlay_active = active;
         if !active {
             self.gesture = None;
+        }
+    }
+
+    /// The modifier the switcher currently treats as held: the gesture's own modifier, or
+    /// Command or Option pressed again after the gesture ended while the list stayed open.
+    #[must_use]
+    pub const fn held_modifier(&self) -> Option<HeldModifier> {
+        match self.gesture {
+            Some(Gesture::Command) => Some(HeldModifier::Command),
+            Some(Gesture::Option) => Some(HeldModifier::Option),
+            None if self.overlay_active && self.modifiers.command => Some(HeldModifier::Command),
+            None if self.overlay_active && self.modifiers.option => Some(HeldModifier::Option),
+            None => None,
         }
     }
 
@@ -224,18 +255,33 @@ impl HotkeyState {
         if key == Key::Tab {
             return TapOutcome::one(true, InputAction::Switch(switch_delta));
         }
-        let modifier_held = match self.gesture {
-            Some(Gesture::Command) => modifiers.command,
-            Some(Gesture::Option) => modifiers.option,
-            None => false,
-        };
+        let modifier_held = self.held_modifier().is_some();
+        if modifier_held
+            && !modifiers.control
+            && let Key::Other(code) = key
+            && let Some(chord) = chord_for_code(code)
+        {
+            let action = match chord {
+                Chord::Close => InputAction::WindowCommand(WindowCommand::Close),
+                Chord::Minimize => InputAction::WindowCommand(WindowCommand::Minimize),
+                Chord::Quit => InputAction::WindowCommand(WindowCommand::Quit),
+                Chord::Hide => InputAction::WindowCommand(WindowCommand::Hide),
+                Chord::NextWindowOfApp => InputAction::SwitchWithinProcess(switch_delta),
+                Chord::Actions => InputAction::ToggleActionPanel,
+            };
+            if repeated && chord != Chord::NextWindowOfApp {
+                return TapOutcome::SUPPRESSED;
+            }
+            return TapOutcome::one(true, action);
+        }
         let overlay_action = overlay_key_action(OverlayKeyEvent {
             key,
             repeated,
             shift: modifiers.shift,
         });
         match overlay_action {
-            // Digits filter the list once the gesture modifier is up, like the Windows build.
+            // Digits filter the list once the modifier is up, like the Windows build; with the
+            // modifier down they jump, in the gesture and after the list was left open.
             Some(InputAction::ActivateVisiblePosition(_))
                 if !modifier_held && settings.typed_search => {}
             Some(
@@ -249,7 +295,9 @@ impl HotkeyState {
             Some(action) => return TapOutcome::one(true, action),
             None => {}
         }
-        if settings.typed_search && !modifiers.control {
+        // Letters under the modifier are chords on macOS, never search text; typing starts once
+        // the modifier is up so a search for "w" cannot close a window.
+        if settings.typed_search && !modifiers.control && !modifier_held {
             if key == Key::Backspace {
                 return TapOutcome::one(true, InputAction::BackspaceSearch);
             }
@@ -397,6 +445,11 @@ mod tests {
         let settings = HotkeySettings::default();
         let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
         let _ = state.process(tab(), settings);
+        state.set_overlay_active(true);
+        let _ = state.process(
+            TapEvent::ModifiersChanged(ModifierState::default()),
+            settings,
+        );
 
         let letter = TapEvent::KeyDown {
             key: Key::Other(0),
@@ -457,6 +510,82 @@ mod tests {
         assert_eq!(
             actions(state.process(escape, settings)),
             vec![InputAction::DismissOverlay]
+        );
+    }
+
+    #[test]
+    fn letters_under_the_held_modifier_are_chords_not_search_text() {
+        let mut state = HotkeyState::default();
+        let settings = HotkeySettings::default();
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
+        let _ = state.process(tab(), settings);
+        state.set_overlay_active(true);
+        assert_eq!(state.held_modifier(), Some(HeldModifier::Command));
+
+        let w = TapEvent::KeyDown {
+            key: Key::Other(13),
+            text: Some('w'),
+            repeated: false,
+        };
+        assert_eq!(
+            actions(state.process(w, settings)),
+            vec![InputAction::WindowCommand(WindowCommand::Close)]
+        );
+        let repeated_w = TapEvent::KeyDown {
+            key: Key::Other(13),
+            text: Some('w'),
+            repeated: true,
+        };
+        assert_eq!(state.process(repeated_w, settings), TapOutcome::SUPPRESSED);
+        let a = TapEvent::KeyDown {
+            key: Key::Other(0),
+            text: Some('a'),
+            repeated: false,
+        };
+        assert_eq!(state.process(a, settings), TapOutcome::SUPPRESSED);
+        let backtick = TapEvent::KeyDown {
+            key: Key::Other(50),
+            text: Some('`'),
+            repeated: true,
+        };
+        assert_eq!(
+            actions(state.process(backtick, settings)),
+            vec![InputAction::SwitchWithinProcess(1)]
+        );
+    }
+
+    #[test]
+    fn command_pressed_again_after_release_restores_jumps_and_chords() {
+        let mut state = HotkeyState::default();
+        let settings = HotkeySettings::default();
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
+        let _ = state.process(tab(), settings);
+        state.set_overlay_active(true);
+        let _ = state.process(
+            TapEvent::ModifiersChanged(ModifierState::default()),
+            settings,
+        );
+        assert_eq!(state.held_modifier(), None);
+
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
+        assert_eq!(state.held_modifier(), Some(HeldModifier::Command));
+        let q = TapEvent::KeyDown {
+            key: Key::Other(12),
+            text: Some('q'),
+            repeated: false,
+        };
+        assert_eq!(
+            actions(state.process(q, settings)),
+            vec![InputAction::WindowCommand(WindowCommand::Quit)]
+        );
+        let digit = TapEvent::KeyDown {
+            key: Key::Digit(2),
+            text: Some('2'),
+            repeated: false,
+        };
+        assert_eq!(
+            actions(state.process(digit, settings)),
+            vec![InputAction::ActivateVisiblePosition(2)]
         );
     }
 

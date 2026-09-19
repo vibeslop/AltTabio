@@ -1,7 +1,9 @@
-//! Window activation and the F4-F9 window commands on top of Accessibility and `AppKit`.
+//! Window activation and the window commands (F4-F9 and the ⌘ chords) on top of Accessibility
+//! and `AppKit`.
 
 use super::window_list::{WindowRecord, launch_time};
 use alttabio::input::WindowCommand;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplicationActivationOptions, NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration,
 };
@@ -89,7 +91,37 @@ pub fn execute(command: WindowCommand, record: &WindowRecord) -> Result<CommandO
         }
         WindowCommand::Terminate => terminate(record),
         WindowCommand::Run => run_another_instance(record),
+        WindowCommand::Quit => {
+            let app = running_application(record)?;
+            if !app.terminate() {
+                return Err(format!(
+                    "{} did not accept the quit request",
+                    record.app_name
+                ));
+            }
+            Ok(CommandOutcome::ListChanges)
+        }
+        WindowCommand::Hide => {
+            let app = running_application(record)?;
+            if !app.hide() {
+                return Err(format!("Could not hide {}", record.app_name));
+            }
+            Ok(CommandOutcome::ListChanges)
+        }
     }
+}
+
+fn running_application(record: &WindowRecord) -> Result<Retained<NSRunningApplication>, String> {
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(record.pid)
+        .ok_or_else(|| format!("{} is no longer running", record.app_name))?;
+    // A reused pid after the listed app exited must not act on an unrelated process.
+    if launch_time(&app) != record.launched_at {
+        return Err(format!(
+            "{} was replaced by another process; leaving it alone",
+            record.app_name
+        ));
+    }
+    Ok(app)
 }
 
 fn accessible(record: &WindowRecord) -> Result<&super::ax::AxElement, String> {
