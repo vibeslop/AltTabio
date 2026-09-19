@@ -39,23 +39,26 @@ const CORNER_RADIUS: f64 = 16.0;
 // chosen on their own rather than derived from the panel corner.
 const PREVIEW_RADIUS: f64 = 8.0;
 const SEARCH_RADIUS: f64 = 8.0;
-const KEYCAP_RADIUS: f64 = 5.0;
+const KEYCAP_RADIUS: f64 = 6.0;
 const KEYCAP_MINIMUM_WIDTH: f64 = 24.0;
 const BADGE_POINT_SIZE: f64 = 11.0;
 const HINT_GAP: f64 = 16.0;
+/// Horizontal inset of content inside wells, panel rows, and the footer.
+const INSET: f64 = 12.0;
 /// Width of the footer's trailing "Actions ⌘K" hit area.
 const ACTIONS_BUTTON_WIDTH: f64 = 96.0;
-const ACTION_PANEL_WIDTH: f64 = 300.0;
-const ACTION_PANEL_PADDING: f64 = 6.0;
-const ACTION_PANEL_HEADER_HEIGHT: f64 = 28.0;
-const ACTION_ROW_HEIGHT: f64 = 30.0;
-const ACTION_PANEL_RADIUS: f64 = 12.0;
+const ACTION_PANEL_WIDTH: f64 = 320.0;
+const ACTION_PANEL_PADDING: f64 = 8.0;
+const ACTION_PANEL_HEADER_HEIGHT: f64 = 32.0;
+const ACTION_ROW_HEIGHT: f64 = 32.0;
+// Radius 16 minus the 8pt padding gives the selected action row its 8pt radius.
+const ACTION_PANEL_RADIUS: f64 = 16.0;
 /// Height reserved above the list while search text shows, including the gap to the rows.
-pub const SEARCH_ROW_HEIGHT: f32 = 40.0;
+pub const SEARCH_ROW_HEIGHT: f32 = 48.0;
 /// Height reserved under the list and preview for the hint bar, including its gap.
-pub const FOOTER_HEIGHT: f32 = 34.0;
-const SEARCH_ROW_GAP: f64 = 8.0;
-const FOOTER_GAP: f64 = 8.0;
+pub const FOOTER_HEIGHT: f32 = 40.0;
+const SEARCH_ROW_GAP: f64 = 12.0;
+const FOOTER_GAP: f64 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ViewEvent {
@@ -1126,7 +1129,7 @@ fn draw_search_row(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: 
         return;
     }
     fill_rounded(row, SEARCH_RADIUS, &colors.well);
-    let mut left = row.left + 10.0;
+    let mut left = row.left + INSET;
     if let Some(glass) = symbol("magnifyingglass", 12.0, &colors.secondary) {
         let icon = glass.size();
         let _ = draw_image_fit(
@@ -1138,14 +1141,14 @@ fn draw_search_row(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: 
                 height: icon.height,
             },
         );
-        left += icon.width + 8.0;
+        left += icon.width + 10.0;
     }
     draw_text(
         &model.filter,
         Rect {
             left,
             top: row.top,
-            width: (row.left + row.width - 12.0 - left).max(0.0),
+            width: (row.left + row.width - INSET - left).max(0.0),
             height: row.height,
         },
         &fonts.title,
@@ -1165,7 +1168,7 @@ fn draw_footer(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Col
     let style = KeycapStyle::raised(colors);
     // Trailing hints are laid out from the right, label then key like a launcher's action bar;
     // the last one sits inside the actions button hit area.
-    let mut right = footer.left + footer.width - 4.0;
+    let mut right = footer.left + footer.width - 10.0;
     for hint in content.trailing.iter().rev() {
         let chip_width = (measure(hint.keys, &fonts.keycap).width + 10.0).max(KEYCAP_MINIMUM_WIDTH);
         let label_width = measure(hint.label, &fonts.hint).width.ceil();
@@ -1178,7 +1181,7 @@ fn draw_footer(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Col
             &fonts.keycap,
             &style,
         );
-        let label_left = chip_left - 6.0 - label_width;
+        let label_left = chip_left - 8.0 - label_width;
         draw_text(
             hint.label,
             Rect {
@@ -1196,9 +1199,9 @@ fn draw_footer(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Col
     draw_text(
         &content.status,
         Rect {
-            left: footer.left + 4.0,
+            left: footer.left + 10.0,
             top: footer.top,
-            width: (right - footer.left - 4.0).max(0.0),
+            width: (right - footer.left - 10.0).max(0.0),
             height: footer.height,
         },
         &fonts.hint,
@@ -1218,9 +1221,9 @@ fn draw_action_panel(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors
     draw_text(
         &panel_model.target,
         Rect {
-            left: panel.left + ACTION_PANEL_PADDING + 10.0,
+            left: panel.left + ACTION_PANEL_PADDING + INSET,
             top: panel.top + ACTION_PANEL_PADDING,
-            width: panel.width - ACTION_PANEL_PADDING * 2.0 - 20.0,
+            width: panel.width - ACTION_PANEL_PADDING * 2.0 - INSET * 2.0,
             height: ACTION_PANEL_HEADER_HEIGHT,
         },
         &fonts.detail,
@@ -1239,7 +1242,7 @@ fn draw_action_panel(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors
         }
         let chip_width =
             (measure(action.keys, &fonts.keycap).width + 10.0).max(KEYCAP_MINIMUM_WIDTH);
-        let chip_left = row.left + row.width - 8.0 - chip_width;
+        let chip_left = row.left + row.width - INSET + 2.0 - chip_width;
         let _ = draw_keycap(
             action.keys,
             chip_left,
@@ -1251,9 +1254,9 @@ fn draw_action_panel(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors
         draw_text(
             action.label,
             Rect {
-                left: row.left + 10.0,
+                left: row.left + INSET,
                 top: row.top,
-                width: (chip_left - 8.0 - row.left - 10.0).max(0.0),
+                width: (chip_left - 8.0 - row.left - INSET).max(0.0),
                 height: row.height,
             },
             &fonts.title,
@@ -1419,7 +1422,7 @@ fn draw_row(
     }
     left += f64::from(layout.icon_slot_width + layout.icon_text_gap);
     let close = item.selected.then(|| close_button_rect(bounds, layout));
-    let mut text_right = close.map_or(bounds.left + bounds.width - 12.0, |button| {
+    let mut text_right = close.map_or(bounds.left + bounds.width - INSET, |button| {
         button.left - f64::from(layout.close_button_gap)
     });
     if let Some(name) = badge_symbol(item.state)
@@ -1637,11 +1640,11 @@ mod tests {
         let preview = preview_rect(size, layout);
 
         assert!((search.top - 18.0).abs() < f64::EPSILON);
-        assert!((search.height - 32.0).abs() < f64::EPSILON);
-        assert!((row_rect(size, layout, 0).top - 58.0).abs() < f64::EPSILON);
+        assert!((search.height - 36.0).abs() < f64::EPSILON);
+        assert!((row_rect(size, layout, 0).top - 66.0).abs() < f64::EPSILON);
         assert!((footer.top + footer.height - (size.1 - 18.0)).abs() < f64::EPSILON);
-        assert!((footer.height - 26.0).abs() < f64::EPSILON);
-        assert!((preview.top + preview.height - footer.top + 8.0).abs() < f64::EPSILON);
+        assert!((footer.height - 28.0).abs() < f64::EPSILON);
+        assert!((preview.top + preview.height - footer.top + 12.0).abs() < f64::EPSILON);
         assert!(footer_rect(size, for_compact_list(true)).height <= 0.0);
     }
 }

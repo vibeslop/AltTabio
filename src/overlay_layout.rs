@@ -142,6 +142,53 @@ pub const fn for_compact_list(compact: bool) -> OverlayLayout {
     }
 }
 
+/// The macOS presets: the same shape as the Windows list on a 4pt grid, with wider number and
+/// icon slots so the keycaps and icons sit a clear inset from the selection edge and the text.
+#[must_use]
+pub const fn for_macos(compact: bool) -> OverlayLayout {
+    if compact {
+        OverlayLayout {
+            outer_padding: 20.0,
+            // A little wider than the Windows list: the roomier keycap and icon slots would
+            // otherwise take the width away from the titles.
+            list_width_fraction: 0.30,
+            minimum_list_pixel_width: 288.0,
+            row_height: 48.0,
+            row_gap: 4.0,
+            number_width: 44.0,
+            icon_slot_width: 40.0,
+            icon_text_gap: 8.0,
+            large_icon_size: 28.0,
+            small_icon_size: 20.0,
+            selection_radius: 8.0,
+            close_button_size: 28.0,
+            close_button_inset: 8.0,
+            close_button_gap: 8.0,
+            search_row_height: 0.0,
+            footer_height: 0.0,
+        }
+    } else {
+        OverlayLayout {
+            outer_padding: 24.0,
+            list_width_fraction: 0.46,
+            minimum_list_pixel_width: 320.0,
+            row_height: 60.0,
+            row_gap: 8.0,
+            number_width: 48.0,
+            icon_slot_width: 48.0,
+            icon_text_gap: 10.0,
+            large_icon_size: 32.0,
+            small_icon_size: 20.0,
+            selection_radius: 10.0,
+            close_button_size: 32.0,
+            close_button_inset: 10.0,
+            close_button_gap: 8.0,
+            search_row_height: 0.0,
+            footer_height: 0.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +263,32 @@ mod tests {
         assert_eq!(layout.visible_row_count(600.0), 10);
         assert_eq!(layout.visible_row_at(600.0, 40.0), None);
         assert_eq!(layout.visible_row_at(600.0, 52.0), Some(0));
+    }
+
+    #[test]
+    fn macos_presets_sit_on_a_four_point_grid_and_inset_the_keycap() {
+        for layout in [for_macos(true), for_macos(false)] {
+            for value in [
+                layout.outer_padding,
+                layout.row_height,
+                layout.row_gap,
+                layout.number_width,
+                layout.icon_slot_width,
+                layout.close_button_size,
+                layout.close_button_gap,
+            ] {
+                assert!(
+                    (value % 4.0).abs() < f32::EPSILON,
+                    "{value} is off the grid"
+                );
+            }
+            // A 24pt keycap centered in the number slot keeps at least 10pt from the row edge.
+            assert!((layout.number_width - 24.0) / 2.0 >= 10.0);
+            // The icon has as much air toward the text as toward the keycap.
+            assert!(
+                layout.icon_text_gap >= (layout.icon_slot_width - layout.large_icon_size) / 2.0
+            );
+        }
     }
 
     #[test]
