@@ -1,6 +1,7 @@
 use alttabio::settings::{Settings, SettingsDocument};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
+#[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,10 +14,14 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    #[cfg(windows)]
     pub fn load_adjacent() -> Result<(Self, Settings), String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
-        let path = executable.with_file_name("AltTabio.ini");
+        Self::load_from(executable.with_file_name("AltTabio.ini"))
+    }
+
+    pub fn load_from(path: PathBuf) -> Result<(Self, Settings), String> {
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -91,12 +96,11 @@ fn create_temporary_sibling(path: &Path) -> io::Result<(PathBuf, File)> {
             NEXT_TEMPORARY_FILE.fetch_add(1, Ordering::Relaxed)
         ));
         let temporary_path = path.with_file_name(temporary_name);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .share_mode(0)
-            .open(&temporary_path)
-        {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        options.share_mode(0);
+        match options.open(&temporary_path) {
             Ok(file) => return Ok((temporary_path, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
@@ -196,6 +200,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
     #[test]
     fn locked_destination_preserves_previous_file_and_cleans_temporary_sibling()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -221,6 +226,8 @@ mod tests {
         Ok(())
     }
 
+    // Only Windows refuses to remove a file that another handle still holds open.
+    #[cfg(windows)]
     #[test]
     fn cleanup_failure_is_reported_together_with_write_failure()
     -> Result<(), Box<dyn std::error::Error>> {
