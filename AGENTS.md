@@ -2,7 +2,8 @@
 
 ## Architecture
 
-- Switcher behavior stays outside Win32 code. Windows callbacks translate input into bounded application events — no rendering, enumeration, file I/O, logging, or blocking work inside them.
+- Switcher behavior stays outside platform code. Windows callbacks and macOS event-tap, view, and completion callbacks translate input into bounded application events — no rendering, enumeration, file I/O, logging, or blocking work inside them.
+- The library crate (`src/alttabio.rs` modules) compiles on both platforms and carries the tests; `src/windows_app.rs` and `src/macos/` are the adapters.
 
 ## Rust and Win32
 
@@ -11,6 +12,11 @@
 - `unsafe` lives in narrow Windows adapters, and each block states the invariant that makes it sound. A Windows callback must catch and contain panics — never unwind across `extern "system"`.
 - Owned handles release exactly once; borrowed `HWND` values are never destroyed. Pair COM/WinRT init and uninit on the same thread through an owning guard.
 - Enable only the `windows` crate features the code actually uses. New dependencies (UI framework, async runtime, allocator, logging stack) need a measured justification.
+
+## macOS
+
+- `unsafe` lives in narrow `objc2` adapters with the same invariant comments as the Win32 code. Nothing native holds an app-state borrow across a nested run loop (menus, alerts); use `run_later` or `post_to_app`.
+- Verify with the same cargo commands, then `scripts/mac/build-app.sh`. The bundle is `target/mac/AltTabio.app`; `scripts/mac/run.sh` builds and starts it with logs in the terminal.
 
 ## Build gotchas
 
