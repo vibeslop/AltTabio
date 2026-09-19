@@ -68,6 +68,227 @@ pub struct ThemePalette {
     pub divider: Rgb8,
 }
 
+/// A color in OKLCH: perceptual lightness 0..=1, chroma from 0, hue in degrees.
+///
+/// The switcher's tokens are authored here so that lightness gaps, which carry contrast, and
+/// hue, which the neutrals borrow from the accent, can be reasoned about directly.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Oklch {
+    pub l: f64,
+    pub c: f64,
+    pub h: f64,
+}
+
+impl Oklch {
+    #[must_use]
+    pub const fn new(l: f64, c: f64, h: f64) -> Self {
+        Self { l, c, h }
+    }
+
+    #[must_use]
+    pub fn from_rgb8(color: Rgb8) -> Self {
+        let red = srgb_to_linear(f64::from(color.red) / 255.0);
+        let green = srgb_to_linear(f64::from(color.green) / 255.0);
+        let blue = srgb_to_linear(f64::from(color.blue) / 255.0);
+        let long =
+            (0.412_221_470_8 * red + 0.536_332_536_3 * green + 0.051_445_992_9 * blue).cbrt();
+        let medium =
+            (0.211_903_498_2 * red + 0.680_699_545_1 * green + 0.107_396_956_6 * blue).cbrt();
+        let short =
+            (0.088_302_461_9 * red + 0.281_718_837_6 * green + 0.629_978_700_5 * blue).cbrt();
+        let lightness = 0.210_454_255_3 * long + 0.793_617_785 * medium - 0.004_072_046_8 * short;
+        let axis_a = 1.977_998_495_1 * long - 2.428_592_205 * medium + 0.450_593_709_9 * short;
+        let axis_b = 0.025_904_037_1 * long + 0.782_771_766_2 * medium - 0.808_675_766 * short;
+        let chroma = axis_a.hypot(axis_b);
+        let hue = axis_b.atan2(axis_a).to_degrees().rem_euclid(360.0);
+        Self {
+            l: lightness,
+            c: chroma,
+            h: if chroma < 1e-4 { 0.0 } else { hue },
+        }
+    }
+
+    /// The nearest displayable sRGB color: chroma shrinks, with lightness and hue kept, until
+    /// every channel fits, so a too-vivid token loses vividness rather than shifting tone.
+    #[must_use]
+    pub fn to_rgb8(self) -> Rgb8 {
+        let mut chroma = self.c;
+        for _ in 0..24 {
+            if let Some(color) = linear_rgb(self.l, chroma, self.h) {
+                return color;
+            }
+            chroma *= 0.85;
+        }
+        linear_rgb(self.l, 0.0, self.h).unwrap_or(Rgb8::new(0, 0, 0))
+    }
+
+    #[must_use]
+    pub const fn with_lightness(mut self, l: f64) -> Self {
+        self.l = l;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_chroma(mut self, c: f64) -> Self {
+        self.c = c;
+        self
+    }
+}
+
+fn srgb_to_linear(value: f64) -> f64 {
+    if value <= 0.040_45 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(value: f64) -> f64 {
+    if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "channels are clamped to 0..=255 before the conversion"
+)]
+fn linear_rgb(lightness: f64, chroma: f64, hue: f64) -> Option<Rgb8> {
+    let (sin, cos) = hue.to_radians().sin_cos();
+    let axis_a = chroma * cos;
+    let axis_b = chroma * sin;
+    let long = lightness + 0.396_337_777_4 * axis_a + 0.215_803_757_3 * axis_b;
+    let medium = lightness - 0.105_561_345_8 * axis_a - 0.063_854_172_8 * axis_b;
+    let short = lightness - 0.089_484_177_5 * axis_a - 1.291_485_548 * axis_b;
+    let (long, medium, short) = (long.powi(3), medium.powi(3), short.powi(3));
+    let red = 4.076_741_662_1 * long - 3.307_711_591_3 * medium + 0.230_969_929_2 * short;
+    let green = -1.268_438_004_6 * long + 2.609_757_401_1 * medium - 0.341_319_396_5 * short;
+    let blue = -0.004_196_086_3 * long - 0.703_418_614_7 * medium + 1.707_614_701 * short;
+    if [red, green, blue]
+        .iter()
+        .any(|value| *value < -0.0005 || *value > 1.0005)
+    {
+        return None;
+    }
+    let to_byte = |value: f64| (linear_to_srgb(value.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    Some(Rgb8::new(to_byte(red), to_byte(green), to_byte(blue)))
+}
+
+/// A token with its opacity, for the few surfaces that let the glass show through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rgba {
+    pub color: Rgb8,
+    pub alpha: f64,
+}
+
+impl Rgba {
+    #[must_use]
+    pub const fn new(color: Rgb8, alpha: f64) -> Self {
+        Self { color, alpha }
+    }
+
+    #[must_use]
+    pub const fn opaque(color: Rgb8) -> Self {
+        Self { color, alpha: 1.0 }
+    }
+}
+
+/// Semantic colors of the switcher, derived per theme from one neutral ramp whose hue comes
+/// from the accent so the greys agree with it, plus accent-tinted selection and keycap tokens.
+///
+/// Every text token is a real color rather than an opacity of another, so secondary text keeps
+/// a little chroma instead of going grey and lifeless.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SwitcherTokens {
+    /// The glass tint behind everything.
+    pub canvas: Rgba,
+    /// Inset areas: the preview well and the search row.
+    pub well: Rgba,
+    /// Raised chips: keycaps and footer keys.
+    pub raised: Rgb8,
+    pub raised_edge: Rgba,
+    /// The darker bottom edge that makes a keycap look pressable.
+    pub raised_base: Rgba,
+    /// The action panel floating over the preview.
+    pub surface: Rgba,
+    pub surface_edge: Rgba,
+    /// The selected row and the selected action.
+    pub selection: Rgba,
+    /// A keycap while the switch modifier is held: tinted toward the accent.
+    pub keycap_active: Rgb8,
+    pub keycap_active_edge: Rgb8,
+    /// A keycap the instant its number was pressed: the accent itself.
+    pub keycap_pressed: Rgb8,
+    pub keycap_pressed_text: Rgb8,
+    pub text: Rgb8,
+    pub text_secondary: Rgb8,
+    /// Pure white or black at low alpha for image outlines and the panel edge.
+    pub ring: Rgba,
+    /// Hover and pressed fills for the close button.
+    pub control_hover: Rgba,
+    pub control_pressed: Rgba,
+}
+
+impl SwitcherTokens {
+    /// Builds the tokens for `theme` around `accent`, the color the user picked for the system.
+    #[must_use]
+    pub fn new(theme: ResolvedTheme, accent: Rgb8) -> Self {
+        let accent_lch = Oklch::from_rgb8(accent);
+        // Greys take the accent's hue at a whisper of chroma; an achromatic accent gives an
+        // achromatic ramp, which is what a graphite user asked for.
+        let neutral_chroma = if accent_lch.c < 0.02 { 0.0 } else { 0.012 };
+        let neutral = |l: f64| Oklch::new(l, neutral_chroma, accent_lch.h);
+        let tinted = |l: f64, fraction: f64| {
+            Oklch::new(l, (accent_lch.c * fraction).min(0.12), accent_lch.h)
+        };
+        let white = Rgb8::new(255, 255, 255);
+        let black = Rgb8::new(0, 0, 0);
+        match theme {
+            ResolvedTheme::Dark => Self {
+                canvas: Rgba::new(neutral(0.21).to_rgb8(), 0.74),
+                well: Rgba::new(neutral(0.27).to_rgb8(), 0.85),
+                raised: neutral(0.34).to_rgb8(),
+                raised_edge: Rgba::opaque(neutral(0.45).to_rgb8()),
+                raised_base: Rgba::new(neutral(0.12).to_rgb8(), 0.9),
+                surface: Rgba::new(neutral(0.25).to_rgb8(), 0.97),
+                surface_edge: Rgba::opaque(neutral(0.38).to_rgb8()),
+                selection: Rgba::new(tinted(0.36, 0.45).to_rgb8(), 0.96),
+                keycap_active: tinted(0.42, 0.5).to_rgb8(),
+                keycap_active_edge: tinted(0.60, 0.7).to_rgb8(),
+                keycap_pressed: accent,
+                keycap_pressed_text: white,
+                text: neutral(0.96).with_chroma(neutral_chroma * 0.4).to_rgb8(),
+                text_secondary: neutral(0.72).with_chroma(neutral_chroma * 1.5).to_rgb8(),
+                ring: Rgba::new(white, 0.10),
+                control_hover: Rgba::new(white, 0.10),
+                control_pressed: Rgba::new(white, 0.18),
+            },
+            ResolvedTheme::Light => Self {
+                canvas: Rgba::new(neutral(0.965).to_rgb8(), 0.74),
+                well: Rgba::new(neutral(0.92).to_rgb8(), 0.85),
+                raised: neutral(0.995).to_rgb8(),
+                raised_edge: Rgba::new(black, 0.10),
+                raised_base: Rgba::new(black, 0.16),
+                surface: Rgba::new(neutral(0.985).to_rgb8(), 0.97),
+                surface_edge: Rgba::new(black, 0.10),
+                selection: Rgba::new(tinted(0.89, 0.4).to_rgb8(), 0.96),
+                keycap_active: tinted(0.93, 0.35).to_rgb8(),
+                keycap_active_edge: tinted(0.72, 0.6).to_rgb8(),
+                keycap_pressed: accent,
+                keycap_pressed_text: white,
+                text: neutral(0.22).with_chroma(neutral_chroma * 0.6).to_rgb8(),
+                text_secondary: neutral(0.48).with_chroma(neutral_chroma * 1.5).to_rgb8(),
+                ring: Rgba::new(black, 0.10),
+                control_hover: Rgba::new(black, 0.07),
+                control_pressed: Rgba::new(black, 0.13),
+            },
+        }
+    }
+}
+
 #[must_use]
 pub const fn resolve(theme: Theme, windows_app_theme: ResolvedTheme) -> ResolvedTheme {
     match theme {
@@ -122,6 +343,68 @@ mod tests {
                 divider: Rgb8::new(208, 208, 208),
             }
         );
+    }
+
+    fn lightness(color: Rgb8) -> f64 {
+        Oklch::from_rgb8(color).l
+    }
+
+    #[test]
+    fn oklch_round_trips_known_colors() {
+        let white = Oklch::from_rgb8(Rgb8::new(255, 255, 255));
+        assert!((white.l - 1.0).abs() < 0.01);
+        assert!(white.c < 0.001);
+
+        let blue = Oklch::from_rgb8(Rgb8::new(0, 122, 255));
+        assert!((blue.h - 256.0).abs() < 4.0);
+        assert!(blue.c > 0.2);
+        assert_eq!(blue.to_rgb8(), Rgb8::new(0, 122, 255));
+
+        let grey = Oklch::new(0.5, 0.0, 0.0).to_rgb8();
+        assert_eq!(grey.red, grey.green);
+        assert_eq!(grey.green, grey.blue);
+    }
+
+    #[test]
+    fn out_of_gamut_chroma_is_reduced_without_moving_lightness() {
+        let vivid = Oklch::new(0.9, 0.3, 256.0).to_rgb8();
+
+        assert!((lightness(vivid) - 0.9).abs() < 0.02);
+    }
+
+    #[test]
+    fn tokens_keep_text_far_from_its_surfaces_in_both_themes() {
+        let accent = Rgb8::new(0, 122, 255);
+        let dark = SwitcherTokens::new(ResolvedTheme::Dark, accent);
+        let light = SwitcherTokens::new(ResolvedTheme::Light, accent);
+
+        // Near-black surfaces want foregrounds at L 0.75 or more; near-white ones at 0.45 or
+        // less. Secondary text has to clear the same floors as it is body-sized.
+        assert!(lightness(dark.canvas.color) < 0.25);
+        assert!(lightness(dark.text) > 0.9);
+        assert!(lightness(dark.text_secondary) > 0.7);
+        assert!(lightness(dark.raised) - lightness(dark.canvas.color) > 0.1);
+        assert!(lightness(dark.text) - lightness(dark.selection.color) > 0.5);
+        assert!(lightness(dark.text) - lightness(dark.keycap_active) > 0.5);
+
+        assert!(lightness(light.canvas.color) > 0.9);
+        assert!(lightness(light.text) < 0.25);
+        assert!(lightness(light.text_secondary) < 0.5);
+        assert!(lightness(light.selection.color) - lightness(light.text) > 0.6);
+        assert!(lightness(light.keycap_active) - lightness(light.text) > 0.6);
+    }
+
+    #[test]
+    fn neutrals_borrow_the_accent_hue_and_stay_grey_for_graphite() {
+        let purple = SwitcherTokens::new(ResolvedTheme::Dark, Rgb8::new(175, 82, 222));
+        let canvas = Oklch::from_rgb8(purple.canvas.color);
+        assert!(canvas.c > 0.005);
+        assert!((canvas.h - Oklch::from_rgb8(Rgb8::new(175, 82, 222)).h).abs() < 12.0);
+
+        let graphite = SwitcherTokens::new(ResolvedTheme::Dark, Rgb8::new(140, 140, 140));
+        let grey = graphite.canvas.color;
+        assert_eq!(grey.red, grey.green);
+        assert_eq!(grey.green, grey.blue);
     }
 
     #[test]
