@@ -8,6 +8,33 @@ permissions:
   contents: read
 
 jobs:
+  verify-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Verify Rust formatting
+        run: cargo fmt -- --check
+
+      - name: Lint Rust
+        run: cargo clippy --quiet --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --quiet
+
+      - name: Build macOS app bundle
+        run: scripts/mac/build-app.sh
+
+      - name: Verify macOS bundle
+        run: |
+          test -s target/mac/AltTabio.app/Contents/MacOS/AltTabio
+          codesign --verify --deep target/mac/AltTabio.app
+
   verify:
     runs-on: windows-latest
 
