@@ -38,6 +38,8 @@ pub struct AppearanceSettings {
     pub visible_borders: bool,
     pub preview: bool,
     pub full_desktop_preview: bool,
+    /// Whether the overlay shows the key hint bar under the list.
+    pub show_hints: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -147,6 +149,7 @@ impl Default for Settings {
                 visible_borders: false,
                 preview: true,
                 full_desktop_preview: false,
+                show_hints: true,
             },
             monitor: MonitorSettings {
                 monitor_mode: "CurrentByCursor".to_owned(),
@@ -291,6 +294,11 @@ impl SettingsDocument {
                     "FullDesktopPreview",
                     defaults.appearance.full_desktop_preview,
                 ),
+                show_hints: self.read_bool(
+                    "Appearance",
+                    "ShowHints",
+                    defaults.appearance.show_hints,
+                ),
             },
             monitor: MonitorSettings {
                 monitor_mode: self.read_string("Monitor", "Mode", &defaults.monitor.monitor_mode),
@@ -341,6 +349,7 @@ impl SettingsDocument {
                 "FullDesktopPreview={}",
                 settings.appearance.full_desktop_preview
             ),
+            format!("ShowHints={}", settings.appearance.show_hints),
             String::new(),
             "[Monitor]".to_owned(),
             format!("Mode={}", settings.monitor.monitor_mode),
@@ -401,7 +410,7 @@ fn same_key(left: &str, right: &str) -> bool {
 }
 
 fn is_known(entry: &Entry) -> bool {
-    const KNOWN: [(&str, &str); 19] = [
+    const KNOWN: [(&str, &str); 20] = [
         ("General", "Autostart"),
         ("General", "ReplaceAltTab"),
         ("General", "ReplaceWinTab"),
@@ -419,6 +428,7 @@ fn is_known(entry: &Entry) -> bool {
         ("Appearance", "VisibleBorders"),
         ("Appearance", "Preview"),
         ("Appearance", "FullDesktopPreview"),
+        ("Appearance", "ShowHints"),
         ("Monitor", "Mode"),
         ("Monitor", "UseCurrentMonitorFilter"),
     ];
@@ -543,7 +553,7 @@ mod tests {
                         RmbWheelSwitching=true\nMouseOverSelection=true\n\n[Appearance]\n\
                         Icon=Azure\nTheme=Auto\nCompactList=true\nLargeIcons=true\nShowNumbers=true\n\
                         ShowAppNames=false\nVisibleBorders=false\nPreview=true\n\
-                        FullDesktopPreview=true\n\n[Monitor]\nMode=CurrentByCursor\n\
+                        FullDesktopPreview=true\nShowHints=true\n\n[Monitor]\nMode=CurrentByCursor\n\
                         UseCurrentMonitorFilter=false\n";
         let document = SettingsDocument::parse(contents);
 
