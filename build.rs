@@ -3,6 +3,14 @@ fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=app.dev.manifest");
     println!("cargo:rerun-if-changed=assets/icons");
+    #[cfg(windows)]
+    embed_windows_resources();
+}
+
+// The macOS build embeds nothing: its icon, version, and bundle identifier live in the .app
+// bundle that scripts/mac/build-app.sh assembles around the plain executable.
+#[cfg(windows)]
+fn embed_windows_resources() {
     let development_manifest = std::env::var_os("CARGO_FEATURE_DEV_MANIFEST").is_some()
         || std::env::var("PROFILE").is_ok_and(|profile| profile != "release");
     let parameters = if development_manifest {

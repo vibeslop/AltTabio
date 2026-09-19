@@ -3,7 +3,7 @@ name = "alttabio"
 version = "1.0.4"
 edition = "2024"
 license = "MIT"
-description = "AltTabio Windows switcher"
+description = "AltTabio window switcher for Windows and macOS"
 repository = "https://github.com/vibeslop/AltTabio"
 publish = false
 
@@ -17,7 +17,7 @@ path = "src/alttabio.rs"
 name = "AltTabio"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
@@ -47,7 +47,20 @@ windows = { version = "0.62.2", features = [
 ] }
 windows-numerics = "0.3.1"
 
-[build-dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+libc = "0.2"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-application-services = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-screen-capture-kit = "0.3.2"
+objc2-service-management = "0.3.2"
+
+[target.'cfg(windows)'.build-dependencies]
 embed-resource = "3.0.11"
 
 [lints.rust]
