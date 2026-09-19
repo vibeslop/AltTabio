@@ -3,7 +3,7 @@
 **Website:** [https://vibeslop.github.io/AltTabio/](https://vibeslop.github.io/AltTabio/)
 **Download:** [GitHub Releases](https://github.com/vibeslop/AltTabio/releases/latest)
 
-AltTabio is a free, open-source **Alt+Tab replacement** and window switcher for 64-bit Windows 10 and Windows 11. It shows a numbered list of open windows, a live preview of the selected window, and typed search. No ads, no account, no telemetry.
+AltTabio is a free, open-source **Alt+Tab replacement** and window switcher for 64-bit Windows 10 and Windows 11, and a **Cmd+Tab replacement** for macOS 26 and later. It shows a numbered list of open windows, a live preview of the selected window, and typed search. No ads, no account, no telemetry.
 
 It was created because Alt+Tab Terminator has had a critical issue for years that causes Alt+Tab to stop working correctly. The issue was reported, but never fixed.
 
@@ -35,9 +35,11 @@ Enabling **Autostart** creates a highest-privilege Windows scheduled task that l
 
 ## Implementation
 
-AltTabio is a native Rust application built directly on Windows APIs. It uses low-level keyboard and mouse hooks, a hand-written Win32 overlay, Direct2D/DirectWrite rendering, and DWM previews of the selected window or its full desktop. Window enumeration and management, the tray icon, settings UI, scheduled-task autostart, portable settings, and single-instance enforcement are also implemented natively.
+AltTabio is a native Rust application. The switcher logic, settings, layout, and theme live in a platform-neutral library crate shared by both platforms.
 
-The build produces one `AltTabio.exe` with its icon, version information, per-monitor DPI manifest, and administrator requirement embedded.
+On Windows it builds directly on Windows APIs: low-level keyboard and mouse hooks, a hand-written Win32 overlay, Direct2D/DirectWrite rendering, and DWM previews of the selected window or its full desktop. Window enumeration and management, the tray icon, settings UI, scheduled-task autostart, portable settings, and single-instance enforcement are also implemented natively. The build produces one `AltTabio.exe` with its icon, version information, per-monitor DPI manifest, and administrator requirement embedded.
+
+On macOS it builds on AppKit through the `objc2` bindings: a CGEventTap for Cmd+Tab, Accessibility for window lists and control, a non-activating panel over `NSGlassEffectView`, ScreenCaptureKit for live previews, a menu bar item, an AppKit settings window, and `SMAppService` for launch at login.
 
 ## Controls
 
@@ -66,9 +68,49 @@ Settings include automatic startup; independent Alt+Tab and Win+Tab replacement;
 
 Settings are stored in `AltTabio.ini` next to `AltTabio.exe`.
 
+## macOS
+
+The macOS build switches between **windows**, not apps, which is what people miss most in the system Cmd+Tab: minimized windows, windows of hidden apps, and windows on other Spaces are all listed and reachable. It uses the same list, preview, search, and number-key layout as the Windows build, drawn on Liquid Glass, and needs macOS 26 or later.
+
+| Input | Action |
+| --- | --- |
+| Cmd+Tab or Option+Tab | Open and move through the switcher |
+| Release Cmd (or Option) | Activate the selected window |
+| Everything else | Same keys as on Windows: arrows, 1-9, typing, Enter, Escape, F4-F9 |
+
+Terminate (F8) force-quits the selected window's app. Run (F9) starts another instance of it.
+
+### Permissions
+
+AltTabio asks for two permissions in **System Settings > Privacy & Security**:
+
+- **Accessibility** to see Cmd+Tab before macOS does and to raise, minimize, and close windows.
+- **Screen Recording** to draw the live preview. Without it the list still works; the preview area shows a hint instead.
+
+Both can be opened from the settings window (menu bar icon > Settings). AltTabio picks up an Accessibility grant while it runs; after granting Screen Recording, quit and start it again so ScreenCaptureKit sees the change. When AltTabio is started from a terminal, macOS applies the terminal's grants to it.
+
+### Building on macOS
+
+Xcode is not required; the Command Line Tools and the Rust toolchain are enough.
+
+```sh
+scripts/mac/run.sh                 # build target/mac/AltTabio.app and start it with its log in the terminal
+scripts/mac/run.sh -- --preview    # show the overlay once without taking over Cmd+Tab
+scripts/mac/run.sh -- --list       # print the windows AltTabio sees and exit
+scripts/mac/build-app.sh           # only build the bundle
+```
+
+The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-dev-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds; macOS asks for the login password once while it marks the certificate as trusted.
+
+`ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action to the terminal.
+
+Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there. The file uses the same keys as the Windows build; `ReplaceAltTab` maps to Cmd+Tab and `ReplaceWinTab` to Option+Tab.
+
+The debug helpers `--list` and `--activate <window id>` work from a plain `cargo run` as well.
+
 ## Building from source
 
-AltTabio requires Windows, the Rust toolchain, and the MSVC build tools.
+AltTabio requires the Rust toolchain plus, on Windows, the MSVC build tools, or, on macOS, the Command Line Tools.
 
 ```powershell
 cargo check --all-targets --message-format short
