@@ -157,6 +157,10 @@ pub enum InputAction {
     CloseSelected,
     WindowCommand(WindowCommand),
     ActivateVisiblePosition(usize),
+    /// Moves the selection to the next window of the selected window's process.
+    SwitchWithinProcess(i32),
+    /// Opens or closes the presentation's action panel for the selected window.
+    ToggleActionPanel,
     AltReleased,
     RightButtonPressed,
     RightButtonReleased,
@@ -217,6 +221,10 @@ pub enum WindowCommand {
     Restore,
     Terminate,
     Run,
+    /// Asks the window's application to quit; unlike Terminate it may prompt to save.
+    Quit,
+    /// Hides every window of the application (macOS app hiding).
+    Hide,
 }
 
 impl WindowCommand {
@@ -233,15 +241,17 @@ impl WindowCommand {
         }
     }
 
+    /// The F-key bound to the command; Quit and Hide only have modifier chords.
     #[must_use]
-    pub const fn function_key(self) -> u8 {
+    pub const fn function_key(self) -> Option<u8> {
         match self {
-            Self::Close => 4,
-            Self::Minimize => 5,
-            Self::Maximize => 6,
-            Self::Restore => 7,
-            Self::Terminate => 8,
-            Self::Run => 9,
+            Self::Close => Some(4),
+            Self::Minimize => Some(5),
+            Self::Maximize => Some(6),
+            Self::Restore => Some(7),
+            Self::Terminate => Some(8),
+            Self::Run => Some(9),
+            Self::Quit | Self::Hide => None,
         }
     }
 }

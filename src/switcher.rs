@@ -289,6 +289,10 @@ impl SwitcherSession {
                     SwitcherEffect::None
                 }
             }
+            InputAction::SwitchWithinProcess(delta) => {
+                self.switcher.select_next_within_process(delta);
+                SwitcherEffect::Redraw
+            }
             InputAction::ActivateSelected => self.activate_selected(),
             InputAction::AltReleased if self.settings.release_alt_switches => {
                 self.activate_from_release()
@@ -314,7 +318,8 @@ impl SwitcherSession {
             InputAction::AltReleased
             | InputAction::RightButtonReleased
             | InputAction::AppendSearchCharacter(_)
-            | InputAction::BackspaceSearch => SwitcherEffect::None,
+            | InputAction::BackspaceSearch
+            | InputAction::ToggleActionPanel => SwitcherEffect::None,
         }
     }
 
@@ -454,6 +459,34 @@ impl Switcher {
         self.selected_visible_index = usize::try_from(next).ok();
     }
 
+    /// Cycles through the visible windows that share the selected window's process, like the
+    /// system's Command+Backtick; does nothing when the selection has no sibling windows.
+    pub fn select_next_within_process(&mut self, delta: i32) {
+        let Some(selected) = self.selected_task() else {
+            return;
+        };
+        let process = selected.process_identity.id;
+        let siblings = self
+            .visible_tasks()
+            .enumerate()
+            .filter(|(_, task)| task.process_identity.id == process)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let Some(current) = self
+            .selected_visible_index
+            .and_then(|index| siblings.iter().position(|sibling| *sibling == index))
+        else {
+            return;
+        };
+        let count = isize::try_from(siblings.len()).unwrap_or(isize::MAX);
+        let current = isize::try_from(current).unwrap_or_default();
+        let next = (current + isize::try_from(delta).unwrap_or_default()).rem_euclid(count);
+        self.pinned_visible_start = None;
+        self.selected_visible_index = usize::try_from(next)
+            .ok()
+            .and_then(|next| siblings.get(next).copied());
+    }
+
     pub fn select_bounded(&mut self, delta: i32) {
         self.pinned_visible_start = None;
         let count = self.visible_indices.len();
@@ -563,6 +596,44 @@ impl Switcher {
             }
         }
     }
+}
+
+/// Character range of the first case-insensitive occurrence of `filter` in `text`, so a renderer
+/// can emphasize the part of a title that matched the typed search.
+#[must_use]
+pub fn filter_match(text: &str, filter: &str) -> Option<std::ops::Range<usize>> {
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let needle = needle.chars().collect::<Vec<_>>();
+    let haystack = text
+        .chars()
+        .flat_map(char::to_lowercase)
+        .collect::<Vec<_>>();
+    // Lowercasing can change the character count, so compare against the lowercased characters
+    // of each original character rather than over one flattened string.
+    let per_char = text
+        .chars()
+        .map(|character| character.to_lowercase().count())
+        .collect::<Vec<_>>();
+    let mut offset = 0;
+    for (start, width) in per_char.iter().enumerate() {
+        if haystack
+            .get(offset..)
+            .is_some_and(|rest| rest.starts_with(&needle))
+        {
+            let mut consumed = 0;
+            let mut end = start;
+            while consumed < needle.len() {
+                consumed += per_char.get(end).copied().unwrap_or(1);
+                end += 1;
+            }
+            return Some(start..end);
+        }
+        offset += width;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1293,6 +1364,67 @@ mod tests {
             switcher.selected_task().map(|task| task.window_handle),
             Some(10)
         );
+    }
+
+    #[test]
+    fn switching_within_a_process_cycles_only_its_windows() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        let task = |number: usize, handle: isize, pid: u32| {
+            SwitchTask::new(number, handle, "Window", "App")
+                .with_process_identity(ProcessIdentity::new(pid, 1))
+        };
+        session.open(
+            [
+                task(1, 10, 7),
+                task(2, 20, 8),
+                task(3, 30, 7),
+                task(4, 40, 7),
+            ],
+            None,
+        );
+
+        assert_eq!(
+            session.handle_input(InputAction::SwitchWithinProcess(1)),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(30)
+        );
+        let _ = session.handle_input(InputAction::SwitchWithinProcess(1));
+        let _ = session.handle_input(InputAction::SwitchWithinProcess(1));
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(10)
+        );
+        let _ = session.handle_input(InputAction::SwitchWithinProcess(-1));
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn filter_matches_report_character_ranges_case_insensitively() {
+        assert_eq!(filter_match("T3 Code (Alpha)", "code"), Some(3..7));
+        assert_eq!(filter_match("Straße", "STRASSE"), None);
+        assert_eq!(filter_match("Straße", "aße"), Some(3..6));
+        assert_eq!(filter_match("ШАРФ ИГРАЕТ", "играет"), Some(5..11));
+        assert_eq!(filter_match("Discord", "  "), None);
+        assert_eq!(filter_match("Discord", "x"), None);
     }
 
     #[test]
