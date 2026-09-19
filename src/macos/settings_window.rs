@@ -26,8 +26,8 @@ use std::rc::Rc;
 const WINDOW_WIDTH: f64 = 520.0;
 /// Inset between the window edge and the tab view, and between a tab's edge and its content.
 const MARGIN: f64 = 20.0;
-const SECTION_SPACING: f64 = 18.0;
-const CONTROL_SPACING: f64 = 8.0;
+const SECTION_SPACING: f64 = 24.0;
+const CONTROL_SPACING: f64 = 10.0;
 /// A tab taller than this scrolls instead of growing the window.
 const MAX_TAB_HEIGHT: f64 = 560.0;
 /// Where a checkbox title starts relative to the control's leading edge (14pt box plus gap), so
@@ -682,7 +682,7 @@ fn checkbox_group(
     let Some(description) = key.description() else {
         return Retained::into_super(Retained::into_super(button));
     };
-    let group = vertical_stack(mtm, 2.0);
+    let group = vertical_stack(mtm, 3.0);
     group.addArrangedSubview(&button);
     group.addArrangedSubview(&indented(
         mtm,
