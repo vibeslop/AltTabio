@@ -86,7 +86,8 @@ pub const ICON_THUMBNAIL_PIXEL_WIDTH: f64 = ICON_THUMBNAIL_WIDTH;
 pub const ICON_THUMBNAIL_PIXEL_HEIGHT: f64 = ICON_THUMBNAIL_HEIGHT;
 const ICON_THUMBNAIL_RADIUS: f64 = 6.0;
 const ICON_THUMBNAIL_GAP: f64 = 12.0;
-/// The number column at the right end of an icon-mode row.
+/// The number column of an icon-mode row, before the thumbnail as in the list, so the number
+/// sits next to the window it picks.
 const ICON_NUMBER_WIDTH: f64 = 24.0;
 const ICON_CLOSE_BUTTON_SIZE: f64 = 28.0;
 
@@ -492,11 +493,11 @@ pub fn icon_visible_rows(size: (f64, f64), layout: OverlayLayout) -> usize {
         .max(1.0)) as usize
 }
 
-/// The close button of an icon-mode row, just left of its number.
+/// The close button at the trailing end of an icon-mode row.
 #[must_use]
 pub fn icon_close_button_rect(row: Rect) -> Rect {
     Rect {
-        left: row.left + row.width - INSET - ICON_NUMBER_WIDTH - 4.0 - ICON_CLOSE_BUTTON_SIZE,
+        left: row.left + row.width - INSET - ICON_CLOSE_BUTTON_SIZE,
         top: row.top + (row.height - ICON_CLOSE_BUTTON_SIZE) / 2.0,
         width: ICON_CLOSE_BUTTON_SIZE,
         height: ICON_CLOSE_BUTTON_SIZE,
@@ -2012,8 +2013,19 @@ fn draw_icon_row(
     if item.selected || flashing {
         fill_rounded(bounds, ICON_THUMBNAIL_RADIUS + 2.0, &colors.selection);
     }
+    let mut left = bounds.left + INSET;
+    if model.options.show_numbers {
+        let slot = Rect {
+            left,
+            top: bounds.top,
+            width: ICON_NUMBER_WIDTH,
+            height: bounds.height,
+        };
+        draw_row_number(item.position, slot, flashing, fonts, colors);
+        left += ICON_NUMBER_WIDTH;
+    }
     let thumbnail = Rect {
-        left: bounds.left + INSET,
+        left,
         top: bounds.top + (bounds.height - ICON_THUMBNAIL_HEIGHT) / 2.0,
         width: ICON_THUMBNAIL_WIDTH,
         height: ICON_THUMBNAIL_HEIGHT,
@@ -2044,16 +2056,6 @@ fn draw_icon_row(
     ring_rounded(thumbnail, ICON_THUMBNAIL_RADIUS, &colors.ring);
 
     let mut text_right = bounds.left + bounds.width - INSET;
-    if model.options.show_numbers {
-        let slot = Rect {
-            left: text_right - ICON_NUMBER_WIDTH,
-            top: bounds.top,
-            width: ICON_NUMBER_WIDTH,
-            height: bounds.height,
-        };
-        draw_row_number(item.position, slot, flashing, fonts, colors);
-        text_right = slot.left - 4.0;
-    }
     if item.selected {
         let button = icon_close_button_rect(bounds);
         draw_close_button(model, button, colors);
