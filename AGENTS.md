@@ -16,7 +16,7 @@
 ## macOS
 
 - `unsafe` lives in narrow `objc2` adapters with the same invariant comments as the Win32 code. Nothing native holds an app-state borrow across a nested run loop (menus, alerts); use `run_later` or `post_to_app`.
-- The overlay draws from `SwitcherTokens` in `src/theme.rs`: one fixed palette per light and dark theme, authored in OKLCH on a single blue hue, with every text token a real color rather than an alpha of another. The user's accent color is not read; the theme setting (system, light, dark) is the only switch. Contrast lives in the lightness gap, so a readability fix moves L and keeps chroma and hue. Edges are 1pt rings in pure black or white at low alpha, never palette grays, and separation comes from surfaces, not lines. Key names shown to the user come from `src/macos/shortcuts.rs`, which also feeds the Shortcuts settings tab.
+- The overlay draws from `SwitcherTokens` in `src/theme.rs`: one fixed palette per light and dark theme, authored in OKLCH as pure greys with no accent, with every text token a real color rather than an alpha of another. Emphasis is the inverse of the surface. The user's accent color is not read; the theme setting (system, light, dark) is the only switch. Contrast lives in the lightness gap, so a readability fix moves L. Edges are 1pt rings in pure black or white at low alpha, never palette grays, and separation comes from surfaces, not lines. Key names shown to the user come from `src/macos/shortcuts.rs`, which also feeds the Shortcuts settings tab.
 - Verify with the same cargo commands, then `scripts/mac/build-app.sh`. The bundle is `target/mac/AltTabio.app`; `scripts/mac/run.sh` builds and starts it with logs in the terminal.
 
 ## Build gotchas

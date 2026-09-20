@@ -1086,9 +1086,6 @@ impl Overlay {
 }
 
 /// The frame's colors as `NSColor`s, straight from the shared semantic tokens.
-///
-/// Text is never drawn in the blue: the blue also tints the selected row, and blue text on a
-/// blue tint drops well under the readable lightness gap.
 struct Colors {
     canvas_tokens: SwitcherTokens,
     label: Retained<NSColor>,
@@ -1624,8 +1621,8 @@ fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
     path.stroke();
 }
 
-/// Draws a row's number: secondary text so the titles lead, and a blue pill for the instant
-/// its key was pressed.
+/// Draws a row's number: secondary text so the titles lead, and an inverted pill for the
+/// instant its key was pressed.
 fn draw_row_number(position: usize, slot: Rect, flashing: bool, fonts: &Fonts, colors: &Colors) {
     let text = position.to_string();
     if position > 9 || !flashing {
@@ -1639,8 +1636,8 @@ fn draw_row_number(position: usize, slot: Rect, flashing: bool, fonts: &Fonts, c
         return;
     }
     let tokens = colors.canvas_tokens;
-    let fill = color(tokens.keycap_pressed, 1.0);
-    let text_color = color(tokens.keycap_pressed_text, 1.0);
+    let fill = color(tokens.emphasis, 1.0);
+    let text_color = color(tokens.emphasis_text, 1.0);
     let height = (measure(&text, &fonts.number).height + 2.0).round();
     let pill = Rect {
         left: (slot.left + (slot.width - NUMBER_PILL_WIDTH) / 2.0).round(),
@@ -1966,16 +1963,12 @@ fn draw_icon_rail(size: (f64, f64), icon: &IconModel, fonts: &Fonts, colors: &Co
                 height: ICON_BADGE_SIZE,
             };
             let tokens = colors.canvas_tokens;
-            fill_rounded(
-                badge,
-                ICON_BADGE_SIZE / 2.0,
-                &color(tokens.keycap_pressed, 1.0),
-            );
+            fill_rounded(badge, ICON_BADGE_SIZE / 2.0, &color(tokens.emphasis, 1.0));
             draw_text(
                 &item.windows.to_string(),
                 badge,
                 &fonts.keycap,
-                &color(tokens.keycap_pressed_text, 1.0),
+                &color(tokens.emphasis_text, 1.0),
                 NSTextAlignment::Center,
             );
         }
