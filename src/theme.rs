@@ -218,9 +218,6 @@ pub struct SwitcherTokens {
     pub surface_edge: Rgba,
     /// The selected row and the selected action.
     pub selection: Rgba,
-    /// A keycap while the switch modifier is held: tinted toward the blue.
-    pub keycap_active: Rgb8,
-    pub keycap_active_edge: Rgb8,
     /// A keycap the instant its number was pressed: the blue itself.
     pub keycap_pressed: Rgb8,
     pub keycap_pressed_text: Rgb8,
@@ -265,8 +262,6 @@ impl SwitcherTokens {
                 surface: Rgba::new(neutral(0.25).to_rgb8(), 0.97),
                 surface_edge: Rgba::opaque(neutral(0.38).to_rgb8()),
                 selection: Rgba::new(blue(0.36, 0.10).to_rgb8(), 0.96),
-                keycap_active: blue(0.42, 0.115).to_rgb8(),
-                keycap_active_edge: blue(0.60, 0.12).to_rgb8(),
                 keycap_pressed: SWITCHER_BLUE,
                 keycap_pressed_text: white,
                 text: neutral(0.96).with_chroma(0.005).to_rgb8(),
@@ -284,8 +279,6 @@ impl SwitcherTokens {
                 surface: Rgba::new(neutral(0.985).to_rgb8(), 0.97),
                 surface_edge: Rgba::new(black, 0.10),
                 selection: Rgba::new(blue(0.89, 0.092).to_rgb8(), 0.96),
-                keycap_active: blue(0.93, 0.08).to_rgb8(),
-                keycap_active_edge: blue(0.72, 0.12).to_rgb8(),
                 keycap_pressed: SWITCHER_BLUE,
                 keycap_pressed_text: white,
                 text: neutral(0.22).with_chroma(0.007).to_rgb8(),
@@ -393,13 +386,11 @@ mod tests {
         assert!(lightness(dark.text_secondary) > 0.7);
         assert!(lightness(dark.raised) - lightness(dark.canvas.color) > 0.1);
         assert!(lightness(dark.text) - lightness(dark.selection.color) > 0.5);
-        assert!(lightness(dark.text) - lightness(dark.keycap_active) > 0.5);
 
         assert!(lightness(light.canvas.color) > 0.9);
         assert!(lightness(light.text) < 0.25);
         assert!(lightness(light.text_secondary) < 0.5);
         assert!(lightness(light.selection.color) - lightness(light.text) > 0.6);
-        assert!(lightness(light.keycap_active) - lightness(light.text) > 0.6);
     }
 
     #[test]
@@ -408,11 +399,7 @@ mod tests {
             let tokens = SwitcherTokens::new(theme);
             assert_eq!(tokens, SwitcherTokens::new(theme));
             assert_eq!(tokens.keycap_pressed, SWITCHER_BLUE);
-            for color in [
-                tokens.canvas.color,
-                tokens.selection.color,
-                tokens.keycap_active,
-            ] {
+            for color in [tokens.canvas.color, tokens.selection.color] {
                 let lch = Oklch::from_rgb8(color);
                 assert!(lch.c > 0.005, "{color:?} is grey");
                 assert!((lch.h - SWITCHER_HUE).abs() < 12.0, "{color:?} is off hue");

@@ -76,7 +76,7 @@ The macOS build switches between **windows**, not apps, which is what people mis
 | --- | --- |
 | Cmd+Tab or Option+Tab | Open the switcher and step through the windows; Shift steps back |
 | Release Cmd (or Option) | Switch to the selected window |
-| 1-9 while holding Cmd | Switch to that row; the row numbers light up as keys while Cmd is down |
+| 1-9 while holding Cmd | Switch to that row |
 | W, M, H, Q while holding Cmd | Close or minimize the selected window; hide or quit its app |
 | ` (backtick) while holding Cmd | Step through the windows of the selected window's app |
 | K while holding Cmd | Open the actions panel: every window command with its shortcut, driven by arrows and Enter or the mouse |
