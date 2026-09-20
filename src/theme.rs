@@ -121,18 +121,6 @@ impl Oklch {
         }
         linear_rgb(self.l, 0.0, self.h).unwrap_or(Rgb8::new(0, 0, 0))
     }
-
-    #[must_use]
-    pub const fn with_lightness(mut self, l: f64) -> Self {
-        self.l = l;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_chroma(mut self, c: f64) -> Self {
-        self.c = c;
-        self
-    }
 }
 
 fn srgb_to_linear(value: f64) -> f64 {
@@ -196,12 +184,12 @@ impl Rgba {
     }
 }
 
-/// The one palette the macOS switcher draws from: cool greys with a whisper of blue, and the
-/// system blue as the only vivid color, in a light and a dark set.
+/// The one palette the macOS switcher draws from: pure greys, in a light and a dark set. There
+/// is no accent; emphasis is the inverse of the surface, so nothing on the glass competes with
+/// the window previews and app icons for color.
 ///
 /// Every token is authored in OKLCH so that lightness gaps, which carry contrast, can be read
-/// off directly; every text token is a real color rather than an opacity of another, so
-/// secondary text keeps a little chroma instead of going grey and lifeless.
+/// off directly; every text token is a real color rather than an opacity of another.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwitcherTokens {
     /// The glass tint behind everything.
@@ -218,9 +206,10 @@ pub struct SwitcherTokens {
     pub surface_edge: Rgba,
     /// The selected row and the selected action.
     pub selection: Rgba,
-    /// A keycap the instant its number was pressed: the blue itself.
-    pub keycap_pressed: Rgb8,
-    pub keycap_pressed_text: Rgb8,
+    /// The inverse of the surface, for the moment a number key is pressed and for the rail's
+    /// window-count badge: the only fill that has to read at a glance from across the row.
+    pub emphasis: Rgb8,
+    pub emphasis_text: Rgb8,
     pub text: Rgb8,
     pub text_secondary: Rgb8,
     /// Pure white or black at low alpha for image outlines and the panel edge.
@@ -230,24 +219,13 @@ pub struct SwitcherTokens {
     pub control_pressed: Rgba,
 }
 
-/// The hue every switcher token shares: that of the system blue.
-const SWITCHER_HUE: f64 = 256.0;
-/// The chroma of the greys; enough to read as cool, not enough to read as colored.
-const NEUTRAL_CHROMA: f64 = 0.012;
-/// The blue the selection, keycaps, and badges are built from.
-pub const SWITCHER_BLUE: Rgb8 = Rgb8::new(0, 122, 255);
-
 const fn neutral(l: f64) -> Oklch {
-    Oklch::new(l, NEUTRAL_CHROMA, SWITCHER_HUE)
-}
-
-const fn blue(l: f64, c: f64) -> Oklch {
-    Oklch::new(l, c, SWITCHER_HUE)
+    Oklch::new(l, 0.0, 0.0)
 }
 
 impl SwitcherTokens {
     /// The tokens for `theme`. The values are fixed; a readability fix moves a token's
-    /// lightness and keeps its chroma and hue.
+    /// lightness.
     #[must_use]
     pub fn new(theme: ResolvedTheme) -> Self {
         let white = Rgb8::new(255, 255, 255);
@@ -261,11 +239,11 @@ impl SwitcherTokens {
                 raised_base: Rgba::new(neutral(0.12).to_rgb8(), 0.9),
                 surface: Rgba::new(neutral(0.25).to_rgb8(), 0.97),
                 surface_edge: Rgba::opaque(neutral(0.38).to_rgb8()),
-                selection: Rgba::new(blue(0.36, 0.10).to_rgb8(), 0.96),
-                keycap_pressed: SWITCHER_BLUE,
-                keycap_pressed_text: white,
-                text: neutral(0.96).with_chroma(0.005).to_rgb8(),
-                text_secondary: neutral(0.72).with_chroma(0.018).to_rgb8(),
+                selection: Rgba::new(neutral(0.36).to_rgb8(), 0.96),
+                emphasis: neutral(0.96).to_rgb8(),
+                emphasis_text: neutral(0.16).to_rgb8(),
+                text: neutral(0.96).to_rgb8(),
+                text_secondary: neutral(0.72).to_rgb8(),
                 ring: Rgba::new(white, 0.10),
                 control_hover: Rgba::new(white, 0.10),
                 control_pressed: Rgba::new(white, 0.18),
@@ -278,11 +256,11 @@ impl SwitcherTokens {
                 raised_base: Rgba::new(black, 0.16),
                 surface: Rgba::new(neutral(0.985).to_rgb8(), 0.97),
                 surface_edge: Rgba::new(black, 0.10),
-                selection: Rgba::new(blue(0.89, 0.092).to_rgb8(), 0.96),
-                keycap_pressed: SWITCHER_BLUE,
-                keycap_pressed_text: white,
-                text: neutral(0.22).with_chroma(0.007).to_rgb8(),
-                text_secondary: neutral(0.48).with_chroma(0.018).to_rgb8(),
+                selection: Rgba::new(neutral(0.86).to_rgb8(), 0.96),
+                emphasis: neutral(0.22).to_rgb8(),
+                emphasis_text: neutral(0.985).to_rgb8(),
+                text: neutral(0.22).to_rgb8(),
+                text_secondary: neutral(0.48).to_rgb8(),
                 ring: Rgba::new(black, 0.10),
                 control_hover: Rgba::new(black, 0.07),
                 control_pressed: Rgba::new(black, 0.13),
@@ -386,23 +364,32 @@ mod tests {
         assert!(lightness(dark.text_secondary) > 0.7);
         assert!(lightness(dark.raised) - lightness(dark.canvas.color) > 0.1);
         assert!(lightness(dark.text) - lightness(dark.selection.color) > 0.5);
+        assert!(lightness(dark.emphasis) - lightness(dark.emphasis_text) > 0.6);
 
         assert!(lightness(light.canvas.color) > 0.9);
         assert!(lightness(light.text) < 0.25);
         assert!(lightness(light.text_secondary) < 0.5);
         assert!(lightness(light.selection.color) - lightness(light.text) > 0.6);
+        assert!(lightness(light.emphasis_text) - lightness(light.emphasis) > 0.6);
     }
 
     #[test]
-    fn the_switcher_palette_is_fixed_and_shares_the_blue_hue() {
+    fn the_switcher_palette_is_fixed_and_grey() {
         for theme in [ResolvedTheme::Dark, ResolvedTheme::Light] {
             let tokens = SwitcherTokens::new(theme);
             assert_eq!(tokens, SwitcherTokens::new(theme));
-            assert_eq!(tokens.keycap_pressed, SWITCHER_BLUE);
-            for color in [tokens.canvas.color, tokens.selection.color] {
-                let lch = Oklch::from_rgb8(color);
-                assert!(lch.c > 0.005, "{color:?} is grey");
-                assert!((lch.h - SWITCHER_HUE).abs() < 12.0, "{color:?} is off hue");
+            for color in [
+                tokens.canvas.color,
+                tokens.well.color,
+                tokens.raised,
+                tokens.surface.color,
+                tokens.selection.color,
+                tokens.emphasis,
+                tokens.emphasis_text,
+                tokens.text,
+                tokens.text_secondary,
+            ] {
+                assert!(Oklch::from_rgb8(color).c < 0.005, "{color:?} is not grey");
             }
         }
     }
