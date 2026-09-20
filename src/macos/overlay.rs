@@ -41,6 +41,9 @@ const PREVIEW_RADIUS: f64 = 8.0;
 const SEARCH_RADIUS: f64 = 8.0;
 const KEYCAP_RADIUS: f64 = 6.0;
 const KEYCAP_MINIMUM_WIDTH: f64 = 24.0;
+/// Row numbers are plain text at rest; a flat pill this wide appears under the digit only while
+/// the modifier makes it a key, so the numbers never compete with the titles.
+const NUMBER_PILL_WIDTH: f64 = 22.0;
 const BADGE_POINT_SIZE: f64 = 11.0;
 const HINT_GAP: f64 = 16.0;
 /// Horizontal inset of content inside wells, panel rows, and the footer.
@@ -1316,6 +1319,53 @@ fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
     path.stroke();
 }
 
+/// Draws a row's number: secondary text at rest so the titles lead, a flat accent-tinted pill
+/// while the modifier turns 1–9 into keys, and the accent itself the instant one was pressed.
+fn draw_row_number(
+    position: usize,
+    slot: Rect,
+    flashing: bool,
+    modifier_held: bool,
+    fonts: &Fonts,
+    colors: &Colors,
+) {
+    let text = position.to_string();
+    if position > 9 || (!flashing && !modifier_held) {
+        draw_text(
+            &text,
+            slot,
+            &fonts.number,
+            &colors.secondary,
+            NSTextAlignment::Center,
+        );
+        return;
+    }
+    let tokens = colors.canvas_tokens;
+    let (fill, text_color) = if flashing {
+        (
+            color(tokens.keycap_pressed, 1.0),
+            color(tokens.keycap_pressed_text, 1.0),
+        )
+    } else {
+        (color(tokens.keycap_active, 1.0), colors.label.clone())
+    };
+    let height = (measure(&text, &fonts.number).height + 2.0).round();
+    let pill = Rect {
+        left: (slot.left + (slot.width - NUMBER_PILL_WIDTH) / 2.0).round(),
+        top: (slot.top + (slot.height - height) / 2.0).round(),
+        width: NUMBER_PILL_WIDTH,
+        height,
+    };
+    fill_rounded(pill, KEYCAP_RADIUS, &fill);
+    draw_text(
+        &text,
+        pill,
+        &fonts.number,
+        &text_color,
+        NSTextAlignment::Center,
+    );
+}
+
 fn badge_symbol(state: WindowState) -> Option<&'static str> {
     match state {
         WindowState::Normal => None,
@@ -1354,58 +1404,14 @@ fn draw_row(
             width: f64::from(layout.number_width),
             height: bounds.height,
         };
-        let text = item.position.to_string();
-        if item.position <= 9 {
-            // The number is a key the user can press, so it is drawn as one: neutral at rest,
-            // tinted toward the accent while the modifier is down, solid accent the instant it
-            // was pressed.
-            let tokens = colors.canvas_tokens;
-            let (fill, edge, base, text_color) = if flashing {
-                (
-                    color(tokens.keycap_pressed, 1.0),
-                    color(tokens.keycap_pressed, 1.0),
-                    color(tokens.keycap_pressed, 1.0),
-                    color(tokens.keycap_pressed_text, 1.0),
-                )
-            } else if model.held_modifier.is_some() {
-                (
-                    color(tokens.keycap_active, 1.0),
-                    color(tokens.keycap_active_edge, 1.0),
-                    color(tokens.keycap_active_edge, 1.0),
-                    colors.label.clone(),
-                )
-            } else {
-                (
-                    colors.raised.clone(),
-                    colors.raised_edge.clone(),
-                    colors.raised_base.clone(),
-                    colors.label.clone(),
-                )
-            };
-            let style = KeycapStyle {
-                fill: &fill,
-                edge: &edge,
-                base: &base,
-                text: &text_color,
-            };
-            let width = KEYCAP_MINIMUM_WIDTH;
-            let _ = draw_keycap(
-                &text,
-                (slot.left + (slot.width - width) / 2.0).round(),
-                slot,
-                width,
-                &fonts.number,
-                &style,
-            );
-        } else {
-            draw_text(
-                &text,
-                slot,
-                &fonts.number,
-                &colors.secondary,
-                NSTextAlignment::Center,
-            );
-        }
+        draw_row_number(
+            item.position,
+            slot,
+            flashing,
+            model.held_modifier.is_some(),
+            fonts,
+            colors,
+        );
         left += f64::from(layout.number_width);
     }
     if let Some(icon) = &item.icon {
