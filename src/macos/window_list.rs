@@ -11,7 +11,7 @@ use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorks
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType, Type};
 use objc2_core_graphics::{
     CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowAlpha, kCGWindowBounds,
-    kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID,
+    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
 use std::ptr::NonNull;
 
@@ -47,6 +47,8 @@ struct AppInfo {
 struct CgWindow {
     id: u32,
     pid: i32,
+    /// `kCGWindowName`, which the window server only reveals with Screen Recording access.
+    name: String,
     bounds: [f64; 4],
 }
 
@@ -80,10 +82,19 @@ pub fn enumerate(options: EnumerationOptions) -> Vec<WindowRecord> {
             .iter()
             .position(|(_, window)| window.id == cg_window.id)
             .map(|index| ax_windows.swap_remove(index).1);
+        // Chromium browsers keep unnamed layer-0 helper windows (download bubbles, info bars,
+        // tab hover cards) that come and go; Accessibility never lists them as windows. When
+        // the app answers Accessibility at all, its window list is the authority, so a
+        // helper without a standard-window counterpart is not a row. Apps that answered
+        // nothing (frozen, or not yet accessible) keep their on-screen windows as before.
+        if ax.is_none() && app_answers_accessibility(&ax_windows, &records, app.pid) {
+            continue;
+        }
         let title = ax
             .as_ref()
             .map(|window| window.title.clone())
             .filter(|title| !title.is_empty())
+            .or_else(|| (!cg_window.name.is_empty()).then(|| cg_window.name.clone()))
             .unwrap_or_else(|| app.name.clone());
         records.push(WindowRecord {
             window_id: cg_window.id,
@@ -126,6 +137,19 @@ pub fn enumerate(options: EnumerationOptions) -> Vec<WindowRecord> {
         records.retain(|record| !record.is_on_screen || bounds_on_display(record.bounds, display));
     }
     records
+}
+
+/// Whether `pid` produced at least one Accessibility window: either one still waiting in
+/// `ax_windows` or one already matched into `records`.
+fn app_answers_accessibility(
+    ax_windows: &[(i32, AxWindow)],
+    records: &[WindowRecord],
+    pid: i32,
+) -> bool {
+    ax_windows.iter().any(|(owner, _)| *owner == pid)
+        || records
+            .iter()
+            .any(|record| record.pid == pid && record.ax.is_some())
 }
 
 /// Front-to-back order for visible windows, then the previously known order for the rest.
@@ -207,7 +231,7 @@ fn on_screen_windows() -> Vec<CgWindow> {
                 pointer.as_ref()
             };
             let dictionary = value.downcast_ref::<CFDictionary>()?;
-            let (layer_key, alpha_key, number_key, pid_key, bounds_key) = unsafe {
+            let (layer_key, alpha_key, number_key, pid_key, bounds_key, name_key) = unsafe {
                 // SAFETY: the window-info keys are static strings exported by CoreGraphics.
                 (
                     kCGWindowLayer,
@@ -215,6 +239,7 @@ fn on_screen_windows() -> Vec<CgWindow> {
                     kCGWindowNumber,
                     kCGWindowOwnerPID,
                     kCGWindowBounds,
+                    kCGWindowName,
                 )
             };
             let layer = dictionary_number(dictionary, layer_key)?;
@@ -228,6 +253,9 @@ fn on_screen_windows() -> Vec<CgWindow> {
             Some(CgWindow {
                 id: u32::try_from(id).ok()?,
                 pid: i32::try_from(pid).ok()?,
+                name: dictionary_value::<CFString>(dictionary, name_key)
+                    .map(|name| name.to_string())
+                    .unwrap_or_default(),
                 bounds: [
                     bounds_component(&bounds, "X"),
                     bounds_component(&bounds, "Y"),
@@ -304,6 +332,35 @@ mod tests {
         let order = merge_order(&[], &[2, 2], &[5, 5, 2]);
 
         assert_eq!(order, vec![2, 2, 5]);
+    }
+
+    #[test]
+    fn an_app_answers_accessibility_through_pending_or_matched_windows() {
+        let pending = vec![(
+            7,
+            AxWindow {
+                id: 1,
+                title: "Doc".to_owned(),
+                minimized: false,
+                element: AxElement::application(7),
+            },
+        )];
+        let matched = vec![WindowRecord {
+            window_id: 2,
+            pid: 9,
+            launched_at: 0,
+            title: "Sheet".to_owned(),
+            app_name: "App".to_owned(),
+            is_minimized: false,
+            is_hidden: false,
+            is_on_screen: true,
+            bounds: [0.0; 4],
+            ax: Some(AxElement::application(9)),
+        }];
+
+        assert!(app_answers_accessibility(&pending, &matched, 7));
+        assert!(app_answers_accessibility(&pending, &matched, 9));
+        assert!(!app_answers_accessibility(&pending, &matched, 11));
     }
 
     #[test]
