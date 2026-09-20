@@ -458,18 +458,26 @@ impl SettingsWindow {
         let tab_width = WINDOW_WIDTH - 2.0 * MARGIN;
 
         let tab_view = NSTabView::new(mtm);
-        let tabs: [(&str, Retained<NSView>); 4] = [
-            ("General", general_tab(mtm, settings, &controller)),
-            ("Appearance", appearance_tab(mtm, settings, &controller)),
-            ("Shortcuts", shortcuts_tab(mtm)),
-            ("Permissions", permissions_tab(mtm, &controller)),
-        ];
         // The tab strip and bezel take a fixed amount around the content; measure it once with
-        // a probe frame so the tallest tab's height can be turned into a frame height.
+        // a probe frame so the tallest tab's height can be turned into a frame height, and so
+        // the tabs know how wide their wrapped descriptions may be before they are measured.
         let probe = NSSize::new(tab_width, 100.0);
         tab_view.setFrameSize(probe);
         let content = tab_view.contentRect();
         let chrome_height = probe.height - content.size.height;
+        let description_width = content.size.width - 2.0 * MARGIN - CHECKBOX_TITLE_INDENT;
+        let tabs: [(&str, Retained<NSView>); 4] = [
+            (
+                "General",
+                general_tab(mtm, settings, &controller, description_width),
+            ),
+            (
+                "Appearance",
+                appearance_tab(mtm, settings, &controller, description_width),
+            ),
+            ("Shortcuts", shortcuts_tab(mtm)),
+            ("Permissions", permissions_tab(mtm, &controller)),
+        ];
         let mut content_height: f64 = 0.0;
         for (label, view) in tabs {
             view.layoutSubtreeIfNeeded();
@@ -569,10 +577,17 @@ fn general_tab(
     mtm: MainThreadMarker,
     settings: &Settings,
     controller: &SettingsController,
+    description_width: f64,
 ) -> Retained<NSView> {
     let tab = tab_stack(mtm);
     for section in GENERAL_SECTIONS {
-        tab.addArrangedSubview(&checkbox_section(mtm, section, settings, controller));
+        tab.addArrangedSubview(&checkbox_section(
+            mtm,
+            section,
+            settings,
+            controller,
+            description_width,
+        ));
     }
     Retained::into_super(tab)
 }
@@ -581,13 +596,20 @@ fn appearance_tab(
     mtm: MainThreadMarker,
     settings: &Settings,
     controller: &SettingsController,
+    description_width: f64,
 ) -> Retained<NSView> {
     let tab = tab_stack(mtm);
     let theme = section(mtm, "Theme");
     theme.addArrangedSubview(&theme_row(mtm, settings, controller));
     tab.addArrangedSubview(&theme);
     for section in APPEARANCE_SECTIONS {
-        tab.addArrangedSubview(&checkbox_section(mtm, section, settings, controller));
+        tab.addArrangedSubview(&checkbox_section(
+            mtm,
+            section,
+            settings,
+            controller,
+            description_width,
+        ));
     }
     Retained::into_super(tab)
 }
@@ -661,20 +683,30 @@ fn checkbox_section(
     section_spec: &CheckboxSection,
     settings: &Settings,
     controller: &SettingsController,
+    description_width: f64,
 ) -> Retained<NSStackView> {
     let stack = section(mtm, section_spec.title);
     for key in section_spec.keys {
-        stack.addArrangedSubview(&checkbox_group(mtm, *key, settings, controller));
+        stack.addArrangedSubview(&checkbox_group(
+            mtm,
+            *key,
+            settings,
+            controller,
+            description_width,
+        ));
     }
     stack
 }
 
-/// A checkbox, with its description underneath when the key has one.
+/// A checkbox, with its description underneath when the key has one. The description wraps
+/// at `description_width`: a single-line label longer than the tab pushes its whole section
+/// out of the stack's insets and gets clipped at the edge.
 fn checkbox_group(
     mtm: MainThreadMarker,
     key: SettingKey,
     settings: &Settings,
     controller: &SettingsController,
+    description_width: f64,
 ) -> Retained<NSView> {
     let button = unsafe {
         // SAFETY: the selector exists on SettingsController with a matching signature.
@@ -699,7 +731,7 @@ fn checkbox_group(
     group.addArrangedSubview(&button);
     group.addArrangedSubview(&indented(
         mtm,
-        &secondary_label(mtm, description),
+        &wrapping_secondary_label(mtm, description, description_width),
         CHECKBOX_TITLE_INDENT,
     ));
     Retained::into_super(group)
@@ -882,6 +914,21 @@ fn secondary_label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
     label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
     label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    label
+}
+
+/// A secondary label that wraps at `width`. The preferred width also fixes the label's
+/// intrinsic height, so the tab measures tall enough for the wrapped lines before it is shown.
+fn wrapping_secondary_label(
+    mtm: MainThreadMarker,
+    text: &str,
+    width: f64,
+) -> Retained<NSTextField> {
+    let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), mtm);
+    label.setSelectable(false);
+    label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    label.setPreferredMaxLayoutWidth(width);
     label
 }
 
