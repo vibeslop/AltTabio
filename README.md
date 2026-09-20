@@ -96,6 +96,10 @@ AltTabio asks for two permissions in **System Settings > Privacy & Security**:
 
 Both can be opened from the settings window (menu bar icon > Settings). AltTabio picks up an Accessibility grant while it runs; after granting Screen Recording, quit and start it again so ScreenCaptureKit sees the change. When AltTabio is started from a terminal, macOS applies the terminal's grants to it.
 
+### Remote desktop and VM clients
+
+Apps such as Microsoft's Windows App, Parallels, or VMware take Cmd+Tab for their guest with a keyboard tap of their own. AltTabio puts its tap back in front of theirs every time the front app changes, so Cmd+Tab keeps opening the switcher inside those apps. The one thing no tap can get past is **secure keyboard input**: while a password field, a terminal with Secure Keyboard Entry, or a remote desktop client holds it, macOS delivers keys only to that app. AltTabio names the app in its log when that happens (`ALTTABIO_TRACE=1` shows every tap reinsertion too); the switcher works again as soon as the app releases it.
+
 ### Building on macOS
 
 Xcode is not required; the Command Line Tools and the Rust toolchain are enough.

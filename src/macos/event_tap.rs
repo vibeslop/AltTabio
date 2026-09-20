@@ -34,6 +34,10 @@ pub struct EventTap {
 }
 
 impl EventTap {
+    /// Installs the tap at the head of the session taps, so it sees keys before any tap that
+    /// was there earlier. The app reinstalls it when the front app changes: remote desktop and
+    /// VM clients grab ⌘ Tab for their guest with a head-inserted tap of their own, and only
+    /// the newest tap at the head sees the keys first.
     pub fn install(handler: TapHandler) -> Result<Self, String> {
         let context = Box::into_raw(Box::new(TapContext {
             handler,

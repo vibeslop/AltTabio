@@ -1,4 +1,5 @@
-//! Accessibility and Screen Recording permission checks and System Settings deep links.
+//! Accessibility and Screen Recording permission checks, the secure-input probe, and System
+//! Settings deep links.
 
 use objc2_app_kit::NSWorkspace;
 use objc2_application_services::{AXIsProcessTrusted, AXIsProcessTrustedWithOptions};
@@ -33,6 +34,21 @@ pub fn accessibility_trusted(prompt: bool) -> bool {
     unsafe {
         // SAFETY: `options` is a live dictionary for the synchronous call.
         AXIsProcessTrustedWithOptions(Some(options.as_opaque()))
+    }
+}
+
+/// Whether some process holds secure keyboard input, which makes macOS route every keystroke
+/// to the focused app only and hide them from event taps, ours included. Password fields,
+/// terminals with Secure Keyboard Entry, and some remote desktop clients turn it on.
+#[must_use]
+pub fn secure_input_enabled() -> bool {
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        fn IsSecureEventInputEnabled() -> u8;
+    }
+    unsafe {
+        // SAFETY: the query has no preconditions and returns a plain Boolean.
+        IsSecureEventInputEnabled() != 0
     }
 }
 

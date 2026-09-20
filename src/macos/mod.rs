@@ -358,6 +358,9 @@ pub struct App {
     action_panel: Option<usize>,
     // Preview mode shows the overlay as soon as the first window list arrives.
     show_when_listed: bool,
+    // The front app named in the last secure-keyboard-input report, so the log says it once per
+    // app rather than on every activation.
+    secure_input_holder: Option<String>,
 }
 
 /// Which rows the list shows: the first visible index and how many rows fit, minus one row for
@@ -431,6 +434,7 @@ impl App {
             flash_timer: None,
             action_panel: None,
             show_when_listed: false,
+            secure_input_holder: None,
         }
     }
 
@@ -477,18 +481,56 @@ impl App {
             );
         }
         if !self.install_event_tap() {
-            // The grant arrives while the app keeps running; polling spares the user a relaunch.
-            let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-                let _ = with_app(App::retry_event_tap);
-            });
-            self.tap_retry_timer = Some(unsafe {
-                // SAFETY: scheduled from the main thread onto the main run loop.
-                NSTimer::scheduledTimerWithTimeInterval_repeats_block(
-                    TAP_RETRY_SECONDS,
-                    true,
-                    &block,
-                )
-            });
+            self.start_tap_retry_timer();
+        }
+    }
+
+    /// Polls for the Accessibility grant so it is picked up while the app keeps running,
+    /// which spares the user a relaunch.
+    fn start_tap_retry_timer(&mut self) {
+        if self.tap_retry_timer.is_some() {
+            return;
+        }
+        let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
+            let _ = with_app(App::retry_event_tap);
+        });
+        self.tap_retry_timer = Some(unsafe {
+            // SAFETY: scheduled from the main thread onto the main run loop.
+            NSTimer::scheduledTimerWithTimeInterval_repeats_block(TAP_RETRY_SECONDS, true, &block)
+        });
+    }
+
+    /// Puts the tap back at the head of the session taps after another app came to the front.
+    ///
+    /// Remote desktop and VM clients insert a tap of their own to hand ⌘ Tab to the guest; the
+    /// system asks the newest head-inserted tap first, so reinserting ours keeps the switcher
+    /// working inside those apps. Secure keyboard input is the one thing no tap gets past, so
+    /// it is named in the log when it is on.
+    fn front_app_changed(&mut self) {
+        if self.preview_mode || self.event_tap.is_none() {
+            return;
+        }
+        self.event_tap = None;
+        if !self.install_event_tap() {
+            self.start_tap_retry_timer();
+        }
+        let front = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .and_then(|app| app.localizedName())
+            .map_or_else(|| "another app".to_owned(), |name| name.to_string());
+        if tracing() {
+            eprintln!("event tap reinserted at the head; front app: {front}");
+        }
+        if !permissions::secure_input_enabled() {
+            self.secure_input_holder = None;
+            return;
+        }
+        if self.secure_input_holder.as_deref() != Some(&front) {
+            eprintln!(
+                "Secure keyboard input is on while {front} is in front; macOS hides every key, \
+                 including ⌘ Tab, from AltTabio until it ends."
+            );
+            self.secure_input_holder = Some(front);
         }
     }
 
@@ -551,6 +593,23 @@ impl App {
             };
             self.observers.push(token);
         }
+        let activated = unsafe {
+            // SAFETY: the notification name constant is a static string exported by AppKit.
+            NSWorkspaceDidActivateApplicationNotification
+        };
+        let block = RcBlock::new(|_notification: NonNull<NSNotification>| {
+            let _ = with_app(App::front_app_changed);
+        });
+        let token = unsafe {
+            // SAFETY: as above, the block runs on the main thread.
+            center.addObserverForName_object_queue_usingBlock(
+                Some(activated),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+        };
+        self.observers.push(token);
     }
 
     fn request_refresh(&mut self) {
