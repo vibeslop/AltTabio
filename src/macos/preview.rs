@@ -20,8 +20,18 @@ pub enum PreviewResult {
     Unavailable(&'static str),
 }
 
+/// What a capture is for, which decides where the app files the frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureKind {
+    /// The large preview of the selected window.
+    Preview,
+    /// A row thumbnail in icon mode.
+    Thumbnail,
+}
+
 pub struct CaptureRequest {
     pub window_id: u32,
+    pub kind: CaptureKind,
     pub full_desktop: bool,
     /// Pixel size of the preview area; the capture is fitted into it with its aspect ratio kept.
     pub pixel_width: usize,
@@ -172,6 +182,7 @@ impl PreviewSource {
             configuration
         };
         let window_id = request.window_id;
+        let kind = request.kind;
         let handler = RcBlock::new(move |image: *mut CGImage, _error: *mut NSError| {
             let result = if image.is_null() {
                 PreviewResult::Unavailable("Preview is not available for this window")
@@ -185,7 +196,10 @@ impl PreviewSource {
                 PreviewResult::Image(image)
             };
             let result = MainThreadValue(result);
-            post_to_app(move |app| app.preview_captured(window_id, result));
+            post_to_app(move |app| match kind {
+                CaptureKind::Preview => app.preview_captured(window_id, result),
+                CaptureKind::Thumbnail => app.thumbnail_captured(window_id, result),
+            });
         });
         unsafe {
             // SAFETY: the filter, configuration, and retained block stay valid for the call.

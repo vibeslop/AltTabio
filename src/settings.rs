@@ -40,6 +40,9 @@ pub struct AppearanceSettings {
     pub full_desktop_preview: bool,
     /// Whether the overlay shows the key hint bar under the list.
     pub show_hints: bool,
+    /// macOS only: app icons in a rail with the selected app's windows beside them, instead of
+    /// the numbered list and preview.
+    pub icon_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -150,6 +153,7 @@ impl Default for Settings {
                 preview: true,
                 full_desktop_preview: false,
                 show_hints: true,
+                icon_mode: false,
             },
             monitor: MonitorSettings {
                 monitor_mode: "CurrentByCursor".to_owned(),
@@ -299,6 +303,7 @@ impl SettingsDocument {
                     "ShowHints",
                     defaults.appearance.show_hints,
                 ),
+                icon_mode: self.read_bool("Appearance", "IconMode", defaults.appearance.icon_mode),
             },
             monitor: MonitorSettings {
                 monitor_mode: self.read_string("Monitor", "Mode", &defaults.monitor.monitor_mode),
@@ -350,6 +355,7 @@ impl SettingsDocument {
                 settings.appearance.full_desktop_preview
             ),
             format!("ShowHints={}", settings.appearance.show_hints),
+            format!("IconMode={}", settings.appearance.icon_mode),
             String::new(),
             "[Monitor]".to_owned(),
             format!("Mode={}", settings.monitor.monitor_mode),
@@ -410,7 +416,7 @@ fn same_key(left: &str, right: &str) -> bool {
 }
 
 fn is_known(entry: &Entry) -> bool {
-    const KNOWN: [(&str, &str); 20] = [
+    const KNOWN: [(&str, &str); 21] = [
         ("General", "Autostart"),
         ("General", "ReplaceAltTab"),
         ("General", "ReplaceWinTab"),
@@ -429,6 +435,7 @@ fn is_known(entry: &Entry) -> bool {
         ("Appearance", "Preview"),
         ("Appearance", "FullDesktopPreview"),
         ("Appearance", "ShowHints"),
+        ("Appearance", "IconMode"),
         ("Monitor", "Mode"),
         ("Monitor", "UseCurrentMonitorFilter"),
     ];
@@ -553,8 +560,8 @@ mod tests {
                         RmbWheelSwitching=true\nMouseOverSelection=true\n\n[Appearance]\n\
                         Icon=Azure\nTheme=Auto\nCompactList=true\nLargeIcons=true\nShowNumbers=true\n\
                         ShowAppNames=false\nVisibleBorders=false\nPreview=true\n\
-                        FullDesktopPreview=true\nShowHints=true\n\n[Monitor]\nMode=CurrentByCursor\n\
-                        UseCurrentMonitorFilter=false\n";
+                        FullDesktopPreview=true\nShowHints=true\nIconMode=false\n\n[Monitor]\n\
+                        Mode=CurrentByCursor\nUseCurrentMonitorFilter=false\n";
         let document = SettingsDocument::parse(contents);
 
         assert_eq!(document.render(&document.settings()), contents);
