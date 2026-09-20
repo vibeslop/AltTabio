@@ -1089,8 +1089,8 @@ impl Overlay {
 
 /// The frame's colors as `NSColor`s, straight from the shared semantic tokens.
 ///
-/// Text is never drawn in the accent color: the accent also tints the selected row, and accent
-/// text on an accent tint drops well under the readable lightness gap.
+/// Text is never drawn in the blue: the blue also tints the selected row, and blue text on a
+/// blue tint drops well under the readable lightness gap.
 struct Colors {
     canvas_tokens: SwitcherTokens,
     label: Retained<NSColor>,
@@ -1626,8 +1626,8 @@ fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
     path.stroke();
 }
 
-/// Draws a row's number: secondary text at rest so the titles lead, a flat accent-tinted pill
-/// while the modifier turns 1–9 into keys, and the accent itself the instant one was pressed.
+/// Draws a row's number: secondary text at rest so the titles lead, a flat blue-tinted pill
+/// while the modifier turns 1–9 into keys, and the blue itself the instant one was pressed.
 fn draw_row_number(
     position: usize,
     slot: Rect,
