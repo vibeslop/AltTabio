@@ -27,7 +27,7 @@ use alttabio::switcher::{
     ProcessIdentity, SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
     WindowCommandRequest,
 };
-use alttabio::theme::{ResolvedTheme, Rgb8, SwitcherTokens, resolve};
+use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use event_tap::EventTap;
@@ -37,11 +37,10 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-    NSApplicationActivationPolicy, NSColor, NSColorSpace, NSImage, NSRunningApplication, NSScreen,
-    NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification,
-    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidHideApplicationNotification,
-    NSWorkspaceDidLaunchApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
-    NSWorkspaceDidUnhideApplicationNotification,
+    NSApplicationActivationPolicy, NSImage, NSRunningApplication, NSScreen, NSWorkspace,
+    NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidActivateApplicationNotification,
+    NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
+    NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_foundation::{
@@ -1131,7 +1130,7 @@ impl App {
     }
 
     fn tokens(theme: ResolvedTheme) -> SwitcherTokens {
-        SwitcherTokens::new(theme, accent_color())
+        SwitcherTokens::new(theme)
     }
 
     fn icon_mode(&self) -> bool {
@@ -1893,27 +1892,6 @@ fn show_about(mtm: MainThreadMarker) {
     {
         eprintln!("Could not open {GITHUB_URL}");
     }
-}
-
-/// The user's accent color in sRGB, falling back to the system blue.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "components are clamped to 0..=1 before scaling to a byte"
-)]
-fn accent_color() -> Rgb8 {
-    let fallback = Rgb8::new(0, 122, 255);
-    let Some(color) =
-        NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
-    else {
-        return fallback;
-    };
-    let byte = |value: f64| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Rgb8::new(
-        byte(color.redComponent()),
-        byte(color.greenComponent()),
-        byte(color.blueComponent()),
-    )
 }
 
 fn application_icon(pid: i32) -> Option<Retained<NSImage>> {

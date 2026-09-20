@@ -71,7 +71,7 @@ pub struct ThemePalette {
 /// A color in OKLCH: perceptual lightness 0..=1, chroma from 0, hue in degrees.
 ///
 /// The switcher's tokens are authored here so that lightness gaps, which carry contrast, and
-/// hue, which the neutrals borrow from the accent, can be reasoned about directly.
+/// hue, which every token shares, can be reasoned about directly.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Oklch {
     pub l: f64,
@@ -196,11 +196,12 @@ impl Rgba {
     }
 }
 
-/// Semantic colors of the switcher, derived per theme from one neutral ramp whose hue comes
-/// from the accent so the greys agree with it, plus accent-tinted selection and keycap tokens.
+/// The one palette the macOS switcher draws from: cool greys with a whisper of blue, and the
+/// system blue as the only vivid color, in a light and a dark set.
 ///
-/// Every text token is a real color rather than an opacity of another, so secondary text keeps
-/// a little chroma instead of going grey and lifeless.
+/// Every token is authored in OKLCH so that lightness gaps, which carry contrast, can be read
+/// off directly; every text token is a real color rather than an opacity of another, so
+/// secondary text keeps a little chroma instead of going grey and lifeless.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwitcherTokens {
     /// The glass tint behind everything.
@@ -217,10 +218,10 @@ pub struct SwitcherTokens {
     pub surface_edge: Rgba,
     /// The selected row and the selected action.
     pub selection: Rgba,
-    /// A keycap while the switch modifier is held: tinted toward the accent.
+    /// A keycap while the switch modifier is held: tinted toward the blue.
     pub keycap_active: Rgb8,
     pub keycap_active_edge: Rgb8,
-    /// A keycap the instant its number was pressed: the accent itself.
+    /// A keycap the instant its number was pressed: the blue itself.
     pub keycap_pressed: Rgb8,
     pub keycap_pressed_text: Rgb8,
     pub text: Rgb8,
@@ -232,18 +233,26 @@ pub struct SwitcherTokens {
     pub control_pressed: Rgba,
 }
 
+/// The hue every switcher token shares: that of the system blue.
+const SWITCHER_HUE: f64 = 256.0;
+/// The chroma of the greys; enough to read as cool, not enough to read as colored.
+const NEUTRAL_CHROMA: f64 = 0.012;
+/// The blue the selection, keycaps, and badges are built from.
+pub const SWITCHER_BLUE: Rgb8 = Rgb8::new(0, 122, 255);
+
+const fn neutral(l: f64) -> Oklch {
+    Oklch::new(l, NEUTRAL_CHROMA, SWITCHER_HUE)
+}
+
+const fn blue(l: f64, c: f64) -> Oklch {
+    Oklch::new(l, c, SWITCHER_HUE)
+}
+
 impl SwitcherTokens {
-    /// Builds the tokens for `theme` around `accent`, the color the user picked for the system.
+    /// The tokens for `theme`. The values are fixed; a readability fix moves a token's
+    /// lightness and keeps its chroma and hue.
     #[must_use]
-    pub fn new(theme: ResolvedTheme, accent: Rgb8) -> Self {
-        let accent_lch = Oklch::from_rgb8(accent);
-        // Greys take the accent's hue at a whisper of chroma; an achromatic accent gives an
-        // achromatic ramp, which is what a graphite user asked for.
-        let neutral_chroma = if accent_lch.c < 0.02 { 0.0 } else { 0.012 };
-        let neutral = |l: f64| Oklch::new(l, neutral_chroma, accent_lch.h);
-        let tinted = |l: f64, fraction: f64| {
-            Oklch::new(l, (accent_lch.c * fraction).min(0.12), accent_lch.h)
-        };
+    pub fn new(theme: ResolvedTheme) -> Self {
         let white = Rgb8::new(255, 255, 255);
         let black = Rgb8::new(0, 0, 0);
         match theme {
@@ -255,13 +264,13 @@ impl SwitcherTokens {
                 raised_base: Rgba::new(neutral(0.12).to_rgb8(), 0.9),
                 surface: Rgba::new(neutral(0.25).to_rgb8(), 0.97),
                 surface_edge: Rgba::opaque(neutral(0.38).to_rgb8()),
-                selection: Rgba::new(tinted(0.36, 0.45).to_rgb8(), 0.96),
-                keycap_active: tinted(0.42, 0.5).to_rgb8(),
-                keycap_active_edge: tinted(0.60, 0.7).to_rgb8(),
-                keycap_pressed: accent,
+                selection: Rgba::new(blue(0.36, 0.10).to_rgb8(), 0.96),
+                keycap_active: blue(0.42, 0.115).to_rgb8(),
+                keycap_active_edge: blue(0.60, 0.12).to_rgb8(),
+                keycap_pressed: SWITCHER_BLUE,
                 keycap_pressed_text: white,
-                text: neutral(0.96).with_chroma(neutral_chroma * 0.4).to_rgb8(),
-                text_secondary: neutral(0.72).with_chroma(neutral_chroma * 1.5).to_rgb8(),
+                text: neutral(0.96).with_chroma(0.005).to_rgb8(),
+                text_secondary: neutral(0.72).with_chroma(0.018).to_rgb8(),
                 ring: Rgba::new(white, 0.10),
                 control_hover: Rgba::new(white, 0.10),
                 control_pressed: Rgba::new(white, 0.18),
@@ -274,13 +283,13 @@ impl SwitcherTokens {
                 raised_base: Rgba::new(black, 0.16),
                 surface: Rgba::new(neutral(0.985).to_rgb8(), 0.97),
                 surface_edge: Rgba::new(black, 0.10),
-                selection: Rgba::new(tinted(0.89, 0.4).to_rgb8(), 0.96),
-                keycap_active: tinted(0.93, 0.35).to_rgb8(),
-                keycap_active_edge: tinted(0.72, 0.6).to_rgb8(),
-                keycap_pressed: accent,
+                selection: Rgba::new(blue(0.89, 0.092).to_rgb8(), 0.96),
+                keycap_active: blue(0.93, 0.08).to_rgb8(),
+                keycap_active_edge: blue(0.72, 0.12).to_rgb8(),
+                keycap_pressed: SWITCHER_BLUE,
                 keycap_pressed_text: white,
-                text: neutral(0.22).with_chroma(neutral_chroma * 0.6).to_rgb8(),
-                text_secondary: neutral(0.48).with_chroma(neutral_chroma * 1.5).to_rgb8(),
+                text: neutral(0.22).with_chroma(0.007).to_rgb8(),
+                text_secondary: neutral(0.48).with_chroma(0.018).to_rgb8(),
                 ring: Rgba::new(black, 0.10),
                 control_hover: Rgba::new(black, 0.07),
                 control_pressed: Rgba::new(black, 0.13),
@@ -374,9 +383,8 @@ mod tests {
 
     #[test]
     fn tokens_keep_text_far_from_its_surfaces_in_both_themes() {
-        let accent = Rgb8::new(0, 122, 255);
-        let dark = SwitcherTokens::new(ResolvedTheme::Dark, accent);
-        let light = SwitcherTokens::new(ResolvedTheme::Light, accent);
+        let dark = SwitcherTokens::new(ResolvedTheme::Dark);
+        let light = SwitcherTokens::new(ResolvedTheme::Light);
 
         // Near-black surfaces want foregrounds at L 0.75 or more; near-white ones at 0.45 or
         // less. Secondary text has to clear the same floors as it is body-sized.
@@ -395,16 +403,21 @@ mod tests {
     }
 
     #[test]
-    fn neutrals_borrow_the_accent_hue_and_stay_grey_for_graphite() {
-        let purple = SwitcherTokens::new(ResolvedTheme::Dark, Rgb8::new(175, 82, 222));
-        let canvas = Oklch::from_rgb8(purple.canvas.color);
-        assert!(canvas.c > 0.005);
-        assert!((canvas.h - Oklch::from_rgb8(Rgb8::new(175, 82, 222)).h).abs() < 12.0);
-
-        let graphite = SwitcherTokens::new(ResolvedTheme::Dark, Rgb8::new(140, 140, 140));
-        let grey = graphite.canvas.color;
-        assert_eq!(grey.red, grey.green);
-        assert_eq!(grey.green, grey.blue);
+    fn the_switcher_palette_is_fixed_and_shares_the_blue_hue() {
+        for theme in [ResolvedTheme::Dark, ResolvedTheme::Light] {
+            let tokens = SwitcherTokens::new(theme);
+            assert_eq!(tokens, SwitcherTokens::new(theme));
+            assert_eq!(tokens.keycap_pressed, SWITCHER_BLUE);
+            for color in [
+                tokens.canvas.color,
+                tokens.selection.color,
+                tokens.keycap_active,
+            ] {
+                let lch = Oklch::from_rgb8(color);
+                assert!(lch.c > 0.005, "{color:?} is grey");
+                assert!((lch.h - SWITCHER_HUE).abs() < 12.0, "{color:?} is off hue");
+            }
+        }
     }
 
     #[test]
