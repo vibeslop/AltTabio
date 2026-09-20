@@ -83,6 +83,8 @@ The macOS build switches between **windows**, not apps, which is what people mis
 | After releasing Cmd | The list stays open when "Switch when the modifier is released" is off, or whenever the actions panel is open: arrows move, typing searches, Enter switches, Cmd+1-9 and Cmd+W/M/H/Q/K still act on the selected row |
 | Everything else | Same keys as on Windows: Home, End, Escape, F4-F9 |
 
+**Icon mode** (Settings > Appearance > Layout) replaces the list and preview with a rail of app icons on the left and the selected app's windows on the right, each with a live thumbnail. Tab still steps through windows; the rail follows the selected window's app and shows a badge with its window count. The numbers 1-9 count the rows of the shown app, hovering or clicking an icon in the rail shows that app's windows, and clicking a row switches to it. Everything else, including search and the action bar, works as in the list.
+
 An action bar under the list works like a launcher's: a short status on the left ("Release ⌘ to switch · 1–9 jumps", the match count while searching) and "Switch ↵" plus "Actions ⌘K" on the right. It can be turned off in the settings, which also carry a Shortcuts tab with the full list. Rows carry a badge when the window is minimized, its app is hidden, or it lives on another Space. Typed searches appear in a search row above the list with the matched text emphasized. On a trackpad the list works by hovering, clicking, scrolling, and right-clicking once the list stays open.
 
 Terminate (F8) force-quits the selected window's app. Run (F9) starts another instance of it.

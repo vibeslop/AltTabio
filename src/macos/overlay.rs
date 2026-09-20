@@ -1,5 +1,6 @@
 //! The switcher panel: a non-activating floating `NSPanel` over Liquid Glass with one custom view
-//! that draws the numbered task list, the selected row's close button, and the live preview.
+//! that draws the numbered task list, the selected row's close button, and the live preview, or
+//! in icon mode an app rail beside the selected app's windows with their thumbnails.
 
 use super::hotkey::HeldModifier;
 use super::shortcuts::{ACTIONS, Footer};
@@ -17,9 +18,9 @@ use objc2_app_kit::{
     NSAttributedStringNSStringDrawing, NSBackingStoreType, NSBezierPath, NSColor,
     NSCompositingOperation, NSEvent, NSEventModifierFlags, NSFont, NSFontAttributeName,
     NSFontWeightMedium, NSFontWeightRegular, NSFontWeightSemibold, NSForegroundColorAttributeName,
-    NSGlassEffectView, NSGlassEffectViewStyle, NSImage, NSImageSymbolConfiguration,
-    NSLineBreakMode, NSMenu, NSMenuItem, NSMutableParagraphStyle, NSPanel,
-    NSParagraphStyleAttributeName, NSPopUpMenuWindowLevel, NSScreen, NSStringDrawing,
+    NSGlassEffectView, NSGlassEffectViewStyle, NSGraphicsContext, NSImage,
+    NSImageSymbolConfiguration, NSLineBreakMode, NSMenu, NSMenuItem, NSMutableParagraphStyle,
+    NSPanel, NSParagraphStyleAttributeName, NSPopUpMenuWindowLevel, NSScreen, NSStringDrawing,
     NSTextAlignment, NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
     NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowAnimationBehavior,
     NSWindowCollectionBehavior, NSWindowStyleMask,
@@ -63,6 +64,32 @@ pub const FOOTER_HEIGHT: f32 = 40.0;
 const SEARCH_ROW_GAP: f64 = 12.0;
 const FOOTER_GAP: f64 = 12.0;
 
+// Icon mode: a rail of app icons on the left, the selected app's windows on the right.
+pub const ICON_RAIL_WIDTH: f64 = 76.0;
+const ICON_RAIL_SLOT: f64 = 60.0;
+const ICON_RAIL_ICON: f64 = 44.0;
+const ICON_RAIL_PADDING: f64 = 12.0;
+const ICON_RAIL_SELECTION_INSET: f64 = 4.0;
+const ICON_BADGE_SIZE: f64 = 18.0;
+/// Width of the window pane beside the rail, including its padding.
+pub const ICON_PANE_WIDTH: f64 = 520.0;
+/// Padding around the pane, in the layout's f32 so it can replace `outer_padding`.
+pub const ICON_PANE_PADDING: f32 = 12.0;
+pub const ICON_HEADER_HEIGHT: f64 = 44.0;
+pub const ICON_ROW_HEIGHT: f64 = 68.0;
+/// The pane never grows past this many rows; longer lists scroll with an overflow note.
+pub const ICON_MAX_ROWS: usize = 7;
+const ICON_THUMBNAIL_WIDTH: f64 = 88.0;
+const ICON_THUMBNAIL_HEIGHT: f64 = 50.0;
+/// The thumbnail box in points, for sizing the captures that fill it.
+pub const ICON_THUMBNAIL_PIXEL_WIDTH: f64 = ICON_THUMBNAIL_WIDTH;
+pub const ICON_THUMBNAIL_PIXEL_HEIGHT: f64 = ICON_THUMBNAIL_HEIGHT;
+const ICON_THUMBNAIL_RADIUS: f64 = 6.0;
+const ICON_THUMBNAIL_GAP: f64 = 12.0;
+/// The number column at the right end of an icon-mode row.
+const ICON_NUMBER_WIDTH: f64 = 24.0;
+const ICON_CLOSE_BUTTON_SIZE: f64 = 28.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ViewEvent {
     MouseMoved(f64, f64),
@@ -93,6 +120,8 @@ pub struct RenderOptions {
     pub show_app_names: bool,
     pub visible_borders: bool,
     pub preview: bool,
+    /// The rail-and-pane layout instead of the list and preview.
+    pub icon_mode: bool,
 }
 
 /// Where a window is when it is not plainly on the current Space; drawn as a row badge.
@@ -110,8 +139,30 @@ pub struct RowModel {
     pub title: String,
     pub app_name: String,
     pub icon: Option<Retained<NSImage>>,
+    /// A small capture of the window, drawn in icon mode instead of the app icon.
+    pub thumbnail: Option<Retained<NSImage>>,
     pub selected: bool,
     pub state: WindowState,
+}
+
+/// One app in the icon-mode rail.
+pub struct RailItem {
+    pub name: String,
+    pub icon: Option<Retained<NSImage>>,
+    /// How many windows the app has in the list; drawn as a badge when more than one.
+    pub windows: usize,
+    pub selected: bool,
+}
+
+/// The icon-mode frame: the rail plus the header over the rows, which are `FrameModel::rows`.
+pub struct IconModel {
+    pub rail: Vec<RailItem>,
+    pub rail_hidden_above: usize,
+    pub rail_hidden_below: usize,
+    /// The selected app's name, as the pane header.
+    pub app_name: String,
+    /// "3 windows", next to the header.
+    pub window_count: String,
 }
 
 pub struct FrameModel {
@@ -133,6 +184,8 @@ pub struct FrameModel {
     pub footer: Option<Footer>,
     /// The ⌘K panel with its selected entry, when open.
     pub action_panel: Option<ActionPanelModel>,
+    /// The rail and header when `options.icon_mode` is on.
+    pub icon: Option<IconModel>,
 }
 
 pub struct ActionPanelModel {
@@ -149,6 +202,8 @@ pub enum Hit {
     ActionsButton,
     /// An entry of the open action panel.
     ActionRow(usize),
+    /// An app in the icon-mode rail.
+    RailApp(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -251,10 +306,49 @@ pub fn search_row_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
     }
 }
 
+/// The area the footer and the ⌘K panel lay out in: the whole panel in list mode, the pane
+/// column beside the rail in icon mode.
+#[must_use]
+pub fn content_region(size: (f64, f64), icon_mode: bool) -> Rect {
+    if icon_mode {
+        Rect {
+            left: ICON_RAIL_WIDTH,
+            top: 0.0,
+            width: (size.0 - ICON_RAIL_WIDTH).max(0.0),
+            height: size.1,
+        }
+    } else {
+        Rect {
+            left: 0.0,
+            top: 0.0,
+            width: size.0,
+            height: size.1,
+        }
+    }
+}
+
+/// The search well across the top of `region`, as icon mode draws it over the pane.
+#[must_use]
+pub fn search_row_rect_in(region: Rect, layout: OverlayLayout) -> Rect {
+    let padding = f64::from(layout.outer_padding);
+    let reserved = f64::from(layout.search_row_height);
+    Rect {
+        left: region.left + padding,
+        top: region.top + padding,
+        width: (region.width - padding * 2.0).max(0.0),
+        height: (reserved - SEARCH_ROW_GAP).max(0.0),
+    }
+}
+
 /// The footer's "Actions ⌘K" button, at the footer's right end.
 #[must_use]
 pub fn actions_button_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
-    let footer = footer_rect(size, layout);
+    actions_button_rect_in(content_region(size, false), layout)
+}
+
+#[must_use]
+pub fn actions_button_rect_in(region: Rect, layout: OverlayLayout) -> Rect {
+    let footer = footer_rect_in(region, layout);
     Rect {
         left: footer.left + footer.width - ACTIONS_BUTTON_WIDTH,
         top: footer.top,
@@ -265,25 +359,30 @@ pub fn actions_button_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
 
 /// The ⌘K panel, anchored above the footer's right end like a launcher's action panel.
 #[must_use]
+pub fn action_panel_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
+    action_panel_rect_in(content_region(size, false), layout)
+}
+
+#[must_use]
 #[allow(
     clippy::cast_precision_loss,
     reason = "the action count is a small constant"
 )]
-pub fn action_panel_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
+pub fn action_panel_rect_in(region: Rect, layout: OverlayLayout) -> Rect {
     let padding = f64::from(layout.outer_padding);
-    let footer = footer_rect(size, layout);
+    let footer = footer_rect_in(region, layout);
     let bottom = if footer.height > 0.0 {
         footer.top - FOOTER_GAP
     } else {
-        size.1 - padding
+        region.top + region.height - padding
     };
     let height = ACTION_PANEL_HEADER_HEIGHT
         + ACTIONS.len() as f64 * ACTION_ROW_HEIGHT
         + ACTION_PANEL_PADDING * 2.0;
     Rect {
-        left: size.0 - padding - ACTION_PANEL_WIDTH,
+        left: region.left + region.width - padding - ACTION_PANEL_WIDTH.min(region.width),
         top: bottom - height,
-        width: ACTION_PANEL_WIDTH,
+        width: ACTION_PANEL_WIDTH.min(region.width),
         height,
     }
 }
@@ -308,14 +407,186 @@ pub fn action_row_rect(panel: Rect, index: usize) -> Rect {
 /// The hint bar under the rows and preview; empty when the layout reserves no footer.
 #[must_use]
 pub fn footer_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
+    footer_rect_in(content_region(size, false), layout)
+}
+
+#[must_use]
+pub fn footer_rect_in(region: Rect, layout: OverlayLayout) -> Rect {
     let padding = f64::from(layout.outer_padding);
     let reserved = f64::from(layout.footer_height);
     Rect {
-        left: padding,
-        top: size.1 - padding - reserved + FOOTER_GAP,
-        width: (size.0 - padding * 2.0).max(0.0),
+        left: region.left + padding,
+        top: region.top + region.height - padding - reserved + FOOTER_GAP,
+        width: (region.width - padding * 2.0).max(0.0),
         height: (reserved - FOOTER_GAP).max(0.0),
     }
+}
+
+/// The rail's app slot at `index`, counted from the top.
+#[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "rail indices are small on-screen counts"
+)]
+pub fn icon_rail_slot_rect(index: usize) -> Rect {
+    Rect {
+        left: (ICON_RAIL_WIDTH - ICON_RAIL_SLOT) / 2.0,
+        top: ICON_RAIL_PADDING + index as f64 * ICON_RAIL_SLOT,
+        width: ICON_RAIL_SLOT,
+        height: ICON_RAIL_SLOT,
+    }
+}
+
+/// How many app slots the rail holds at this panel height.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the clamped positive height yields a small slot count"
+)]
+pub fn icon_rail_capacity(size: (f64, f64)) -> usize {
+    (((size.1 - ICON_RAIL_PADDING * 2.0) / ICON_RAIL_SLOT)
+        .floor()
+        .max(1.0)) as usize
+}
+
+/// The pane beside the rail: header and rows, under the search row and above the footer.
+#[must_use]
+pub fn icon_pane_rect(size: (f64, f64), layout: OverlayLayout) -> Rect {
+    let region = content_region(size, true);
+    let padding = f64::from(layout.outer_padding);
+    let top = region.top + padding + f64::from(layout.search_row_height);
+    Rect {
+        left: region.left + padding,
+        top,
+        width: (region.width - padding * 2.0).max(0.0),
+        height: (region.top + region.height - padding - f64::from(layout.footer_height) - top)
+            .max(0.0),
+    }
+}
+
+#[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "row indices are small on-screen counts"
+)]
+pub fn icon_row_rect(size: (f64, f64), layout: OverlayLayout, row: usize) -> Rect {
+    let pane = icon_pane_rect(size, layout);
+    Rect {
+        left: pane.left,
+        top: pane.top + ICON_HEADER_HEIGHT + row as f64 * ICON_ROW_HEIGHT,
+        width: pane.width,
+        height: ICON_ROW_HEIGHT,
+    }
+}
+
+/// How many window rows fit under the pane header.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the clamped positive height yields a small row count"
+)]
+pub fn icon_visible_rows(size: (f64, f64), layout: OverlayLayout) -> usize {
+    let pane = icon_pane_rect(size, layout);
+    (((pane.height - ICON_HEADER_HEIGHT) / ICON_ROW_HEIGHT)
+        .floor()
+        .max(1.0)) as usize
+}
+
+/// The close button of an icon-mode row, just left of its number.
+#[must_use]
+pub fn icon_close_button_rect(row: Rect) -> Rect {
+    Rect {
+        left: row.left + row.width - INSET - ICON_NUMBER_WIDTH - 4.0 - ICON_CLOSE_BUTTON_SIZE,
+        top: row.top + (row.height - ICON_CLOSE_BUTTON_SIZE) / 2.0,
+        width: ICON_CLOSE_BUTTON_SIZE,
+        height: ICON_CLOSE_BUTTON_SIZE,
+    }
+}
+
+/// The panel size icon mode wants: wide enough for the rail and pane, tall enough for the
+/// longest window list among the apps (up to `ICON_MAX_ROWS`) or for the rail, whichever needs
+/// more, and never taller than `max_height`.
+#[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "app and window counts are small"
+)]
+pub fn icon_panel_size(
+    apps: usize,
+    max_windows: usize,
+    layout: OverlayLayout,
+    max_height: f64,
+) -> (f64, f64) {
+    let padding = f64::from(layout.outer_padding);
+    let rows = max_windows.clamp(1, ICON_MAX_ROWS) as f64;
+    let pane = padding * 2.0
+        + f64::from(layout.search_row_height)
+        + ICON_HEADER_HEIGHT
+        + rows * ICON_ROW_HEIGHT
+        + f64::from(layout.footer_height);
+    let rail = ICON_RAIL_PADDING * 2.0 + apps.max(1) as f64 * ICON_RAIL_SLOT;
+    (
+        ICON_RAIL_WIDTH + ICON_PANE_WIDTH,
+        pane.max(rail).min(max_height).round(),
+    )
+}
+
+/// Icon-mode hit testing: the rail's apps, the pane's rows and close button, and the action
+/// bar and panel laid out over the pane.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the nonnegative offsets map to small slot and row indices"
+)]
+pub fn hit_test_icon(
+    size: (f64, f64),
+    layout: OverlayLayout,
+    selected_row: Option<usize>,
+    panel_open: bool,
+    x: f64,
+    y: f64,
+) -> Option<Hit> {
+    let region = content_region(size, true);
+    if panel_open {
+        let panel = action_panel_rect_in(region, layout);
+        if panel.contains(x, y) {
+            return (0..ACTIONS.len())
+                .find(|index| action_row_rect(panel, *index).contains(x, y))
+                .map(Hit::ActionRow);
+        }
+    }
+    if layout.footer_height > 0.0 && actions_button_rect_in(region, layout).contains(x, y) {
+        return Some(Hit::ActionsButton);
+    }
+    if x < ICON_RAIL_WIDTH {
+        let offset = y - ICON_RAIL_PADDING;
+        if offset < 0.0 {
+            return None;
+        }
+        let index = (offset / ICON_RAIL_SLOT) as usize;
+        return (index < icon_rail_capacity(size) && icon_rail_slot_rect(index).contains(x, y))
+            .then_some(Hit::RailApp(index));
+    }
+    let pane = icon_pane_rect(size, layout);
+    let offset = y - pane.top - ICON_HEADER_HEIGHT;
+    if offset < 0.0 {
+        return None;
+    }
+    let row = (offset / ICON_ROW_HEIGHT) as usize;
+    if row >= icon_visible_rows(size, layout) {
+        return None;
+    }
+    let bounds = icon_row_rect(size, layout, row);
+    if !bounds.contains(x, y) {
+        return None;
+    }
+    if selected_row == Some(row) && icon_close_button_rect(bounds).contains(x, y) {
+        return Some(Hit::CloseButton(row));
+    }
+    Some(Hit::Row(row))
 }
 
 #[must_use]
@@ -641,9 +912,9 @@ impl Overlay {
         }
     }
 
-    pub fn show_on_cursor_screen(&self) {
+    fn cursor_screen(&self) -> Option<Retained<NSScreen>> {
         let location = NSEvent::mouseLocation();
-        let screen = NSScreen::screens(self.mtm)
+        NSScreen::screens(self.mtm)
             .iter()
             .find(|screen| {
                 let frame = screen.frame();
@@ -652,11 +923,31 @@ impl Overlay {
                     && location.y >= frame.origin.y
                     && location.y < frame.origin.y + frame.size.height
             })
-            .or_else(|| NSScreen::mainScreen(self.mtm));
-        if let Some(screen) = screen {
+            .or_else(|| NSScreen::mainScreen(self.mtm))
+    }
+
+    /// The tallest panel that fits the cursor's display: the fraction the list mode takes.
+    #[must_use]
+    pub fn max_panel_height(&self) -> f64 {
+        self.cursor_screen().map_or(600.0, |screen| {
+            (screen.visibleFrame().size.height * OVERLAY_FRACTION).round()
+        })
+    }
+
+    /// Shows the panel centered on the cursor's display at `size`, or at the list mode's fixed
+    /// fraction of the display when no size is given.
+    pub fn show_on_cursor_screen(&self, size: Option<(f64, f64)>) {
+        if let Some(screen) = self.cursor_screen() {
             let area = screen.visibleFrame();
-            let width = (area.size.width * OVERLAY_FRACTION).round();
-            let height = (area.size.height * OVERLAY_FRACTION).round();
+            let (width, height) = size.map_or_else(
+                || {
+                    (
+                        (area.size.width * OVERLAY_FRACTION).round(),
+                        (area.size.height * OVERLAY_FRACTION).round(),
+                    )
+                },
+                |(width, height)| (width.min(area.size.width), height.min(area.size.height)),
+            );
             let frame = NSRect::new(
                 NSPoint::new(
                     (area.origin.x + (area.size.width - width) / 2.0).round(),
@@ -667,6 +958,26 @@ impl Overlay {
             self.panel.setFrame_display(frame, false);
         }
         self.panel.orderFrontRegardless();
+        self.view.updateTrackingAreas();
+    }
+
+    /// Resizes the visible panel around its center, for icon mode when the window list grows
+    /// or shrinks while it shows.
+    pub fn set_content_size(&self, size: (f64, f64)) {
+        let frame = self.panel.frame();
+        if (frame.size.width - size.0).abs() < 0.5 && (frame.size.height - size.1).abs() < 0.5 {
+            return;
+        }
+        let center_x = frame.origin.x + frame.size.width / 2.0;
+        let center_y = frame.origin.y + frame.size.height / 2.0;
+        let resized = NSRect::new(
+            NSPoint::new(
+                (center_x - size.0 / 2.0).round(),
+                (center_y - size.1 / 2.0).round(),
+            ),
+            NSSize::new(size.0, size.1),
+        );
+        self.panel.setFrame_display(resized, true);
         self.view.updateTrackingAreas();
     }
 
@@ -1126,8 +1437,7 @@ fn draw_preview(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Co
     }
 }
 
-fn draw_search_row(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Colors) {
-    let row = search_row_rect(size, model.layout);
+fn draw_search_row(model: &FrameModel, row: Rect, fonts: &Fonts, colors: &Colors) {
     if row.height <= 0.0 {
         return;
     }
@@ -1160,8 +1470,7 @@ fn draw_search_row(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: 
     );
 }
 
-fn draw_footer(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Colors) {
-    let footer = footer_rect(size, model.layout);
+fn draw_footer(model: &FrameModel, footer: Rect, fonts: &Fonts, colors: &Colors) {
     let Some(content) = &model.footer else {
         return;
     };
@@ -1213,11 +1522,10 @@ fn draw_footer(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Col
     );
 }
 
-fn draw_action_panel(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &Colors) {
+fn draw_action_panel(model: &FrameModel, panel: Rect, fonts: &Fonts, colors: &Colors) {
     let Some(panel_model) = &model.action_panel else {
         return;
     };
-    let panel = action_panel_rect(size, model.layout);
     // The panel floats over the preview well, so it needs its own nearly opaque surface.
     fill_rounded(panel, ACTION_PANEL_RADIUS, &colors.surface);
     ring_rounded(panel, ACTION_PANEL_RADIUS, &colors.surface_edge);
@@ -1289,7 +1597,6 @@ fn draw_overflow(model: &FrameModel, size: (f64, f64), fonts: &Fonts, colors: &C
 }
 
 fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
-    let layout = model.layout;
     let background = match model.close_state {
         CloseButtonVisualState::Normal => None,
         CloseButtonVisualState::Hovered => Some(rgba(colors.canvas_tokens.control_hover)),
@@ -1298,11 +1605,11 @@ fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
     if let Some(background) = background {
         fill_rounded(
             button,
-            f64::from(layout.selection_radius) - 1.0,
+            f64::from(model.layout.selection_radius) - 1.0,
             &background,
         );
     }
-    let glyph = if model.options.compact_list {
+    let glyph = if model.options.compact_list && !model.options.icon_mode {
         8.0
     } else {
         10.0
@@ -1506,6 +1813,10 @@ fn draw_row(
 
 fn draw_frame(bounds: NSRect, model: &FrameModel) {
     let size = (bounds.size.width, bounds.size.height);
+    if model.options.icon_mode {
+        draw_icon_frame(size, model);
+        return;
+    }
     let layout = model.layout;
     let fonts = fonts(model.options.compact_list);
     let colors = colors(model.tokens);
@@ -1517,9 +1828,9 @@ fn draw_frame(bounds: NSRect, model: &FrameModel) {
         draw_preview(model, size, &fonts, &colors);
     }
     if !model.filter.is_empty() {
-        draw_search_row(model, size, &fonts, &colors);
+        draw_search_row(model, search_row_rect(size, layout), &fonts, &colors);
     }
-    draw_footer(model, size, &fonts, &colors);
+    draw_footer(model, footer_rect(size, layout), &fonts, &colors);
 
     let icon_size = f64::from(if model.options.large_icons {
         layout.large_icon_size
@@ -1535,7 +1846,286 @@ fn draw_frame(bounds: NSRect, model: &FrameModel) {
         draw_row(model, item, bounds, &fonts, &colors, icon_size);
     }
     draw_overflow(model, size, &fonts, &colors);
-    draw_action_panel(model, size, &fonts, &colors);
+    draw_action_panel(model, action_panel_rect(size, layout), &fonts, &colors);
+}
+
+/// Icon mode: the rail on a well surface, then the pane with its header, rows, and overflow.
+fn draw_icon_frame(size: (f64, f64), model: &FrameModel) {
+    let Some(icon) = &model.icon else {
+        return;
+    };
+    let layout = model.layout;
+    let fonts = fonts(false);
+    let colors = colors(model.tokens);
+    let region = content_region(size, true);
+
+    if model.options.visible_borders {
+        draw_panel_ring(size, &colors);
+    }
+    draw_icon_rail(size, icon, &fonts, &colors);
+    if !model.filter.is_empty() {
+        draw_search_row(model, search_row_rect_in(region, layout), &fonts, &colors);
+    }
+    draw_footer(model, footer_rect_in(region, layout), &fonts, &colors);
+
+    let pane = icon_pane_rect(size, layout);
+    let name_width = measure(&icon.app_name, &fonts.title_match).width.ceil();
+    let header = Rect {
+        left: pane.left + INSET,
+        top: pane.top,
+        width: (pane.width - INSET * 2.0).max(0.0),
+        height: ICON_HEADER_HEIGHT,
+    };
+    draw_text(
+        &icon.app_name,
+        Rect {
+            width: name_width.min(header.width),
+            ..header
+        },
+        &fonts.title_match,
+        &colors.label,
+        NSTextAlignment::Left,
+    );
+    let count_left = header.left + name_width + INSET;
+    draw_text(
+        &icon.window_count,
+        Rect {
+            left: count_left,
+            width: (header.left + header.width - count_left).max(0.0),
+            ..header
+        },
+        &fonts.detail,
+        &colors.secondary,
+        NSTextAlignment::Left,
+    );
+
+    let bottom = pane.top + pane.height;
+    for (row, item) in model.rows.iter().enumerate() {
+        let bounds = icon_row_rect(size, layout, row);
+        if bounds.top + bounds.height > bottom + 0.5 {
+            break;
+        }
+        draw_icon_row(model, item, bounds, &fonts, &colors);
+    }
+    let note = match (model.hidden_above, model.hidden_below) {
+        (_, below) if below > 0 => Some(format!("{below} more below")),
+        (above, _) if above > 0 => Some(format!("{above} more above")),
+        _ => None,
+    };
+    if let Some(note) = note {
+        let slot = icon_row_rect(size, layout, model.rows.len());
+        if slot.top + slot.height <= bottom + 0.5 {
+            draw_text(
+                &note,
+                slot,
+                &fonts.detail,
+                &colors.secondary,
+                NSTextAlignment::Center,
+            );
+        }
+    }
+    draw_action_panel(model, action_panel_rect_in(region, layout), &fonts, &colors);
+}
+
+fn draw_icon_rail(size: (f64, f64), icon: &IconModel, fonts: &Fonts, colors: &Colors) {
+    // The rail surface follows the panel's rounded left corners and ends square on the right,
+    // so the well is drawn wider than the rail and clipped to it.
+    let rail = Rect {
+        left: 0.0,
+        top: 0.0,
+        width: ICON_RAIL_WIDTH,
+        height: size.1,
+    };
+    NSGraphicsContext::saveGraphicsState_class();
+    NSBezierPath::bezierPathWithRect(rail.ns()).addClip();
+    fill_rounded(
+        Rect {
+            width: ICON_RAIL_WIDTH + CORNER_RADIUS,
+            ..rail
+        },
+        CORNER_RADIUS,
+        &colors.well,
+    );
+    NSGraphicsContext::restoreGraphicsState_class();
+
+    let capacity = icon_rail_capacity(size);
+    for (index, item) in icon.rail.iter().enumerate().take(capacity) {
+        let slot = icon_rail_slot_rect(index);
+        if item.selected {
+            fill_rounded(
+                Rect {
+                    left: slot.left + ICON_RAIL_SELECTION_INSET,
+                    top: slot.top + ICON_RAIL_SELECTION_INSET,
+                    width: slot.width - ICON_RAIL_SELECTION_INSET * 2.0,
+                    height: slot.height - ICON_RAIL_SELECTION_INSET * 2.0,
+                },
+                CORNER_RADIUS - ICON_RAIL_SELECTION_INSET,
+                &colors.selection,
+            );
+        }
+        let icon_rect = Rect {
+            left: slot.left + (slot.width - ICON_RAIL_ICON) / 2.0,
+            top: slot.top + (slot.height - ICON_RAIL_ICON) / 2.0,
+            width: ICON_RAIL_ICON,
+            height: ICON_RAIL_ICON,
+        };
+        if let Some(image) = &item.icon {
+            let _ = draw_image_fit(image, icon_rect);
+        } else {
+            draw_text(
+                item.name.chars().take(1).collect::<String>().as_str(),
+                icon_rect,
+                &fonts.title_match,
+                &colors.secondary,
+                NSTextAlignment::Center,
+            );
+        }
+        if item.windows > 1 {
+            let badge = Rect {
+                left: icon_rect.left + icon_rect.width - ICON_BADGE_SIZE + 4.0,
+                top: icon_rect.top - 4.0,
+                width: ICON_BADGE_SIZE,
+                height: ICON_BADGE_SIZE,
+            };
+            let tokens = colors.canvas_tokens;
+            fill_rounded(
+                badge,
+                ICON_BADGE_SIZE / 2.0,
+                &color(tokens.keycap_pressed, 1.0),
+            );
+            draw_text(
+                &item.windows.to_string(),
+                badge,
+                &fonts.keycap,
+                &color(tokens.keycap_pressed_text, 1.0),
+                NSTextAlignment::Center,
+            );
+        }
+    }
+    let note = match (icon.rail_hidden_above, icon.rail_hidden_below) {
+        (_, below) if below > 0 => Some((format!("+{below}"), icon.rail.len().min(capacity))),
+        (above, _) if above > 0 => Some((format!("+{above}"), 0)),
+        _ => None,
+    };
+    if let Some((text, slot)) = note {
+        // The hidden count takes the slot after the last app, or squeezes into the top
+        // padding when the hidden apps are above.
+        let rect = if slot == 0 {
+            Rect {
+                left: 0.0,
+                top: 0.0,
+                width: ICON_RAIL_WIDTH,
+                height: ICON_RAIL_PADDING,
+            }
+        } else {
+            icon_rail_slot_rect(slot)
+        };
+        draw_text(
+            &text,
+            rect,
+            &fonts.detail,
+            &colors.secondary,
+            NSTextAlignment::Center,
+        );
+    }
+}
+
+fn draw_icon_row(
+    model: &FrameModel,
+    item: &RowModel,
+    bounds: Rect,
+    fonts: &Fonts,
+    colors: &Colors,
+) {
+    let flashing = model.flash_position == Some(item.position);
+    if item.selected || flashing {
+        fill_rounded(bounds, ICON_THUMBNAIL_RADIUS + 2.0, &colors.selection);
+    }
+    let thumbnail = Rect {
+        left: bounds.left + INSET,
+        top: bounds.top + (bounds.height - ICON_THUMBNAIL_HEIGHT) / 2.0,
+        width: ICON_THUMBNAIL_WIDTH,
+        height: ICON_THUMBNAIL_HEIGHT,
+    };
+    fill_rounded(thumbnail, ICON_THUMBNAIL_RADIUS, &colors.well);
+    if let Some(image) = &item.thumbnail {
+        let inset = Rect {
+            left: thumbnail.left + 1.0,
+            top: thumbnail.top + 1.0,
+            width: thumbnail.width - 2.0,
+            height: thumbnail.height - 2.0,
+        };
+        if let Some(drawn) = draw_image_fit(image, inset) {
+            ring_rounded(drawn, 0.0, &colors.ring);
+        }
+    } else if let Some(icon) = &item.icon {
+        let size = 28.0;
+        let _ = draw_image_fit(
+            icon,
+            Rect {
+                left: thumbnail.left + (thumbnail.width - size) / 2.0,
+                top: thumbnail.top + (thumbnail.height - size) / 2.0,
+                width: size,
+                height: size,
+            },
+        );
+    }
+    ring_rounded(thumbnail, ICON_THUMBNAIL_RADIUS, &colors.ring);
+
+    let mut text_right = bounds.left + bounds.width - INSET;
+    if model.options.show_numbers {
+        let slot = Rect {
+            left: text_right - ICON_NUMBER_WIDTH,
+            top: bounds.top,
+            width: ICON_NUMBER_WIDTH,
+            height: bounds.height,
+        };
+        draw_row_number(
+            item.position,
+            slot,
+            flashing,
+            model.held_modifier.is_some(),
+            fonts,
+            colors,
+        );
+        text_right = slot.left - 4.0;
+    }
+    if item.selected {
+        let button = icon_close_button_rect(bounds);
+        draw_close_button(model, button, colors);
+        text_right = button.left - 4.0;
+    }
+    if let Some(name) = badge_symbol(item.state)
+        && let Some(badge) = symbol(name, BADGE_POINT_SIZE, &colors.secondary)
+    {
+        let size = badge.size();
+        text_right -= size.width;
+        let _ = draw_image_fit(
+            &badge,
+            Rect {
+                left: text_right,
+                top: bounds.top + (bounds.height - size.height) / 2.0,
+                width: size.width,
+                height: size.height,
+            },
+        );
+        text_right -= 8.0;
+    }
+    let left = thumbnail.left + thumbnail.width + ICON_THUMBNAIL_GAP;
+    draw_text_emphasized(
+        &item.title,
+        filter_match(&item.title, &model.filter),
+        Rect {
+            left,
+            top: bounds.top,
+            width: (text_right - left).max(0.0),
+            height: bounds.height,
+        },
+        &fonts.title,
+        &colors.label,
+        &fonts.title_match,
+        &colors.label,
+    );
 }
 
 #[cfg(test)]
@@ -1633,6 +2223,81 @@ mod tests {
             None
         );
         assert!(panel.top + panel.height < button.top);
+    }
+
+    #[test]
+    fn icon_mode_lays_the_rail_beside_the_pane_and_finds_its_hits() {
+        let layout = for_compact_list(false)
+            .with_outer_padding(ICON_PANE_PADDING)
+            .with_footer(FOOTER_HEIGHT);
+        let size = icon_panel_size(3, 2, layout, 700.0);
+        assert!((size.0 - ICON_RAIL_WIDTH - ICON_PANE_WIDTH).abs() < f64::EPSILON);
+        // Two rows plus the header, paddings, and footer set the height, not the three apps.
+        let expected = f64::from(ICON_PANE_PADDING) * 2.0
+            + ICON_HEADER_HEIGHT
+            + 2.0 * ICON_ROW_HEIGHT
+            + f64::from(FOOTER_HEIGHT);
+        assert!((size.1 - expected).abs() < f64::EPSILON);
+        assert_eq!(icon_visible_rows(size, layout), 2);
+        assert!(icon_rail_capacity(size) >= 3);
+
+        let second_slot = icon_rail_slot_rect(1);
+        assert_eq!(
+            hit_test_icon(
+                size,
+                layout,
+                None,
+                false,
+                second_slot.left + 1.0,
+                second_slot.top + 1.0
+            ),
+            Some(Hit::RailApp(1))
+        );
+        let row = icon_row_rect(size, layout, 1);
+        assert!(row.left > ICON_RAIL_WIDTH);
+        assert_eq!(
+            hit_test_icon(size, layout, None, false, row.left + 5.0, row.top + 5.0),
+            Some(Hit::Row(1))
+        );
+        let close = icon_close_button_rect(row);
+        assert_eq!(
+            hit_test_icon(
+                size,
+                layout,
+                Some(1),
+                false,
+                close.left + 2.0,
+                close.top + 2.0
+            ),
+            Some(Hit::CloseButton(1))
+        );
+        let first = icon_row_rect(size, layout, 0);
+        assert_eq!(
+            hit_test_icon(size, layout, None, false, first.left + 5.0, first.top - 1.0),
+            None
+        );
+        let button = actions_button_rect_in(content_region(size, true), layout);
+        assert!(button.left > ICON_RAIL_WIDTH);
+        assert_eq!(
+            hit_test_icon(
+                size,
+                layout,
+                None,
+                false,
+                button.left + 1.0,
+                button.top + 1.0
+            ),
+            Some(Hit::ActionsButton)
+        );
+    }
+
+    #[test]
+    fn icon_panel_grows_for_a_long_rail_and_stops_at_the_display() {
+        let layout = for_compact_list(false).with_outer_padding(ICON_PANE_PADDING);
+        let tall = icon_panel_size(12, 1, layout, 2_000.0);
+        assert!(tall.1 > icon_panel_size(2, 1, layout, 2_000.0).1);
+        assert!(icon_rail_capacity(tall) >= 12);
+        assert!((icon_panel_size(12, 20, layout, 500.0).1 - 500.0).abs() < f64::EPSILON);
     }
 
     #[test]

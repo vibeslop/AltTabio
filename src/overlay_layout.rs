@@ -51,6 +51,13 @@ impl OverlayLayout {
         self
     }
 
+    /// Icon mode on macOS keeps the panel tight around the rail and pane.
+    #[must_use]
+    pub const fn with_outer_padding(mut self, padding: f32) -> Self {
+        self.outer_padding = padding;
+        self
+    }
+
     /// Bottom edge of the row area, above the footer.
     #[must_use]
     pub const fn list_bottom(self, client_height: f32) -> f32 {

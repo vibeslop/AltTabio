@@ -51,6 +51,7 @@ pub enum SettingKey {
     ShowAppNames,
     ShowHints,
     VisibleBorders,
+    IconMode,
     Preview,
     FullDesktopPreview,
     CurrentDisplayOnly,
@@ -58,7 +59,7 @@ pub enum SettingKey {
 
 impl SettingKey {
     /// Every key once; the index doubles as the checkbox tag.
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::Autostart,
         Self::CommandTab,
         Self::OptionTab,
@@ -73,6 +74,7 @@ impl SettingKey {
         Self::ShowAppNames,
         Self::ShowHints,
         Self::VisibleBorders,
+        Self::IconMode,
         Self::Preview,
         Self::FullDesktopPreview,
         Self::CurrentDisplayOnly,
@@ -94,6 +96,7 @@ impl SettingKey {
             Self::ShowAppNames => "Show app names",
             Self::ShowHints => "Show the action bar",
             Self::VisibleBorders => "Visible borders",
+            Self::IconMode => "Icon mode",
             Self::Preview => "Live preview",
             Self::FullDesktopPreview => "Show the preview on the full desktop",
             Self::CurrentDisplayOnly => "Only list windows on the current display",
@@ -111,6 +114,10 @@ impl SettingKey {
             Self::ShowHints => {
                 Some("A bar under the list with the main action and the ⌘K actions menu")
             }
+            Self::IconMode => Some(
+                "App icons in a rail, with the selected app's windows and their thumbnails \
+                 beside them instead of the list and preview",
+            ),
             _ => None,
         }
     }
@@ -152,6 +159,7 @@ impl SettingKey {
             Self::ShowAppNames => settings.appearance.show_app_names,
             Self::ShowHints => settings.appearance.show_hints,
             Self::VisibleBorders => settings.appearance.visible_borders,
+            Self::IconMode => settings.appearance.icon_mode,
             Self::Preview => settings.appearance.preview,
             Self::FullDesktopPreview => settings.appearance.full_desktop_preview,
             Self::CurrentDisplayOnly => settings.monitor.use_current_monitor_filter,
@@ -176,6 +184,7 @@ impl SettingKey {
             Self::ShowAppNames => settings.appearance.show_app_names = value,
             Self::ShowHints => settings.appearance.show_hints = value,
             Self::VisibleBorders => settings.appearance.visible_borders = value,
+            Self::IconMode => settings.appearance.icon_mode = value,
             Self::Preview => settings.appearance.preview = value,
             Self::FullDesktopPreview => settings.appearance.full_desktop_preview = value,
             Self::CurrentDisplayOnly => settings.monitor.use_current_monitor_filter = value,
@@ -214,6 +223,10 @@ const GENERAL_SECTIONS: &[CheckboxSection] = &[
 
 /// The Appearance tab after its theme row.
 const APPEARANCE_SECTIONS: &[CheckboxSection] = &[
+    CheckboxSection {
+        title: "Layout",
+        keys: &[SettingKey::IconMode],
+    },
     CheckboxSection {
         title: "List",
         keys: &[
