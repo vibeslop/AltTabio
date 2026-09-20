@@ -2,7 +2,6 @@
 //! that draws the numbered task list, the selected row's close button, and the live preview, or
 //! in icon mode an app rail beside the selected app's windows with their thumbnails.
 
-use super::hotkey::HeldModifier;
 use super::shortcuts::{ACTIONS, Footer};
 use alttabio::input::WindowCommand;
 use alttabio::overlay_layout::OverlayLayout;
@@ -42,8 +41,9 @@ const PREVIEW_RADIUS: f64 = 8.0;
 const SEARCH_RADIUS: f64 = 8.0;
 const KEYCAP_RADIUS: f64 = 6.0;
 const KEYCAP_MINIMUM_WIDTH: f64 = 24.0;
-/// Row numbers are plain text at rest; a flat pill this wide appears under the digit only while
-/// the modifier makes it a key, so the numbers never compete with the titles.
+/// Row numbers are plain text; a pill this wide appears under the digit only for the instant
+/// its key was pressed. The modifier is down for the whole session, so any chrome tied to it
+/// would sit on every row all the time and compete with the titles.
 const NUMBER_PILL_WIDTH: f64 = 22.0;
 const BADGE_POINT_SIZE: f64 = 11.0;
 const HINT_GAP: f64 = 16.0;
@@ -174,8 +174,6 @@ pub struct FrameModel {
     pub preview: Option<Retained<NSImage>>,
     pub preview_message: Option<String>,
     pub filter: String,
-    /// The switch modifier that is down, which turns the row numbers into keycaps.
-    pub held_modifier: Option<HeldModifier>,
     /// The row that a number key just picked, lit for a moment before the switch.
     pub flash_position: Option<usize>,
     pub hidden_above: usize,
@@ -1626,18 +1624,11 @@ fn draw_close_button(model: &FrameModel, button: Rect, colors: &Colors) {
     path.stroke();
 }
 
-/// Draws a row's number: secondary text at rest so the titles lead, a flat blue-tinted pill
-/// while the modifier turns 1–9 into keys, and the blue itself the instant one was pressed.
-fn draw_row_number(
-    position: usize,
-    slot: Rect,
-    flashing: bool,
-    modifier_held: bool,
-    fonts: &Fonts,
-    colors: &Colors,
-) {
+/// Draws a row's number: secondary text so the titles lead, and a blue pill for the instant
+/// its key was pressed.
+fn draw_row_number(position: usize, slot: Rect, flashing: bool, fonts: &Fonts, colors: &Colors) {
     let text = position.to_string();
-    if position > 9 || (!flashing && !modifier_held) {
+    if position > 9 || !flashing {
         draw_text(
             &text,
             slot,
@@ -1648,14 +1639,8 @@ fn draw_row_number(
         return;
     }
     let tokens = colors.canvas_tokens;
-    let (fill, text_color) = if flashing {
-        (
-            color(tokens.keycap_pressed, 1.0),
-            color(tokens.keycap_pressed_text, 1.0),
-        )
-    } else {
-        (color(tokens.keycap_active, 1.0), colors.label.clone())
-    };
+    let fill = color(tokens.keycap_pressed, 1.0);
+    let text_color = color(tokens.keycap_pressed_text, 1.0);
     let height = (measure(&text, &fonts.number).height + 2.0).round();
     let pill = Rect {
         left: (slot.left + (slot.width - NUMBER_PILL_WIDTH) / 2.0).round(),
@@ -1711,14 +1696,7 @@ fn draw_row(
             width: f64::from(layout.number_width),
             height: bounds.height,
         };
-        draw_row_number(
-            item.position,
-            slot,
-            flashing,
-            model.held_modifier.is_some(),
-            fonts,
-            colors,
-        );
+        draw_row_number(item.position, slot, flashing, fonts, colors);
         left += f64::from(layout.number_width);
     }
     if let Some(icon) = &item.icon {
@@ -2080,14 +2058,7 @@ fn draw_icon_row(
             width: ICON_NUMBER_WIDTH,
             height: bounds.height,
         };
-        draw_row_number(
-            item.position,
-            slot,
-            flashing,
-            model.held_modifier.is_some(),
-            fonts,
-            colors,
-        );
+        draw_row_number(item.position, slot, flashing, fonts, colors);
         text_right = slot.left - 4.0;
     }
     if item.selected {

@@ -830,8 +830,8 @@ impl App {
         let held_before = self.hotkey.held_modifier();
         let outcome = self.hotkey.process(event, self.hotkey_settings);
         if self.hotkey.held_modifier() != held_before && self.session.is_visible() {
-            // The keycaps and hint bar follow the modifier; nothing else changes on a bare
-            // modifier transition, so the switcher session is not involved.
+            // The hint bar follows the modifier; nothing else changes on a bare modifier
+            // transition, so the switcher session is not involved.
             post_to_app(App::redraw);
         }
         if tracing() {
@@ -1414,7 +1414,6 @@ impl App {
             },
             preview_message,
             filter: switcher.filter().to_owned(),
-            held_modifier: self.hotkey.held_modifier(),
             flash_position: self.flash_position,
             hidden_above: window.hidden_above,
             hidden_below: window.hidden_below,
