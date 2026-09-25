@@ -70,10 +70,12 @@ main() {
     [ -w "$target" ] ||
         fail "this account cannot replace $target/AltTabio.app; run the command as an administrator."
 
-    # A running copy keeps the old code and turns the new one away as a second instance.
-    if pkill -x AltTabio; then
+    # A running copy keeps the old code and turns the new one away as a second instance. Only
+    # this account's copy is asked to quit; another account's is not ours to stop.
+    account=$(id -u)
+    if pkill -x -U "$account" AltTabio; then
         tries=0
-        while pgrep -x AltTabio >/dev/null; do
+        while pgrep -x -U "$account" AltTabio >/dev/null; do
             tries=$((tries + 1))
             [ "$tries" -le 50 ] || fail "the running AltTabio did not quit."
             sleep 0.1
