@@ -39,7 +39,9 @@ case "${1:-}" in
         ;;
 esac
 
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+# sed quits at the package version itself: head would close the pipe early, and pipefail counts
+# the writer it cuts off as a failure.
+version=$(sed -n 's/^version = "\(.*\)"/\1/p;/^version = /q' Cargo.toml)
 app=target/mac/AltTabio.app
 contents="$app/Contents"
 
@@ -83,8 +85,9 @@ for size in 16 32 128 256; do
 done
 iconutil -c icns "$iconset" -o "$contents/Resources/AltTabio.icns"
 
-identity=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(AltTabio Code Signing\)".*/\1/p' | head -1)
-if [[ -n "$identity" ]]; then
+identity="AltTabio Code Signing"
+identities=$(security find-identity -v -p codesigning 2>/dev/null) || identities=
+if [[ "$identities" == *"\"$identity\""* ]]; then
     codesign --force --sign "$identity" --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app with the persistent '$identity' certificate"
 else
