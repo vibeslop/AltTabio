@@ -804,6 +804,13 @@ impl App {
     }
 
     fn handle_tap(&mut self, event: TapEvent) -> bool {
+        // The right-click menu tracks the keyboard on its own: the arrows, Return, Escape, and
+        // its ⌘ letters. Keys the switcher swallowed here would never reach it.
+        if self.switcher.context_menu_open()
+            && matches!(event, TapEvent::KeyDown { .. } | TapEvent::KeyUp)
+        {
+            return false;
+        }
         let event = match event {
             TapEvent::LeftMouseDown { .. } => TapEvent::LeftMouseDown {
                 inside_overlay: self
