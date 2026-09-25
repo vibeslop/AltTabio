@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs or updates AltTabio on macOS from the latest GitHub release:
+# Installs or updates AltTabio on macOS from GitHub Releases:
 #
 #   curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 #
@@ -12,6 +12,24 @@ set -eu
 
 repo=vibeslop/AltTabio
 
+# Reads the GitHub API's release list on stdin and prints the tag of the newest published release
+# that carries a macOS archive, and the archive's URL. Windows and macOS share releases, so the
+# newest release may have no macOS archive. macOS ships no JSON tool for the shell, so JavaScript
+# for Automation parses it.
+pick_release='
+ObjC.import("Foundation");
+function run() {
+    const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+    const text = $.NSString.alloc.initWithDataEncoding(input, $.NSUTF8StringEncoding).js;
+    for (const release of JSON.parse(text)) {
+        if (release.draft || release.prerelease) continue;
+        const name = `AltTabio-${release.tag_name.replace(/^v/, "")}-macos.zip`;
+        const asset = release.assets.find((asset) => asset.name === name);
+        if (asset) return `${release.tag_name} ${asset.browser_download_url}`;
+    }
+    return "";
+}'
+
 fail() {
     printf 'AltTabio: %s\n' "$1" >&2
     exit 1
@@ -23,18 +41,19 @@ main() {
         fail "AltTabio needs macOS 26 or later; this Mac runs macOS $macos."
     fi
 
-    # The latest-release page redirects to its tag, and the tag names the archive.
-    latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-        "https://github.com/$repo/releases/latest") || fail "could not reach GitHub."
-    tag=${latest##*/}
+    releases=$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=30") ||
+        fail "could not get the list of releases from GitHub."
+    release=$(printf '%s' "$releases" | osascript -l JavaScript -e "$pick_release") ||
+        fail "could not read the list of releases from GitHub."
+    [ -n "$release" ] || fail "no release has a macOS download yet."
+    tag=${release%% *}
+    url=${release#* }
     version=${tag#v}
 
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
     printf 'Downloading AltTabio %s\n' "$version"
-    curl -fL --progress-bar -o "$work/AltTabio.zip" \
-        "https://github.com/$repo/releases/download/$tag/AltTabio-$version-macos.zip" ||
-        fail "release $tag has no macOS download."
+    curl -fL --progress-bar -o "$work/AltTabio.zip" "$url" || fail "could not download $url."
     ditto -x -k "$work/AltTabio.zip" "$work"
     [ -d "$work/AltTabio.app" ] || fail "the download holds no AltTabio.app."
 
