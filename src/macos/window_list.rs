@@ -30,6 +30,23 @@ pub struct WindowRecord {
     pub ax: Option<AxElement>,
 }
 
+/// A running app with no window the switcher can list, as the system switcher still shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowlessApp {
+    pub pid: i32,
+    pub launched_at: u64,
+    pub name: String,
+}
+
+/// What one enumeration found.
+#[derive(Debug, Default)]
+pub struct Listing {
+    pub windows: Vec<WindowRecord>,
+    /// Apps with no window at all. An app whose windows the display filter leaves out is not
+    /// here, because it does have windows.
+    pub windowless: Vec<WindowlessApp>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EnumerationOptions {
     pub current_pid: i32,
@@ -63,7 +80,7 @@ struct AxWindow {
 const AX_TIMEOUT_SECONDS: f32 = 0.25;
 
 #[must_use]
-pub fn enumerate(options: EnumerationOptions) -> Vec<WindowRecord> {
+pub fn enumerate(options: EnumerationOptions) -> Listing {
     let apps = regular_applications(options.current_pid);
     let on_screen = on_screen_windows();
     let mut records = Vec::new();
@@ -133,10 +150,22 @@ pub fn enumerate(options: EnumerationOptions) -> Vec<WindowRecord> {
         });
     }
 
+    let windowless = apps
+        .iter()
+        .filter(|app| !records.iter().any(|record| record.pid == app.pid))
+        .map(|app| WindowlessApp {
+            pid: app.pid,
+            launched_at: app.launched_at,
+            name: app.name.clone(),
+        })
+        .collect();
     if let Some(display) = options.display_bounds {
         records.retain(|record| !record.is_on_screen || bounds_on_display(record.bounds, display));
     }
-    records
+    Listing {
+        windows: records,
+        windowless,
+    }
 }
 
 /// Whether `pid` produced at least one Accessibility window: either one still waiting in

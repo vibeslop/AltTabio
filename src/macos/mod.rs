@@ -61,7 +61,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
-use window_list::{EnumerationOptions, WindowRecord, merge_order};
+use window_list::{EnumerationOptions, Listing, WindowRecord, WindowlessApp, merge_order};
 
 const PREVIEW_INTERVAL_SECONDS: f64 = 0.15;
 // The panel waits this long after ⌘ Tab. A quick press and release switches before it passes,
@@ -220,7 +220,7 @@ fn show_fatal_error(mtm: MainThreadMarker, message: &str) {
 }
 
 fn print_window_list() {
-    let records = window_list::enumerate(EnumerationOptions {
+    let listing = window_list::enumerate(EnumerationOptions {
         current_pid: current_pid(),
         display_bounds: None,
     });
@@ -228,7 +228,7 @@ fn print_window_list() {
         "{:>8}  {:>6}  {:<5} {:<24} TITLE",
         "ID", "PID", "STATE", "APP"
     );
-    for record in records {
+    for record in listing.windows {
         let state = match (record.is_on_screen, record.is_minimized, record.is_hidden) {
             (true, _, _) => "shown",
             (false, true, _) => "min",
@@ -244,6 +244,15 @@ fn print_window_list() {
             record.title
         );
     }
+    for app in listing.windowless {
+        println!(
+            "{:>8}  {:>6}  {:<5} {}",
+            "-",
+            app.pid,
+            "none",
+            truncate(&app.name, 24)
+        );
+    }
 }
 
 fn activate_from_command_line(argument: Option<&OsString>) {
@@ -257,7 +266,8 @@ fn activate_from_command_line(argument: Option<&OsString>) {
     let records = window_list::enumerate(EnumerationOptions {
         current_pid: current_pid(),
         display_bounds: None,
-    });
+    })
+    .windows;
     let Some(record) = records.iter().find(|record| record.window_id == window_id) else {
         eprintln!("Window {window_id} was not found");
         return;
@@ -291,8 +301,8 @@ impl RefreshWorker {
                     while let Ok(latest) = receiver.try_recv() {
                         options = latest;
                     }
-                    let records = window_list::enumerate(options);
-                    post_to_app(move |app| app.refresh_completed(records));
+                    let listing = window_list::enumerate(options);
+                    post_to_app(move |app| app.refresh_completed(listing));
                 }
             })
             .map_or_else(
@@ -346,6 +356,7 @@ pub struct App {
     observers: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
     refresh: RefreshWorker,
     records: Vec<WindowRecord>,
+    windowless: Vec<WindowlessApp>,
     order: Vec<u32>,
     icons: HashMap<i32, Retained<NSImage>>,
     // Process ids in the order their apps were last activated, the frontmost first.
@@ -447,6 +458,7 @@ impl App {
             observers: Vec::new(),
             refresh: RefreshWorker::spawn(),
             records: Vec::new(),
+            windowless: Vec::new(),
             order: Vec::new(),
             icons: HashMap::new(),
             recent_apps: frontmost_pid().into_iter().collect(),
@@ -674,7 +686,8 @@ impl App {
         }
     }
 
-    pub fn refresh_completed(&mut self, records: Vec<WindowRecord>) {
+    pub fn refresh_completed(&mut self, listing: Listing) {
+        let records = listing.windows;
         let on_screen = records
             .iter()
             .filter(|record| record.is_on_screen)
@@ -686,16 +699,21 @@ impl App {
             .map(|record| record.window_id)
             .collect::<Vec<_>>();
         self.order = merge_order(&self.order, &on_screen, &others);
-        for record in &records {
-            if !self.icons.contains_key(&record.pid)
-                && let Some(icon) = application_icon(record.pid)
+        let pids = records
+            .iter()
+            .map(|record| record.pid)
+            .chain(listing.windowless.iter().map(|app| app.pid))
+            .collect::<Vec<_>>();
+        for pid in &pids {
+            if !self.icons.contains_key(pid)
+                && let Some(icon) = application_icon(*pid)
             {
-                self.icons.insert(record.pid, icon);
+                self.icons.insert(*pid, icon);
             }
         }
-        self.icons
-            .retain(|pid, _| records.iter().any(|record| record.pid == *pid));
+        self.icons.retain(|pid, _| pids.contains(pid));
         self.records = records;
+        self.windowless = listing.windowless;
         if self.show_when_listed && !self.records.is_empty() {
             self.show_when_listed = false;
             self.show_overlay(None);
@@ -735,7 +753,20 @@ impl App {
                 app_name: record.app_name.clone(),
             })
             .collect::<Vec<_>>();
-        group_by_app(&windows, &self.recent_apps, &[])
+        let windowless = self
+            .windowless
+            .iter()
+            .map(|app| {
+                (
+                    ProcessIdentity::new(
+                        u32::try_from(app.pid).unwrap_or_default(),
+                        app.launched_at,
+                    ),
+                    app.name.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        group_by_app(&windows, &self.recent_apps, &windowless)
     }
 
     fn record(&self, window_handle: isize) -> Option<&WindowRecord> {
