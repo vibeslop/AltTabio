@@ -157,10 +157,6 @@ pub enum InputAction {
     CloseSelected,
     WindowCommand(WindowCommand),
     ActivateVisiblePosition(usize),
-    /// Moves the selection to the next window of the selected window's process.
-    SwitchWithinProcess(i32),
-    /// Opens or closes the presentation's action panel for the selected window.
-    ToggleActionPanel,
     AltReleased,
     RightButtonPressed,
     RightButtonReleased,
