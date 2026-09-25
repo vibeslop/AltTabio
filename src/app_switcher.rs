@@ -4,6 +4,9 @@
 //! Tab and the side arrows step between apps and land on the app's last-used window; the up and
 //! down arrows step between that app's windows. The order is fixed when the switcher opens, so a
 //! window closing or an app hiding while it shows never moves the other entries.
+//!
+//! The app in front never starts on the window that already has focus, since switching to it
+//! would do nothing; stepping back onto it lands on its next window instead.
 
 use crate::input::WindowCommand;
 use crate::switcher::ProcessIdentity;
@@ -14,6 +17,40 @@ pub struct WindowEntry {
     pub handle: isize,
     pub process: ProcessIdentity,
     pub app_name: String,
+}
+
+/// Windows in the order they last had focus, the current one first.
+///
+/// Stacking order is not enough for this: clicking an app in the Dock raises all of its windows
+/// while only one of them was used.
+#[derive(Debug, Default)]
+pub struct WindowHistory {
+    windows: Vec<isize>,
+}
+
+impl WindowHistory {
+    /// Records `focused` as the window in use and forgets windows no longer `listed`. An empty
+    /// history starts from `listed` as given, front to back, the best guess at the order of use
+    /// from before recording began.
+    pub fn note(&mut self, focused: Option<isize>, listed: &[isize]) {
+        if self.windows.is_empty() {
+            listed.clone_into(&mut self.windows);
+        }
+        self.windows.retain(|window| listed.contains(window));
+        if let Some(focused) = focused {
+            self.windows.retain(|window| *window != focused);
+            self.windows.insert(0, focused);
+        }
+    }
+
+    /// How recently `window` had focus, 0 being now; windows never seen rank last.
+    #[must_use]
+    pub fn rank(&self, window: isize) -> usize {
+        self.windows
+            .iter()
+            .position(|known| *known == window)
+            .unwrap_or(usize::MAX)
+    }
 }
 
 /// A running app with the windows it has open.
@@ -127,6 +164,8 @@ pub struct AppSwitcher {
     app: usize,
     window: usize,
     active: bool,
+    /// The process id of the app in front when the session opened.
+    frontmost: Option<u32>,
     // A command menu acts on the entry it opened for, even if the list changes underneath.
     menu_target: Option<Target>,
 }
@@ -149,6 +188,7 @@ impl AppSwitcher {
         let frontmost_listed =
             frontmost.is_none_or(|id| apps.first().is_some_and(|app| app.process.id == id));
         self.apps = apps;
+        self.frontmost = frontmost;
         self.app = 0;
         self.window = 0;
         self.menu_target = None;
@@ -156,7 +196,7 @@ impl AppSwitcher {
         match step {
             Some(step) if step > 0 && !frontmost_listed => self.step_app(step - 1),
             Some(step) => self.step_app(step),
-            None => {}
+            None => self.window = self.landing(0),
         }
     }
 
@@ -249,7 +289,7 @@ impl AppSwitcher {
         let Some(entry) = self.apps.get(app) else {
             return false;
         };
-        let window = window.unwrap_or(0);
+        let window = window.unwrap_or_else(|| self.landing(app));
         if window > 0 && window >= entry.windows.len() {
             return false;
         }
@@ -329,7 +369,16 @@ impl AppSwitcher {
         let current = isize::try_from(self.app).unwrap_or_default();
         let step = isize::try_from(step).unwrap_or_default();
         self.app = usize::try_from((current + step).rem_euclid(count)).unwrap_or_default();
-        self.window = 0;
+        self.window = self.landing(self.app);
+    }
+
+    /// The window an app starts on: its last-used one, or for the app in front, whose last-used
+    /// window already has focus, the one before that.
+    fn landing(&self, app: usize) -> usize {
+        let in_front = self.apps.get(app).is_some_and(|entry| {
+            Some(entry.process.id) == self.frontmost && entry.windows.len() > 1
+        });
+        usize::from(in_front)
     }
 
     fn step_window(&mut self, step: i32) -> bool {
@@ -460,17 +509,52 @@ mod tests {
 
     #[test]
     fn apps_wrap_and_windows_stop_at_the_ends() {
-        let mut switcher = opened(vec![app(1, &[10, 11]), app(2, &[20])], Some(-1));
+        let mut switcher = opened(vec![app(1, &[10]), app(2, &[20, 21])], Some(-1));
         assert_eq!(switcher.selected_app_index(), Some(1));
 
         assert_eq!(switcher.handle(Action::StepApp(1)), Effect::Redraw);
         assert_eq!(switcher.selected_app_index(), Some(0));
+        let _ = switcher.handle(Action::StepApp(1));
         assert_eq!(switcher.handle(Action::StepWindow(1)), Effect::Redraw);
-        assert_eq!(switcher.selected_window(), Some(11));
+        assert_eq!(switcher.selected_window(), Some(21));
         assert_eq!(switcher.handle(Action::StepWindow(1)), Effect::None);
-        assert_eq!(switcher.selected_window(), Some(11));
+        assert_eq!(switcher.selected_window(), Some(21));
         assert_eq!(switcher.handle(Action::StepWindow(-5)), Effect::Redraw);
-        assert_eq!(switcher.selected_window(), Some(10));
+        assert_eq!(switcher.selected_window(), Some(20));
+    }
+
+    #[test]
+    fn the_front_app_starts_on_the_window_after_the_one_in_focus() {
+        let mut switcher = opened(vec![app(1, &[10, 11]), app(2, &[20, 21])], None);
+        assert_eq!(switcher.selected_window(), Some(11));
+
+        let _ = switcher.handle(Action::StepApp(1));
+        assert_eq!(switcher.selected_window(), Some(20));
+        let _ = switcher.handle(Action::StepApp(-1));
+        assert_eq!(switcher.selected_window(), Some(11));
+        let _ = switcher.select(1, None);
+        assert!(switcher.select(0, None));
+        assert_eq!(switcher.selected_window(), Some(11));
+        // An app in front with one window starts on it; there is nothing else.
+        let single = opened(vec![app(1, &[10]), app(2, &[20])], None);
+        assert_eq!(single.selected_window(), Some(10));
+    }
+
+    #[test]
+    fn the_window_history_follows_focus_and_forgets_closed_windows() {
+        let mut history = WindowHistory::default();
+        let ranks = |history: &WindowHistory, windows: [isize; 3]| {
+            windows.map(|window| history.rank(window))
+        };
+
+        history.note(None, &[3, 1, 2]);
+        assert_eq!(ranks(&history, [3, 1, 2]), [0, 1, 2]);
+        history.note(Some(2), &[3, 1, 2]);
+        assert_eq!(ranks(&history, [2, 3, 1]), [0, 1, 2]);
+        // Window 3 closed and window 4 was never seen.
+        history.note(Some(2), &[2, 1, 4]);
+        assert_eq!(ranks(&history, [2, 1, 3]), [0, 1, usize::MAX]);
+        assert_eq!(history.rank(4), usize::MAX);
     }
 
     #[test]
