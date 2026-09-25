@@ -1,91 +1,39 @@
-//! macOS virtual key codes mapped onto the shared switcher key model.
-//!
-//! The shared model names the primary switch modifier `Alt` (Windows Alt) and the secondary one
-//! `Windows`. On macOS those roles belong to Command and Option respectively, so the key codes for
-//! Command map onto `Alt` and Option onto `Windows` to keep the shared overlay key handling intact.
+//! The macOS virtual key codes the switcher reacts to.
 
-use alttabio::input::Key;
+use alttabio::input::WindowCommand;
 
-/// Letter chords the switcher owns while the gesture modifier is down.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Chord {
-    Close,
-    Minimize,
-    Quit,
-    Hide,
-    NextWindowOfApp,
-    Actions,
-}
-
-/// The chord for a letter key code, matching the system habits: Command with W, M, Q, H, and
-/// the backtick, plus K for the actions panel as launchers use it.
-#[must_use]
-pub const fn chord_for_code(code: u16) -> Option<Chord> {
-    match code {
-        13 => Some(Chord::Close),
-        46 => Some(Chord::Minimize),
-        12 => Some(Chord::Quit),
-        4 => Some(Chord::Hide),
-        50 => Some(Chord::NextWindowOfApp),
-        40 => Some(Chord::Actions),
-        _ => None,
-    }
+pub enum MacKey {
+    Tab,
+    Return,
+    Escape,
+    Left,
+    Right,
+    Up,
+    Down,
+    /// The key left of 1, which steps backwards in the system app switcher.
+    Backtick,
+    /// A letter that runs a command while the switch modifier is down, as in the system switcher.
+    Command(WindowCommand),
+    Other,
 }
 
 #[must_use]
-pub const fn key_for_code(code: u16) -> Key {
+pub const fn key_for_code(code: u16) -> MacKey {
     match code {
-        48 => Key::Tab,
-        36 | 76 => Key::Enter,
-        115 => Key::Home,
-        119 => Key::End,
-        53 => Key::Escape,
-        118 => Key::F4,
-        122 => Key::Function(1),
-        120 => Key::Function(2),
-        99 => Key::Function(3),
-        96 => Key::Function(5),
-        97 => Key::Function(6),
-        98 => Key::Function(7),
-        100 => Key::Function(8),
-        101 => Key::Function(9),
-        109 => Key::Function(10),
-        103 => Key::Function(11),
-        111 => Key::Function(12),
-        51 => Key::Backspace,
-        123 => Key::LeftArrow,
-        126 => Key::UpArrow,
-        124 => Key::RightArrow,
-        125 => Key::DownArrow,
-        29 => Key::Digit(0),
-        18 => Key::Digit(1),
-        19 => Key::Digit(2),
-        20 => Key::Digit(3),
-        21 => Key::Digit(4),
-        23 => Key::Digit(5),
-        22 => Key::Digit(6),
-        26 => Key::Digit(7),
-        28 => Key::Digit(8),
-        25 => Key::Digit(9),
-        82 => Key::NumpadDigit(0),
-        83 => Key::NumpadDigit(1),
-        84 => Key::NumpadDigit(2),
-        85 => Key::NumpadDigit(3),
-        86 => Key::NumpadDigit(4),
-        87 => Key::NumpadDigit(5),
-        88 => Key::NumpadDigit(6),
-        89 => Key::NumpadDigit(7),
-        91 => Key::NumpadDigit(8),
-        92 => Key::NumpadDigit(9),
-        55 => Key::LeftAlt,
-        54 => Key::RightAlt,
-        58 => Key::LeftWindows,
-        61 => Key::RightWindows,
-        59 => Key::LeftControl,
-        62 => Key::RightControl,
-        56 => Key::LeftShift,
-        60 => Key::RightShift,
-        other => Key::Other(other),
+        48 => MacKey::Tab,
+        36 | 76 => MacKey::Return,
+        53 => MacKey::Escape,
+        123 => MacKey::Left,
+        124 => MacKey::Right,
+        126 => MacKey::Up,
+        125 => MacKey::Down,
+        50 => MacKey::Backtick,
+        13 => MacKey::Command(WindowCommand::Close),
+        46 => MacKey::Command(WindowCommand::Minimize),
+        4 => MacKey::Command(WindowCommand::Hide),
+        12 => MacKey::Command(WindowCommand::Quit),
+        _ => MacKey::Other,
     }
 }
 
@@ -94,27 +42,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn switcher_keys_map_to_the_shared_model() {
-        assert_eq!(key_for_code(48), Key::Tab);
-        assert_eq!(key_for_code(76), Key::Enter);
-        assert_eq!(key_for_code(53), Key::Escape);
-        assert_eq!(key_for_code(118), Key::F4);
-        assert_eq!(key_for_code(101), Key::Function(9));
-        assert_eq!(key_for_code(18), Key::Digit(1));
-        assert_eq!(key_for_code(92), Key::NumpadDigit(9));
-        assert_eq!(key_for_code(55), Key::LeftAlt);
-        assert_eq!(key_for_code(58), Key::LeftWindows);
-        assert_eq!(key_for_code(0), Key::Other(0));
-    }
-
-    #[test]
-    fn chords_follow_the_system_letter_shortcuts() {
-        assert_eq!(chord_for_code(13), Some(Chord::Close));
-        assert_eq!(chord_for_code(46), Some(Chord::Minimize));
-        assert_eq!(chord_for_code(12), Some(Chord::Quit));
-        assert_eq!(chord_for_code(4), Some(Chord::Hide));
-        assert_eq!(chord_for_code(50), Some(Chord::NextWindowOfApp));
-        assert_eq!(chord_for_code(40), Some(Chord::Actions));
-        assert_eq!(chord_for_code(0), None);
+    fn switcher_keys_and_command_letters_are_recognised() {
+        assert_eq!(key_for_code(48), MacKey::Tab);
+        assert_eq!(key_for_code(76), MacKey::Return);
+        assert_eq!(key_for_code(53), MacKey::Escape);
+        assert_eq!(key_for_code(126), MacKey::Up);
+        assert_eq!(key_for_code(50), MacKey::Backtick);
+        assert_eq!(key_for_code(13), MacKey::Command(WindowCommand::Close));
+        assert_eq!(key_for_code(12), MacKey::Command(WindowCommand::Quit));
+        assert_eq!(key_for_code(0), MacKey::Other);
     }
 }

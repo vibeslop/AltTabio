@@ -1,33 +1,17 @@
 //! Pure Command+Tab and Option+Tab gesture state fed by the event-tap adapter.
 //!
-//! The Windows hook state machine owns Alt and Tab presses and replays them to keep Windows'
-//! menu focus quirks at bay. macOS delivers modifiers as flag changes and never focuses menus on
-//! a bare modifier, so this smaller machine only decides which events the switcher owns.
+//! macOS delivers modifiers as flag changes and never focuses menus on a bare modifier, so this
+//! machine only decides which events the switcher owns and what they mean to it. The keys are the
+//! ones the system app switcher already taught: Tab and the backtick step through apps, the arrows
+//! move, Return or letting go switches, Escape cancels, and W, M, H, and Q act on the selection.
 
-use super::keymap::{Chord, chord_for_code};
-use alttabio::input::{InputAction, Key, OverlayKeyEvent, WindowCommand, overlay_key_action};
+use super::keymap::MacKey;
+use alttabio::app_switcher::Action;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "fields are independent hotkey feature switches"
-)]
 pub struct HotkeySettings {
     pub command_tab: bool,
     pub option_tab: bool,
-    pub typed_search: bool,
-    pub right_button_wheel_switching: bool,
-}
-
-impl Default for HotkeySettings {
-    fn default() -> Self {
-        Self {
-            command_tab: true,
-            option_tab: true,
-            typed_search: true,
-            right_button_wheel_switching: false,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -44,49 +28,29 @@ pub struct ModifierState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TapEvent {
-    KeyDown {
-        key: Key,
-        text: Option<char>,
-        repeated: bool,
-    },
+    KeyDown { key: MacKey, repeated: bool },
     KeyUp,
     ModifiersChanged(ModifierState),
-    LeftMouseDown {
-        inside_overlay: bool,
-    },
-    RightMouseDown,
-    RightMouseUp,
-    ScrollWheel(i32),
+    LeftMouseDown { inside_overlay: bool },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TapOutcome {
     pub suppress: bool,
-    actions: [Option<InputAction>; 2],
+    pub action: Option<Action>,
 }
 
 impl TapOutcome {
     const SUPPRESSED: Self = Self {
         suppress: true,
-        actions: [None, None],
+        action: None,
     };
 
-    const fn one(suppress: bool, action: InputAction) -> Self {
+    const fn with(suppress: bool, action: Action) -> Self {
         Self {
             suppress,
-            actions: [Some(action), None],
+            action: Some(action),
         }
-    }
-
-    const fn two(suppress: bool, first: InputAction, second: InputAction) -> Self {
-        Self {
-            suppress,
-            actions: [Some(first), Some(second)],
-        }
-    }
-
-    pub fn actions(&self) -> impl Iterator<Item = InputAction> + '_ {
-        self.actions.iter().flatten().copied()
     }
 }
 
@@ -96,38 +60,11 @@ enum Gesture {
     Option,
 }
 
-/// Which switch modifier is down while the overlay shows; drives keycaps and hints.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HeldModifier {
-    Command,
-    Option,
-}
-
-impl HeldModifier {
-    #[must_use]
-    pub const fn glyph(self) -> &'static str {
-        match self {
-            Self::Command => "⌘",
-            Self::Option => "⌥",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum RightButton {
-    #[default]
-    Released,
-    Pressed,
-    WheelGesture,
-}
-
 #[derive(Debug, Default)]
 pub struct HotkeyState {
     modifiers: ModifierState,
     gesture: Option<Gesture>,
     overlay_active: bool,
-    right_button: RightButton,
-    synthetic_right_release: bool,
 }
 
 impl HotkeyState {
@@ -139,24 +76,11 @@ impl HotkeyState {
         }
     }
 
-    /// The modifier the switcher currently treats as held: the gesture's own modifier, or
-    /// Command or Option pressed again after the gesture ended while the list stayed open.
-    #[must_use]
-    pub const fn held_modifier(&self) -> Option<HeldModifier> {
-        match self.gesture {
-            Some(Gesture::Command) => Some(HeldModifier::Command),
-            Some(Gesture::Option) => Some(HeldModifier::Option),
-            None if self.overlay_active && self.modifiers.command => Some(HeldModifier::Command),
-            None if self.overlay_active && self.modifiers.option => Some(HeldModifier::Option),
-            None => None,
-        }
-    }
-
-    /// The right button press passed through to the app under the cursor. A wheel gesture then
-    /// needs a synthetic release so that app does not see a stuck button while the switcher
-    /// consumes the real release later.
-    pub fn take_synthetic_right_release(&mut self) -> bool {
-        core::mem::take(&mut self.synthetic_right_release)
+    /// Whether Command or Option is down as the switcher's modifier: the gesture's own, or one
+    /// pressed again while a list opened from the menu bar shows.
+    const fn modifier_held(&self) -> bool {
+        self.gesture.is_some()
+            || (self.overlay_active && (self.modifiers.command || self.modifiers.option))
     }
 
     #[must_use]
@@ -164,23 +88,19 @@ impl HotkeyState {
         match event {
             TapEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
-                match self.gesture {
-                    Some(Gesture::Command) if !modifiers.command => {
-                        self.gesture = None;
-                        TapOutcome::one(false, InputAction::AltReleased)
-                    }
-                    Some(Gesture::Option) if !modifiers.option => {
-                        self.gesture = None;
-                        TapOutcome::one(false, InputAction::AltReleased)
-                    }
-                    _ => TapOutcome::default(),
+                let released = match self.gesture {
+                    Some(Gesture::Command) => !modifiers.command,
+                    Some(Gesture::Option) => !modifiers.option,
+                    None => false,
+                };
+                if released {
+                    self.gesture = None;
+                    TapOutcome::with(false, Action::Activate)
+                } else {
+                    TapOutcome::default()
                 }
             }
-            TapEvent::KeyDown {
-                key,
-                text,
-                repeated,
-            } => self.process_key_down(key, text, repeated, settings),
+            TapEvent::KeyDown { key, repeated } => self.process_key_down(key, repeated, settings),
             TapEvent::KeyUp => {
                 if self.gesture.is_some() || self.overlay_active {
                     TapOutcome::SUPPRESSED
@@ -190,61 +110,30 @@ impl HotkeyState {
             }
             TapEvent::LeftMouseDown { inside_overlay } => {
                 if self.overlay_active && !inside_overlay {
-                    TapOutcome::one(false, InputAction::DismissOverlay)
+                    TapOutcome::with(false, Action::Dismiss)
                 } else {
                     TapOutcome::default()
                 }
             }
-            TapEvent::RightMouseDown => {
-                if settings.right_button_wheel_switching
-                    && self.right_button == RightButton::Released
-                {
-                    self.right_button = RightButton::Pressed;
-                }
-                TapOutcome::default()
-            }
-            TapEvent::RightMouseUp => {
-                let outcome = if self.right_button == RightButton::WheelGesture {
-                    TapOutcome::one(true, InputAction::RightButtonReleased)
-                } else {
-                    TapOutcome::default()
-                };
-                self.right_button = RightButton::Released;
-                outcome
-            }
-            TapEvent::ScrollWheel(delta) => match self.right_button {
-                RightButton::Pressed if settings.right_button_wheel_switching => {
-                    self.right_button = RightButton::WheelGesture;
-                    self.synthetic_right_release = true;
-                    TapOutcome::two(
-                        true,
-                        InputAction::RightButtonPressed,
-                        InputAction::MouseWheel(delta),
-                    )
-                }
-                RightButton::WheelGesture => TapOutcome::one(true, InputAction::MouseWheel(delta)),
-                RightButton::Pressed | RightButton::Released => TapOutcome::default(),
-            },
         }
     }
 
     fn process_key_down(
         &mut self,
-        key: Key,
-        text: Option<char>,
+        key: MacKey,
         repeated: bool,
         settings: HotkeySettings,
     ) -> TapOutcome {
         let modifiers = self.modifiers;
-        let switch_delta = if modifiers.shift { -1 } else { 1 };
-        if key == Key::Tab && self.gesture.is_none() {
+        let forward = if modifiers.shift { -1 } else { 1 };
+        if key == MacKey::Tab && self.gesture.is_none() {
             if modifiers.command && !modifiers.option && settings.command_tab {
                 self.gesture = Some(Gesture::Command);
-                return TapOutcome::one(true, InputAction::Switch(switch_delta));
+                return TapOutcome::with(true, Action::StepApp(forward));
             }
             if modifiers.option && !modifiers.command && settings.option_tab {
                 self.gesture = Some(Gesture::Option);
-                return TapOutcome::one(true, InputAction::Switch(switch_delta));
+                return TapOutcome::with(true, Action::StepApp(forward));
             }
         }
         if self.gesture.is_none() && !self.overlay_active {
@@ -252,66 +141,39 @@ impl HotkeyState {
         }
 
         // The switcher owns the keyboard from here until it hides.
-        if key == Key::Tab {
-            return TapOutcome::one(true, InputAction::Switch(switch_delta));
-        }
-        let modifier_held = self.held_modifier().is_some();
-        if modifier_held
-            && !modifiers.control
-            && let Key::Other(code) = key
-            && let Some(chord) = chord_for_code(code)
-        {
-            let action = match chord {
-                Chord::Close => InputAction::WindowCommand(WindowCommand::Close),
-                Chord::Minimize => InputAction::WindowCommand(WindowCommand::Minimize),
-                Chord::Quit => InputAction::WindowCommand(WindowCommand::Quit),
-                Chord::Hide => InputAction::WindowCommand(WindowCommand::Hide),
-                Chord::NextWindowOfApp => InputAction::SwitchWithinProcess(switch_delta),
-                Chord::Actions => InputAction::ToggleActionPanel,
-            };
-            if repeated && chord != Chord::NextWindowOfApp {
-                return TapOutcome::SUPPRESSED;
+        let action = match key {
+            MacKey::Tab | MacKey::Right => Some(Action::StepApp(forward)),
+            MacKey::Backtick | MacKey::Left => Some(Action::StepApp(-forward)),
+            MacKey::Up => Some(Action::StepWindow(-1)),
+            MacKey::Down => Some(Action::StepWindow(1)),
+            MacKey::Return if !repeated => Some(Action::Activate),
+            MacKey::Escape if !repeated => Some(Action::Dismiss),
+            MacKey::Command(command) if !repeated && !modifiers.control && self.modifier_held() => {
+                Some(Action::Command(command))
             }
-            return TapOutcome::one(true, action);
+            _ => None,
+        };
+        if matches!(action, Some(Action::Activate | Action::Dismiss)) {
+            // A later Tab while the modifier stays down starts a new gesture.
+            self.gesture = None;
         }
-        let overlay_action = overlay_key_action(OverlayKeyEvent {
-            key,
-            repeated,
-            shift: modifiers.shift,
-        });
-        match overlay_action {
-            // Digits filter the list once the modifier is up, like the Windows build; with the
-            // modifier down they jump, in the gesture and after the list was left open.
-            Some(InputAction::ActivateVisiblePosition(_))
-                if !modifier_held && settings.typed_search => {}
-            Some(
-                action @ (InputAction::ActivateSelected
-                | InputAction::DismissOverlay
-                | InputAction::ActivateVisiblePosition(_)),
-            ) => {
-                self.gesture = None;
-                return TapOutcome::one(true, action);
-            }
-            Some(action) => return TapOutcome::one(true, action),
-            None => {}
-        }
-        // Letters under the modifier are chords on macOS, never search text; typing starts once
-        // the modifier is up so a search for "w" cannot close a window.
-        if settings.typed_search && !modifiers.control && !modifier_held {
-            if key == Key::Backspace {
-                return TapOutcome::one(true, InputAction::BackspaceSearch);
-            }
-            if let Some(character) = text.filter(|value| !value.is_control()) {
-                return TapOutcome::one(true, InputAction::AppendSearchCharacter(character));
-            }
-        }
-        TapOutcome::SUPPRESSED
+        action.map_or(TapOutcome::SUPPRESSED, |action| {
+            TapOutcome::with(true, action)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alttabio::input::WindowCommand;
+
+    fn settings() -> HotkeySettings {
+        HotkeySettings {
+            command_tab: true,
+            option_tab: true,
+        }
+    }
 
     fn command_down() -> ModifierState {
         ModifierState {
@@ -320,55 +182,88 @@ mod tests {
         }
     }
 
-    fn tab() -> TapEvent {
+    fn key(key: MacKey) -> TapEvent {
         TapEvent::KeyDown {
-            key: Key::Tab,
-            text: Some('\t'),
+            key,
             repeated: false,
         }
     }
 
-    fn actions(outcome: TapOutcome) -> Vec<InputAction> {
-        outcome.actions().collect()
+    fn action(outcome: TapOutcome) -> Option<Action> {
+        outcome.action
+    }
+
+    /// Command down, Tab pressed, and the overlay showing.
+    fn in_gesture() -> HotkeyState {
+        let mut state = HotkeyState::default();
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
+        let _ = state.process(key(MacKey::Tab), settings());
+        state.set_overlay_active(true);
+        state
     }
 
     #[test]
-    fn command_tab_opens_and_command_release_activates() {
+    fn command_tab_opens_and_command_release_switches() {
         let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
 
-        assert_eq!(
-            state.process(TapEvent::ModifiersChanged(command_down()), settings),
-            TapOutcome::default()
-        );
-        let outcome = state.process(tab(), settings);
+        let outcome = state.process(key(MacKey::Tab), settings());
         assert!(outcome.suppress);
-        assert_eq!(actions(outcome), vec![InputAction::Switch(1)]);
+        assert_eq!(action(outcome), Some(Action::StepApp(1)));
         state.set_overlay_active(true);
         let outcome = state.process(
             TapEvent::ModifiersChanged(ModifierState::default()),
-            settings,
+            settings(),
         );
         assert!(!outcome.suppress);
-        assert_eq!(actions(outcome), vec![InputAction::AltReleased]);
+        assert_eq!(action(outcome), Some(Action::Activate));
     }
 
     #[test]
-    fn shift_tab_switches_backwards() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
+    fn shift_tab_and_the_backtick_step_backwards() {
+        let mut state = in_gesture();
+
+        assert_eq!(
+            action(state.process(key(MacKey::Backtick), settings())),
+            Some(Action::StepApp(-1))
+        );
         let _ = state.process(
             TapEvent::ModifiersChanged(ModifierState {
                 command: true,
                 shift: true,
                 ..ModifierState::default()
             }),
-            settings,
+            settings(),
         );
+        assert_eq!(
+            action(state.process(key(MacKey::Tab), settings())),
+            Some(Action::StepApp(-1))
+        );
+        assert_eq!(
+            action(state.process(key(MacKey::Backtick), settings())),
+            Some(Action::StepApp(1))
+        );
+    }
+
+    #[test]
+    fn side_arrows_step_apps_and_vertical_arrows_step_windows() {
+        let mut state = in_gesture();
 
         assert_eq!(
-            actions(state.process(tab(), settings)),
-            vec![InputAction::Switch(-1)]
+            action(state.process(key(MacKey::Left), settings())),
+            Some(Action::StepApp(-1))
+        );
+        assert_eq!(
+            action(state.process(key(MacKey::Right), settings())),
+            Some(Action::StepApp(1))
+        );
+        assert_eq!(
+            action(state.process(key(MacKey::Up), settings())),
+            Some(Action::StepWindow(-1))
+        );
+        assert_eq!(
+            action(state.process(key(MacKey::Down), settings())),
+            Some(Action::StepWindow(1))
         );
     }
 
@@ -377,239 +272,123 @@ mod tests {
         let mut state = HotkeyState::default();
         let settings = HotkeySettings {
             command_tab: false,
-            ..HotkeySettings::default()
+            option_tab: true,
         };
         let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
 
-        assert_eq!(state.process(tab(), settings), TapOutcome::default());
+        assert_eq!(
+            state.process(key(MacKey::Tab), settings),
+            TapOutcome::default()
+        );
     }
 
     #[test]
-    fn option_tab_is_the_secondary_gesture() {
+    fn option_tab_is_the_second_gesture() {
         let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
         let _ = state.process(
             TapEvent::ModifiersChanged(ModifierState {
                 option: true,
                 ..ModifierState::default()
             }),
-            settings,
+            settings(),
         );
 
         assert_eq!(
-            actions(state.process(tab(), settings)),
-            vec![InputAction::Switch(1)]
+            action(state.process(key(MacKey::Tab), settings())),
+            Some(Action::StepApp(1))
         );
-        let outcome = state.process(
-            TapEvent::ModifiersChanged(ModifierState::default()),
-            settings,
-        );
-        assert_eq!(actions(outcome), vec![InputAction::AltReleased]);
-    }
-
-    #[test]
-    fn overlay_keys_are_owned_while_the_gesture_is_active() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        let _ = state.process(tab(), settings);
-
-        let down = TapEvent::KeyDown {
-            key: Key::DownArrow,
-            text: None,
-            repeated: false,
-        };
         assert_eq!(
-            actions(state.process(down, settings)),
-            vec![InputAction::Navigate(1)]
-        );
-        let digit = TapEvent::KeyDown {
-            key: Key::Digit(3),
-            text: Some('3'),
-            repeated: false,
-        };
-        assert_eq!(
-            actions(state.process(digit, settings)),
-            vec![InputAction::ActivateVisiblePosition(3)]
-        );
-        // Activation ends the gesture; a later Tab while Command stays down opens again.
-        assert_eq!(
-            actions(state.process(tab(), settings)),
-            vec![InputAction::Switch(1)]
+            action(state.process(
+                TapEvent::ModifiersChanged(ModifierState::default()),
+                settings()
+            )),
+            Some(Action::Activate)
         );
     }
 
     #[test]
-    fn typed_characters_filter_and_unknown_keys_are_swallowed() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        let _ = state.process(tab(), settings);
-        state.set_overlay_active(true);
-        let _ = state.process(
-            TapEvent::ModifiersChanged(ModifierState::default()),
-            settings,
-        );
+    fn command_letters_act_once_and_other_keys_are_swallowed() {
+        let mut state = in_gesture();
 
-        let letter = TapEvent::KeyDown {
-            key: Key::Other(0),
-            text: Some('a'),
-            repeated: false,
-        };
         assert_eq!(
-            actions(state.process(letter, settings)),
-            vec![InputAction::AppendSearchCharacter('a')]
+            action(state.process(key(MacKey::Command(WindowCommand::Close)), settings())),
+            Some(Action::Command(WindowCommand::Close))
         );
-        let backspace = TapEvent::KeyDown {
-            key: Key::Backspace,
-            text: Some('\u{8}'),
-            repeated: false,
+        let repeated = TapEvent::KeyDown {
+            key: MacKey::Command(WindowCommand::Close),
+            repeated: true,
         };
+        assert_eq!(state.process(repeated, settings()), TapOutcome::SUPPRESSED);
         assert_eq!(
-            actions(state.process(backspace, settings)),
-            vec![InputAction::BackspaceSearch]
+            state.process(key(MacKey::Other), settings()),
+            TapOutcome::SUPPRESSED
         );
-        let function = TapEvent::KeyDown {
-            key: Key::Function(12),
-            text: None,
-            repeated: false,
-        };
-        assert_eq!(state.process(function, settings), TapOutcome::SUPPRESSED);
         assert_eq!(
-            state.process(TapEvent::KeyUp, settings),
+            state.process(TapEvent::KeyUp, settings()),
             TapOutcome::SUPPRESSED
         );
     }
 
     #[test]
-    fn digits_filter_once_the_modifier_is_released_but_the_overlay_stays() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        let _ = state.process(tab(), settings);
-        state.set_overlay_active(true);
-        let _ = state.process(
-            TapEvent::ModifiersChanged(ModifierState::default()),
-            settings,
-        );
+    fn return_switches_and_ends_the_gesture() {
+        let mut state = in_gesture();
 
-        let digit = TapEvent::KeyDown {
-            key: Key::Digit(2),
-            text: Some('2'),
-            repeated: false,
-        };
         assert_eq!(
-            actions(state.process(digit, settings)),
-            vec![InputAction::AppendSearchCharacter('2')]
+            action(state.process(key(MacKey::Return), settings())),
+            Some(Action::Activate)
         );
-        let escape = TapEvent::KeyDown {
-            key: Key::Escape,
-            text: None,
-            repeated: false,
-        };
+        // Letting go afterwards does not switch a second time; Tab opens anew.
         assert_eq!(
-            actions(state.process(escape, settings)),
-            vec![InputAction::DismissOverlay]
+            action(state.process(
+                TapEvent::ModifiersChanged(ModifierState::default()),
+                settings()
+            )),
+            None
+        );
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
+        assert_eq!(
+            action(state.process(key(MacKey::Tab), settings())),
+            Some(Action::StepApp(1))
         );
     }
 
     #[test]
-    fn letters_under_the_held_modifier_are_chords_not_search_text() {
+    fn a_list_opened_from_the_menu_takes_letters_only_with_command() {
         let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        let _ = state.process(tab(), settings);
         state.set_overlay_active(true);
-        assert_eq!(state.held_modifier(), Some(HeldModifier::Command));
+        let quit = key(MacKey::Command(WindowCommand::Quit));
 
-        let w = TapEvent::KeyDown {
-            key: Key::Other(13),
-            text: Some('w'),
-            repeated: false,
-        };
+        assert_eq!(state.process(quit, settings()), TapOutcome::SUPPRESSED);
+        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
         assert_eq!(
-            actions(state.process(w, settings)),
-            vec![InputAction::WindowCommand(WindowCommand::Close)]
+            action(state.process(quit, settings())),
+            Some(Action::Command(WindowCommand::Quit))
         );
-        let repeated_w = TapEvent::KeyDown {
-            key: Key::Other(13),
-            text: Some('w'),
-            repeated: true,
-        };
-        assert_eq!(state.process(repeated_w, settings), TapOutcome::SUPPRESSED);
-        let a = TapEvent::KeyDown {
-            key: Key::Other(0),
-            text: Some('a'),
-            repeated: false,
-        };
-        assert_eq!(state.process(a, settings), TapOutcome::SUPPRESSED);
-        let backtick = TapEvent::KeyDown {
-            key: Key::Other(50),
-            text: Some('`'),
-            repeated: true,
-        };
+        // Command coming up here was never a gesture, so it does not switch.
         assert_eq!(
-            actions(state.process(backtick, settings)),
-            vec![InputAction::SwitchWithinProcess(1)]
-        );
-    }
-
-    #[test]
-    fn command_pressed_again_after_release_restores_jumps_and_chords() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        let _ = state.process(tab(), settings);
-        state.set_overlay_active(true);
-        let _ = state.process(
-            TapEvent::ModifiersChanged(ModifierState::default()),
-            settings,
-        );
-        assert_eq!(state.held_modifier(), None);
-
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        assert_eq!(state.held_modifier(), Some(HeldModifier::Command));
-        let q = TapEvent::KeyDown {
-            key: Key::Other(12),
-            text: Some('q'),
-            repeated: false,
-        };
-        assert_eq!(
-            actions(state.process(q, settings)),
-            vec![InputAction::WindowCommand(WindowCommand::Quit)]
-        );
-        let digit = TapEvent::KeyDown {
-            key: Key::Digit(2),
-            text: Some('2'),
-            repeated: false,
-        };
-        assert_eq!(
-            actions(state.process(digit, settings)),
-            vec![InputAction::ActivateVisiblePosition(2)]
+            action(state.process(
+                TapEvent::ModifiersChanged(ModifierState::default()),
+                settings()
+            )),
+            None
         );
     }
 
     #[test]
     fn keys_pass_through_after_the_overlay_hides() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
-        let _ = state.process(tab(), settings);
-        state.set_overlay_active(true);
+        let mut state = in_gesture();
         state.set_overlay_active(false);
         let _ = state.process(
             TapEvent::ModifiersChanged(ModifierState::default()),
-            settings,
+            settings(),
         );
 
-        let letter = TapEvent::KeyDown {
-            key: Key::Other(0),
-            text: Some('a'),
-            repeated: false,
-        };
-        assert_eq!(state.process(letter, settings), TapOutcome::default());
         assert_eq!(
-            state.process(TapEvent::KeyUp, settings),
+            state.process(key(MacKey::Other), settings()),
+            TapOutcome::default()
+        );
+        assert_eq!(
+            state.process(TapEvent::KeyUp, settings()),
             TapOutcome::default()
         );
     }
@@ -617,67 +396,25 @@ mod tests {
     #[test]
     fn clicking_outside_the_overlay_dismisses_it() {
         let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
         state.set_overlay_active(true);
 
-        let inside = TapEvent::LeftMouseDown {
-            inside_overlay: true,
-        };
-        assert_eq!(state.process(inside, settings), TapOutcome::default());
-        let outside = TapEvent::LeftMouseDown {
-            inside_overlay: false,
-        };
         assert_eq!(
-            actions(state.process(outside, settings)),
-            vec![InputAction::DismissOverlay]
-        );
-    }
-
-    #[test]
-    fn right_button_wheel_gesture_balances_the_passed_through_press() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings {
-            right_button_wheel_switching: true,
-            ..HotkeySettings::default()
-        };
-
-        assert_eq!(
-            state.process(TapEvent::RightMouseDown, settings),
-            TapOutcome::default()
-        );
-        let outcome = state.process(TapEvent::ScrollWheel(-1), settings);
-        assert!(outcome.suppress);
-        assert_eq!(
-            actions(outcome),
-            vec![InputAction::RightButtonPressed, InputAction::MouseWheel(-1)]
-        );
-        assert!(state.take_synthetic_right_release());
-        assert!(!state.take_synthetic_right_release());
-        assert_eq!(
-            actions(state.process(TapEvent::ScrollWheel(1), settings)),
-            vec![InputAction::MouseWheel(1)]
-        );
-        let release = state.process(TapEvent::RightMouseUp, settings);
-        assert!(release.suppress);
-        assert_eq!(actions(release), vec![InputAction::RightButtonReleased]);
-    }
-
-    #[test]
-    fn plain_right_clicks_and_wheels_pass_through() {
-        let mut state = HotkeyState::default();
-        let settings = HotkeySettings::default();
-
-        assert_eq!(
-            state.process(TapEvent::RightMouseDown, settings),
+            state.process(
+                TapEvent::LeftMouseDown {
+                    inside_overlay: true
+                },
+                settings()
+            ),
             TapOutcome::default()
         );
         assert_eq!(
-            state.process(TapEvent::ScrollWheel(1), settings),
-            TapOutcome::default()
-        );
-        assert_eq!(
-            state.process(TapEvent::RightMouseUp, settings),
-            TapOutcome::default()
+            action(state.process(
+                TapEvent::LeftMouseDown {
+                    inside_overlay: false
+                },
+                settings()
+            )),
+            Some(Action::Dismiss)
         );
     }
 }

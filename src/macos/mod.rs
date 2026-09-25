@@ -14,21 +14,20 @@ mod overlay;
 mod permissions;
 mod preview;
 mod settings_window;
-mod shortcuts;
 mod single_instance;
 mod status_item;
 mod window_list;
 
 use crate::settings_io::SettingsStore;
-use alttabio::input::{InputAction, WindowCommand};
-use alttabio::overlay_layout::{OverlayLayout, for_macos};
-use alttabio::settings::Settings;
-use alttabio::switcher::{
-    ProcessIdentity, SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
-    WindowCommandRequest,
+use alttabio::app_switcher::{
+    Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, group_by_app,
 };
+use alttabio::input::WindowCommand;
+use alttabio::settings::Settings;
+use alttabio::switcher::ProcessIdentity;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
 use block2::RcBlock;
+use commands::AppRef;
 use dispatch2::DispatchQueue;
 use event_tap::EventTap;
 use hotkey::{HotkeySettings, HotkeyState, TapEvent};
@@ -42,22 +41,20 @@ use objc2_app_kit::{
     NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
     NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
 };
-use objc2_core_foundation::CGPoint;
 use objc2_foundation::{
     NSArray, NSNotification, NSNotificationName, NSObjectProtocol, NSOperationQueue, NSSize,
     NSString, NSTimer, NSURL,
 };
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{
-    ActionPanelModel, CloseButtonVisualState, FrameModel, Hit, IconModel, Overlay, RailItem,
-    RenderOptions, RowModel, ViewEvent, WindowState,
+    CloseButtonVisualState, FrameModel, Hit, Layout, Overlay, PreviewModel, Row, Tile, ViewEvent,
+    WindowState, scroll_into_view,
 };
-use preview::{CaptureKind, CaptureRequest, PreviewResult, PreviewSource};
+use preview::{CaptureRequest, PreviewResult, PreviewSource};
 use settings_window::{SettingsEvent, SettingsWindow};
-use shortcuts::{ACTIONS, ActionKind, FooterContext};
 use status_item::{MenuAction, StatusItem};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -67,13 +64,15 @@ use std::time::Duration;
 use window_list::{EnumerationOptions, WindowRecord, merge_order};
 
 const PREVIEW_INTERVAL_SECONDS: f64 = 0.15;
-// A number key lights its row for about a menu blink before the switch happens.
-const FLASH_SECONDS: f64 = 0.08;
 const BACKGROUND_REFRESH_SECONDS: f64 = 2.0;
 // How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
-// Icon mode captures this many row thumbnails at once; more would only queue behind them.
-const THUMBNAIL_CAPTURES_IN_FLIGHT: usize = 4;
+// How long the pointer rests on an app's tile before the app is selected, so a pointer that
+// crosses the strip on its way to a window does not change the app underneath it.
+const TILE_DWELL_SECONDS: f64 = 0.08;
+// Activation history kept for ordering the strip; apps activated longer ago than this follow
+// in window order, which is what they would get anyway.
+const RECENT_APPS_KEPT: usize = 64;
 const GITHUB_URL: &str = "https://github.com/vibeslop/AltTabio";
 
 /// `ALTTABIO_TRACE=1` prints every tap event and switcher action to stderr for debugging.
@@ -127,6 +126,18 @@ fn run_later(work: impl FnOnce() + 'static) {
     };
 }
 
+/// Schedules `work` on the main run loop after `seconds`.
+fn schedule(seconds: f64, work: impl Fn(&mut App) + 'static) -> Retained<NSTimer> {
+    let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+        let _ = with_app(&work);
+    });
+    unsafe {
+        // SAFETY: scheduled from the main thread onto the main run loop, where the block's
+        // captures were created.
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(seconds, false, &block)
+    }
+}
+
 pub fn run(arguments: &[OsString]) {
     let preview_mode = arguments.iter().any(|argument| argument == "--preview");
     let settings_mode = arguments.iter().any(|argument| argument == "--settings");
@@ -151,20 +162,13 @@ pub fn run(arguments: &[OsString]) {
     }
     let path = settings_path();
     let first_start = !path.exists();
-    let (store, mut settings) = match SettingsStore::load_from(path.clone()) {
+    let (store, settings) = match SettingsStore::load_from(path.clone()) {
         Ok(loaded) => loaded,
         Err(error) => {
             show_fatal_error(mtm, &error);
             return;
         }
     };
-    if preview_mode
-        && arguments
-            .iter()
-            .any(|argument| argument == "--full-desktop-preview")
-    {
-        settings.appearance.full_desktop_preview = true;
-    }
 
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -334,7 +338,7 @@ pub struct App {
     store: SettingsStore,
     settings_path: PathBuf,
     preview_mode: bool,
-    session: SwitcherSession,
+    switcher: AppSwitcher,
     hotkey: HotkeyState,
     hotkey_settings: HotkeySettings,
     overlay: Option<Rc<Overlay>>,
@@ -346,6 +350,16 @@ pub struct App {
     records: Vec<WindowRecord>,
     order: Vec<u32>,
     icons: HashMap<i32, Retained<NSImage>>,
+    // Process ids in the order their apps were last activated, the frontmost first.
+    recent_apps: Vec<u32>,
+    // The most apps and the longest window list this session has listed. The panel is sized
+    // for them, so it never shrinks under the pointer while it shows.
+    extent: (usize, usize),
+    // The first tile and row drawn; they move only as far as the selection needs.
+    tile_start: usize,
+    row_start: usize,
+    // What the last frame drew, for resolving pointer events against it.
+    shown: Option<Shown>,
     preview: PreviewSource,
     preview_image: Option<Retained<NSImage>>,
     preview_message: Option<&'static str>,
@@ -355,153 +369,48 @@ pub struct App {
     refresh_timer: Option<Retained<NSTimer>>,
     tap_retry_timer: Option<Retained<NSTimer>>,
     close_button: CloseButton,
-    pressed_row: Option<usize>,
-    // The row a number key picked; its switch waits for the flash timer.
-    flash_position: Option<usize>,
-    flash_timer: Option<Retained<NSTimer>>,
-    // The selected entry of the ⌘K action panel while it is open.
-    action_panel: Option<usize>,
+    // The tile or row a click started on; the switch happens when it ends there too.
+    pressed: Option<Hit>,
+    // The tile under the pointer, as an app index, and the timer that selects it after a rest.
+    hovered_tile: Option<usize>,
+    dwell_timer: Option<Retained<NSTimer>>,
     // Preview mode shows the overlay as soon as the first window list arrives.
     show_when_listed: bool,
-    // Icon mode: row thumbnails by window id, the ids whose capture failed so they are not
-    // asked for again, and how many captures are still out.
-    thumbnails: HashMap<u32, Retained<NSImage>>,
-    thumbnails_unavailable: HashSet<u32>,
-    thumbnails_in_flight: usize,
-    // Icon mode: the selected app and the first pane row shown for it, so hovering rows does
-    // not scroll the pane underneath the pointer.
-    icon_rows_pin: Option<(u32, usize)>,
     // The front app named in the last secure-keyboard-input report, so the log says it once per
     // app rather than on every activation.
     secure_input_holder: Option<String>,
 }
 
-/// One app of the icon-mode rail, in the order its first window appears in the list.
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct IconApp {
-    pid: u32,
-    name: String,
-    /// Indices into the switcher's visible tasks.
-    windows: Vec<usize>,
-}
-
-/// What icon mode shows this frame: the apps and which of them are on the rail, plus the
-/// selected app's windows and which of those are pane rows.
-#[derive(Clone, Debug, Default)]
-struct IconFrame {
-    apps: Vec<IconApp>,
-    rail: RowWindow,
-    selected_app: Option<usize>,
-    /// The selected app's windows as visible-task indices.
-    windows: Vec<usize>,
-    rows: RowWindow,
-    /// The pane row of the selected window, when it is among the shown rows.
-    selected_row: Option<usize>,
-}
-
-impl IconFrame {
-    /// The visible-task index behind pane row `row`.
-    fn visible_index(&self, row: usize) -> Option<usize> {
-        self.windows.get(self.rows.start + row).copied()
-    }
-
-    /// The visible-task index of the first window of the app in rail slot `slot`.
-    fn first_window_of_slot(&self, slot: usize) -> Option<usize> {
-        self.apps
-            .get(self.rail.start + slot)
-            .and_then(|app| app.windows.first().copied())
-    }
-}
-
-/// The geometry a pointer event is resolved against: the frame as it was last drawn.
-struct PointerContext {
-    size: (f64, f64),
-    layout: OverlayLayout,
-    /// Present in icon mode.
-    icon_frame: Option<IconFrame>,
-    /// The shown rows: list rows, or the pane rows in icon mode.
-    window: RowWindow,
-    selected_row: Option<usize>,
-    panel_open: bool,
-}
-
-impl PointerContext {
-    /// The overflow note occupies the last fitted slot and the rail's hidden count a slot of
-    /// its own; neither is a target.
-    fn hit_test(&self, x: f64, y: f64) -> Option<Hit> {
-        let hit = if self.icon_frame.is_some() {
-            overlay::hit_test_icon(
-                self.size,
-                self.layout,
-                self.selected_row,
-                self.panel_open,
-                x,
-                y,
-            )
-        } else {
-            overlay::hit_test(
-                self.size,
-                self.layout,
-                self.selected_row,
-                self.panel_open,
-                x,
-                y,
-            )
-        };
-        let rail_slots = self.icon_frame.as_ref().map_or(0, |frame| frame.rail.rows);
-        hit.filter(|hit| match hit {
-            Hit::Row(row) | Hit::CloseButton(row) => *row < self.window.rows,
-            Hit::RailApp(slot) => *slot < rail_slots,
-            Hit::ActionsButton | Hit::ActionRow(_) => true,
-        })
-    }
-
-    /// The one-based visible position a row or rail slot stands for.
-    fn position_of(&self, hit: Hit) -> Option<usize> {
-        match (hit, self.icon_frame.as_ref()) {
-            (Hit::Row(row), Some(frame)) => frame.visible_index(row).map(|index| index + 1),
-            (Hit::RailApp(slot), Some(frame)) => {
-                frame.first_window_of_slot(slot).map(|index| index + 1)
-            }
-            (Hit::Row(row), None) => Some(self.window.start + row + 1),
-            _ => None,
-        }
-    }
-}
-
-fn centered_range(selected: usize, total: usize, fits: usize) -> std::ops::Range<usize> {
-    let max_start = total.saturating_sub(fits);
-    let start = selected.saturating_sub(fits / 2).min(max_start);
-    start..start.saturating_add(fits).min(total)
-}
-
-/// Which rows the list shows: the first visible index and how many rows fit, minus one row for
-/// the overflow note when the list does not fit.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct RowWindow {
-    start: usize,
+/// The geometry and scroll positions of the last frame drawn.
+#[derive(Clone, Copy, Debug)]
+struct Shown {
+    layout: Layout,
+    app: Option<ProcessIdentity>,
+    tile_start: usize,
+    tiles: usize,
+    row_start: usize,
     rows: usize,
-    hidden_above: usize,
-    hidden_below: usize,
+    selected_row: Option<usize>,
 }
 
-fn row_window(
-    total: usize,
-    fits: usize,
-    range_for: impl Fn(usize) -> std::ops::Range<usize>,
-) -> RowWindow {
-    let rows = if total > fits {
-        fits.saturating_sub(1).max(1)
-    } else {
-        fits
-    };
-    let range = range_for(rows);
-    RowWindow {
-        start: range.start,
-        rows,
-        hidden_above: range.start,
-        hidden_below: total.saturating_sub(range.end),
+impl Shown {
+    fn hit(&self, x: f64, y: f64) -> Option<Hit> {
+        self.layout
+            .hit(self.tiles, self.rows, self.selected_row, x, y)
     }
+}
+
+fn record_process(record: &WindowRecord) -> ProcessIdentity {
+    ProcessIdentity::new(
+        u32::try_from(record.pid).unwrap_or_default(),
+        record.launched_at,
+    )
+}
+
+fn frontmost_pid() -> Option<u32> {
+    NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .and_then(|app| u32::try_from(app.processIdentifier()).ok())
 }
 
 impl App {
@@ -512,7 +421,6 @@ impl App {
         settings_path: PathBuf,
         preview_mode: bool,
     ) -> Self {
-        let session = SwitcherSession::new(session_settings(&settings));
         let hotkey_settings = hotkey_settings(&settings);
         Self {
             mtm,
@@ -520,7 +428,7 @@ impl App {
             store,
             settings_path,
             preview_mode,
-            session,
+            switcher: AppSwitcher::default(),
             hotkey: HotkeyState::default(),
             hotkey_settings,
             overlay: None,
@@ -532,6 +440,11 @@ impl App {
             records: Vec::new(),
             order: Vec::new(),
             icons: HashMap::new(),
+            recent_apps: frontmost_pid().into_iter().collect(),
+            extent: (0, 0),
+            tile_start: 0,
+            row_start: 0,
+            shown: None,
             preview: PreviewSource::default(),
             preview_image: None,
             preview_message: None,
@@ -541,15 +454,10 @@ impl App {
             refresh_timer: None,
             tap_retry_timer: None,
             close_button: CloseButton::default(),
-            pressed_row: None,
-            flash_position: None,
-            flash_timer: None,
-            action_panel: None,
+            pressed: None,
+            hovered_tile: None,
+            dwell_timer: None,
             show_when_listed: false,
-            thumbnails: HashMap::new(),
-            thumbnails_unavailable: HashSet::new(),
-            thumbnails_in_flight: 0,
-            icon_rows_pin: None,
             secure_input_holder: None,
         }
     }
@@ -616,13 +524,15 @@ impl App {
         });
     }
 
-    /// Puts the tap back at the head of the session taps after another app came to the front.
+    /// Records the new front app for the strip's order, then puts the tap back at the head of
+    /// the session taps.
     ///
     /// Remote desktop and VM clients insert a tap of their own to hand ⌘ Tab to the guest; the
     /// system asks the newest head-inserted tap first, so reinserting ours keeps the switcher
     /// working inside those apps. Secure keyboard input is the one thing no tap gets past, so
     /// it is named in the log when it is on.
     fn front_app_changed(&mut self) {
+        self.note_front_app();
         if self.preview_mode || self.event_tap.is_none() {
             return;
         }
@@ -651,9 +561,8 @@ impl App {
     }
 
     fn install_event_tap(&mut self) -> bool {
-        let handler = Box::new(|event: TapEvent, location: CGPoint| {
-            with_app(|app| app.handle_tap(event, location)).unwrap_or(false)
-        });
+        let handler =
+            Box::new(|event: TapEvent| with_app(|app| app.handle_tap(event)).unwrap_or(false));
         match EventTap::install(handler) {
             Ok(tap) => {
                 if tracing() {
@@ -784,36 +693,41 @@ impl App {
             self.show_overlay(None);
             return;
         }
-        if self.session.is_visible() {
-            self.session.refresh_tasks(self.tasks());
-            if self.session.is_visible() {
-                self.redraw();
-                self.request_preview_capture();
+        if self.switcher.is_active() {
+            let before = self.switcher.selected_target();
+            self.switcher.refresh(self.app_entries());
+            if self.switcher.is_active() {
+                self.widen_extent();
+                self.selection_changed(before);
             } else {
                 self.hide_overlay();
             }
         }
     }
 
-    fn tasks(&self) -> Vec<SwitchTask> {
-        self.order
+    /// Records the front app as the most recently used one, for the strip's order.
+    fn note_front_app(&mut self) {
+        let Some(pid) = frontmost_pid() else {
+            return;
+        };
+        self.recent_apps.retain(|known| *known != pid);
+        self.recent_apps.insert(0, pid);
+        self.recent_apps.truncate(RECENT_APPS_KEPT);
+    }
+
+    /// The listed windows grouped by app, the most recently used app first.
+    fn app_entries(&self) -> Vec<AppEntry> {
+        let windows = self
+            .order
             .iter()
             .filter_map(|id| self.records.iter().find(|record| record.window_id == *id))
-            .enumerate()
-            .map(|(index, record)| {
-                SwitchTask::new(
-                    index + 1,
-                    isize::try_from(record.window_id).unwrap_or_default(),
-                    &record.title,
-                    &record.app_name,
-                )
-                .with_process_identity(ProcessIdentity::new(
-                    u32::try_from(record.pid).unwrap_or_default(),
-                    record.launched_at,
-                ))
-                .with_icon_handle(isize::try_from(record.pid).unwrap_or_default())
+            .map(|record| WindowEntry {
+                handle: isize::try_from(record.window_id).unwrap_or_default(),
+                process: record_process(record),
+                app_name: record.app_name.clone(),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        group_by_app(&windows, &self.recent_apps, &[])
     }
 
     fn record(&self, window_handle: isize) -> Option<&WindowRecord> {
@@ -821,7 +735,16 @@ impl App {
         self.records.iter().find(|record| record.window_id == id)
     }
 
-    fn handle_tap(&mut self, event: TapEvent, location: CGPoint) -> bool {
+    fn app_name(&self, process: ProcessIdentity) -> String {
+        self.switcher
+            .apps()
+            .iter()
+            .find(|app| app.process == process)
+            .map(|app| app.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn handle_tap(&mut self, event: TapEvent) -> bool {
         let event = match event {
             TapEvent::LeftMouseDown { .. } => TapEvent::LeftMouseDown {
                 inside_overlay: self
@@ -831,227 +754,71 @@ impl App {
             },
             other => other,
         };
-        let held_before = self.hotkey.held_modifier();
         let outcome = self.hotkey.process(event, self.hotkey_settings);
-        if self.hotkey.held_modifier() != held_before && self.session.is_visible() {
-            // The hint bar follows the modifier; nothing else changes on a bare modifier
-            // transition, so the switcher session is not involved.
-            post_to_app(App::redraw);
-        }
         if tracing() {
             eprintln!(
-                "tap {event:?} -> suppress={} actions={:?}",
-                outcome.suppress,
-                outcome.actions().collect::<Vec<_>>()
+                "tap {event:?} -> suppress={} action={:?}",
+                outcome.suppress, outcome.action
             );
         }
-        if self.hotkey.take_synthetic_right_release() {
-            EventTap::post_right_button_release(location);
-        }
-        for action in outcome.actions() {
+        if let Some(action) = outcome.action {
             post_to_app(move |app| app.apply_action(action));
         }
         outcome.suppress
     }
 
-    pub fn apply_action(&mut self, action: InputAction) {
-        if self.session.is_visible() && self.route_to_action_panel(action) {
-            return;
-        }
-        if let InputAction::ActivateVisiblePosition(position) = action
-            && self.session.is_visible()
-            && self.flash_position.is_none()
-            && self.select_shown_position(position)
-        {
-            self.flash_position = Some(position);
-            self.redraw();
-            let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-                let _ = with_app(App::finish_flash);
-            });
-            self.flash_timer = Some(unsafe {
-                // SAFETY: scheduled from the main thread onto the main run loop.
-                NSTimer::scheduledTimerWithTimeInterval_repeats_block(FLASH_SECONDS, false, &block)
-            });
-            return;
-        }
-        let selected_before = self.selected_window();
-        let effect = self.session.handle_input(action);
+    pub fn apply_action(&mut self, action: Action) {
+        let before = self.switcher.selected_target();
+        let effect = self.switcher.handle(action);
         if tracing() {
             eprintln!("action {action:?} -> {effect:?}");
         }
+        self.apply_effect(effect, before);
+    }
+
+    fn apply_effect(&mut self, effect: Effect, before: Option<Target>) {
         match effect {
-            SwitcherEffect::None => {}
-            SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
-            SwitcherEffect::Hide => self.hide_overlay(),
-            SwitcherEffect::Redraw => {
-                self.redraw();
-                if self.selected_window() != selected_before {
-                    self.request_preview_capture();
-                }
-            }
-            SwitcherEffect::Activate(target) => self.activate_target(target),
-            SwitcherEffect::Execute(request) => self.execute_command(request),
+            Effect::None => {}
+            Effect::Open { step } => self.show_overlay(Some(step)),
+            Effect::Hide => self.hide_overlay(),
+            Effect::Redraw => self.selection_changed(before),
+            Effect::Activate(target) => self.activate_target(target),
+            Effect::Execute { command, target } => self.execute_command(command, target),
         }
     }
 
-    /// Handles `action` for the ⌘K panel; true when the panel consumed it.
-    fn route_to_action_panel(&mut self, action: InputAction) -> bool {
-        if action == InputAction::ToggleActionPanel {
-            self.action_panel = if self.action_panel.is_some() {
-                None
-            } else {
-                self.session.switcher().selected_task().map(|_| 0)
-            };
-            self.redraw();
-            return true;
-        }
-        let Some(selected) = self.action_panel else {
-            return false;
-        };
-        let last = ACTIONS.len().saturating_sub(1);
-        match action {
-            InputAction::Navigate(delta) | InputAction::Switch(delta) => {
-                self.action_panel = Some(
-                    usize::try_from(i64::try_from(selected).unwrap_or_default() + i64::from(delta))
-                        .unwrap_or_default()
-                        .min(last),
-                );
-                self.redraw();
-            }
-            InputAction::MouseWheel(delta) => {
-                self.action_panel = Some(if delta > 0 {
-                    selected.saturating_sub(1)
-                } else {
-                    (selected + 1).min(last)
-                });
-                self.redraw();
-            }
-            InputAction::SelectFirst => {
-                self.action_panel = Some(0);
-                self.redraw();
-            }
-            InputAction::SelectLast => {
-                self.action_panel = Some(last);
-                self.redraw();
-            }
-            InputAction::ActivateSelected => self.run_action(selected),
-            InputAction::DismissOverlay => {
-                self.action_panel = None;
-                self.redraw();
-            }
-            // Letting go of the modifier while choosing an action must not switch windows; the
-            // list simply stays open, which is where the panel leads anyway.
-            InputAction::AltReleased
-            | InputAction::RightButtonReleased
-            | InputAction::AppendSearchCharacter(_)
-            | InputAction::BackspaceSearch
-            | InputAction::RightButtonPressed
-            | InputAction::ToggleActionPanel => {}
-            // Shortcuts and number keys work as they do without the panel; it just closes.
-            InputAction::CloseSelected
-            | InputAction::WindowCommand(_)
-            | InputAction::SwitchWithinProcess(_)
-            | InputAction::ActivateVisiblePosition(_) => {
-                self.action_panel = None;
-                return false;
-            }
-        }
-        true
-    }
-
-    fn run_action(&mut self, index: usize) {
-        self.action_panel = None;
-        let Some(action) = ACTIONS.get(index) else {
-            self.redraw();
-            return;
-        };
-        let input = match action.kind {
-            ActionKind::Activate => InputAction::ActivateSelected,
-            ActionKind::Command(command) => InputAction::WindowCommand(command),
-            ActionKind::NextWindowOfApp => InputAction::SwitchWithinProcess(1),
-        };
-        self.apply_action(input);
-        if self.session.is_visible() {
-            self.redraw();
+    fn selection_changed(&mut self, before: Option<Target>) {
+        self.redraw();
+        if self.switcher.selected_target() != before {
+            self.request_preview_capture();
         }
     }
 
-    /// Selects the row a number key names: the list position, or in icon mode the pane row,
-    /// whose numbers restart at 1 for the selected app's windows.
-    fn select_shown_position(&mut self, position: usize) -> bool {
-        if !self.icon_mode() {
-            return self
-                .session
-                .switcher_mut()
-                .select_visible_position(position);
-        }
-        let Some(overlay) = self.overlay.clone() else {
-            return false;
-        };
-        let layout = self.layout();
-        let frame = self.icon_frame(self.panel_size(&overlay), layout);
-        let Some(index) = position
-            .checked_sub(1)
-            .and_then(|row| frame.visible_index(row))
-        else {
-            return false;
-        };
-        self.session
-            .switcher_mut()
-            .select_visible_position(index + 1)
-    }
-
-    fn finish_flash(&mut self) {
-        self.flash_timer = None;
-        if self.flash_position.take().is_none() {
-            return;
-        }
-        // The row was selected when the flash started; activating the selection rather than the
-        // position keeps the choice even if the list changed underneath in the meantime.
-        if self.session.is_visible() {
-            self.apply_action(InputAction::ActivateSelected);
-        }
-    }
-
-    fn clear_flash(&mut self) {
-        self.flash_position = None;
-        if let Some(timer) = self.flash_timer.take() {
-            timer.invalidate();
-        }
-    }
-
-    fn selected_window(&self) -> Option<isize> {
-        self.session
-            .switcher()
-            .selected_task()
-            .map(|task| task.window_handle)
-    }
-
-    fn show_overlay(&mut self, selection_delta: Option<i32>) {
-        let tasks = self.tasks();
-        self.session.open(tasks, selection_delta);
-        if !self.session.is_visible() {
+    fn show_overlay(&mut self, step: Option<i32>) {
+        self.switcher
+            .open(self.app_entries(), step, frontmost_pid());
+        if !self.switcher.is_active() {
             self.hide_overlay();
             return;
         }
-        self.close_button = CloseButton::default();
-        self.pressed_row = None;
-        self.clear_flash();
-        self.action_panel = None;
-        self.icon_rows_pin = None;
-        self.thumbnails.clear();
-        self.thumbnails_unavailable.clear();
-        let theme = self.resolved_theme();
-        if let Some(overlay) = self.overlay.clone() {
-            overlay.set_theme(theme, Self::tokens(theme));
-            let size = self.icon_mode().then(|| self.panel_size(&overlay));
-            overlay.show_on_cursor_screen(size);
-        }
-        self.hotkey.set_overlay_active(true);
+        self.reset_pointer();
+        self.extent = (0, 0);
+        self.widen_extent();
+        self.tile_start = 0;
+        self.row_start = 0;
+        self.shown = None;
         self.preview_image = None;
         self.preview_window = None;
         self.preview_message = None;
-        self.preview.refresh_content();
+        let theme = self.resolved_theme();
+        if let Some(overlay) = self.overlay.clone() {
+            overlay.set_theme(theme, SwitcherTokens::new(theme));
+            overlay.show(self.layout(&overlay).size());
+        }
+        self.hotkey.set_overlay_active(true);
+        if self.settings.appearance.preview {
+            self.preview.refresh_content();
+        }
         self.request_refresh();
         self.start_preview_timer();
         self.redraw();
@@ -1059,20 +826,15 @@ impl App {
     }
 
     fn hide_overlay(&mut self) {
-        self.session.hide();
+        self.switcher.hide();
         if let Some(overlay) = &self.overlay {
             overlay.hide();
         }
         self.hotkey.set_overlay_active(false);
-        self.close_button = CloseButton::default();
-        self.pressed_row = None;
-        self.clear_flash();
-        self.action_panel = None;
+        self.reset_pointer();
+        self.shown = None;
         self.preview_image = None;
         self.preview_window = None;
-        self.thumbnails.clear();
-        self.thumbnails_unavailable.clear();
-        self.icon_rows_pin = None;
         if let Some(timer) = self.preview_timer.take() {
             timer.invalidate();
         }
@@ -1082,37 +844,53 @@ impl App {
         }
     }
 
-    fn activate_target(&mut self, target: isize) {
-        if let Some(record) = self.record(target).cloned() {
-            if let Err(error) = commands::activate(&record) {
-                eprintln!("{error}");
-            }
-        } else {
-            eprintln!("The selected window is no longer listed");
+    fn reset_pointer(&mut self) {
+        self.close_button = CloseButton::default();
+        self.pressed = None;
+        self.hovered_tile = None;
+        self.cancel_dwell();
+    }
+
+    fn activate_target(&mut self, target: Target) {
+        let result = match target {
+            Target::Window { handle, .. } => self.record(handle).map_or_else(
+                || Err("The selected window is no longer listed".to_owned()),
+                commands::activate,
+            ),
+            Target::App(process) => commands::activate_app(&AppRef {
+                process,
+                name: &self.app_name(process),
+            }),
+        };
+        if let Err(error) = result {
+            eprintln!("{error}");
         }
         self.hide_overlay();
         Self::schedule_refresh_burst();
     }
 
-    fn execute_command(&mut self, request: WindowCommandRequest) {
-        let Some(record) = self.record(request.window_handle).cloned() else {
-            eprintln!("The selected window is no longer listed");
-            return;
+    fn execute_command(&mut self, command: WindowCommand, target: Target) {
+        let result = match target {
+            Target::Window { handle, .. } => self.record(handle).map_or_else(
+                || Err("The selected window is no longer listed".to_owned()),
+                |record| commands::execute_on_window(command, record),
+            ),
+            Target::App(process) => commands::execute_on_app(
+                command,
+                &AppRef {
+                    process,
+                    name: &self.app_name(process),
+                },
+            ),
         };
-        if let Err(error) = commands::execute(request.command, &record) {
+        if let Err(error) = result {
             eprintln!("{error}");
             return;
         }
-        // `refresh_tasks` keeps the selection, so redrawing after each refresh shows the closed
-        // window leaving the list in place.
+        // The switcher stays open and keeps its selection; the refreshes show the window or
+        // app leaving the list in place.
         self.request_refresh();
         Self::schedule_refresh_burst();
-        if matches!(
-            request.command,
-            WindowCommand::Maximize | WindowCommand::Restore
-        ) {
-            self.request_preview_capture();
-        }
     }
 
     fn resolved_theme(&self) -> ResolvedTheme {
@@ -1133,372 +911,158 @@ impl App {
         resolve(self.settings.appearance.theme, system)
     }
 
-    fn tokens(theme: ResolvedTheme) -> SwitcherTokens {
-        SwitcherTokens::new(theme)
+    fn widen_extent(&mut self) {
+        let apps = self.switcher.apps();
+        let windows = apps.iter().map(|app| app.windows.len()).max().unwrap_or(0);
+        self.extent = (self.extent.0.max(apps.len()), self.extent.1.max(windows));
     }
 
-    fn icon_mode(&self) -> bool {
-        self.settings.appearance.icon_mode
-    }
-
-    fn layout(&self) -> OverlayLayout {
-        let search_row = if self.session.switcher().filter().is_empty() {
-            0.0
-        } else {
-            overlay::SEARCH_ROW_HEIGHT
-        };
-        let footer = if self.settings.appearance.show_hints {
-            overlay::FOOTER_HEIGHT
-        } else {
-            0.0
-        };
-        let layout = if self.icon_mode() {
-            for_macos(false).with_outer_padding(overlay::ICON_PANE_PADDING)
-        } else {
-            for_macos(self.settings.appearance.compact_list)
-        };
-        layout.with_search_row(search_row).with_footer(footer)
-    }
-
-    /// The panel's content size: the view's bounds in list mode, and in icon mode the size the
-    /// rail and pane want, which the panel is resized to on the next draw.
-    fn panel_size(&self, overlay: &Overlay) -> (f64, f64) {
-        if !self.icon_mode() {
-            return overlay.content_size();
-        }
-        let switcher = self.session.switcher();
-        let mut counts: Vec<(u32, usize)> = Vec::new();
-        for task in switcher.visible_tasks() {
-            let pid = task.process_identity.id;
-            match counts.iter_mut().find(|(known, _)| *known == pid) {
-                Some((_, count)) => *count += 1,
-                None => counts.push((pid, 1)),
-            }
-        }
-        let max_windows = counts.iter().map(|(_, count)| *count).max().unwrap_or(1);
-        overlay::icon_panel_size(
-            counts.len(),
-            max_windows,
-            self.layout(),
-            overlay.max_panel_height(),
+    fn layout(&self, overlay: &Overlay) -> Layout {
+        Layout::new(
+            self.extent.0,
+            self.extent.1,
+            self.settings.appearance.preview,
+            overlay.max_size(),
         )
-    }
-
-    /// Groups the visible tasks by app for the rail and picks the rail slots and pane rows
-    /// that fit, both kept around the selection.
-    fn icon_frame(&self, size: (f64, f64), layout: OverlayLayout) -> IconFrame {
-        let switcher = self.session.switcher();
-        let mut apps: Vec<IconApp> = Vec::new();
-        for (index, task) in switcher.visible_tasks().enumerate() {
-            let pid = task.process_identity.id;
-            match apps.iter_mut().find(|app| app.pid == pid) {
-                Some(app) => app.windows.push(index),
-                None => apps.push(IconApp {
-                    pid,
-                    name: task.process_name.clone(),
-                    windows: vec![index],
-                }),
-            }
-        }
-        let selected_index = switcher.selected_visible_index();
-        let selected_app = selected_index
-            .and_then(|index| apps.iter().position(|app| app.windows.contains(&index)));
-        let rail = row_window(apps.len(), overlay::icon_rail_capacity(size), |slots| {
-            centered_range(selected_app.unwrap_or(0), apps.len(), slots)
-        });
-        let windows = selected_app
-            .and_then(|index| apps.get(index))
-            .map(|app| app.windows.clone())
-            .unwrap_or_default();
-        let selected_pid = selected_app
-            .and_then(|index| apps.get(index))
-            .map(|app| app.pid);
-        let selected_window = selected_index
-            .and_then(|index| windows.iter().position(|window| *window == index))
-            .unwrap_or(0);
-        let rows = row_window(
-            windows.len(),
-            overlay::icon_visible_rows(size, layout),
-            |fits| {
-                let pinned = self
-                    .icon_rows_pin
-                    .filter(|(pid, _)| Some(*pid) == selected_pid)
-                    .map(|(_, start)| start.min(windows.len().saturating_sub(fits)))
-                    .filter(|start| {
-                        selected_window >= *start && selected_window < start.saturating_add(fits)
-                    });
-                pinned.map_or_else(
-                    || centered_range(selected_window, windows.len(), fits),
-                    |start| start..start.saturating_add(fits).min(windows.len()),
-                )
-            },
-        );
-        let selected_row = selected_index
-            .and_then(|index| windows.iter().position(|window| *window == index))
-            .and_then(|row| row.checked_sub(rows.start))
-            .filter(|row| *row < rows.rows);
-        IconFrame {
-            apps,
-            rail,
-            selected_app,
-            windows,
-            rows,
-            selected_row,
-        }
-    }
-
-    fn row_window(&self, size: (f64, f64), layout: OverlayLayout) -> RowWindow {
-        let switcher = self.session.switcher();
-        row_window(
-            switcher.visible_task_count(),
-            overlay::visible_rows(size, layout),
-            |rows| switcher.visible_range(rows),
-        )
-    }
-
-    fn footer_context(&self) -> FooterContext {
-        let switcher = self.session.switcher();
-        if !switcher.filter().is_empty() {
-            FooterContext::Searching {
-                matches: switcher.visible_task_count(),
-            }
-        } else if let Some(modifier) = self.hotkey.held_modifier() {
-            FooterContext::Held(modifier)
-        } else {
-            FooterContext::Released
-        }
     }
 
     fn window_state(&self, window_handle: isize) -> WindowState {
         match self.record(window_handle) {
             Some(record) if record.is_minimized => WindowState::Minimized,
             Some(record) if record.is_hidden => WindowState::Hidden,
-            Some(record) if !record.is_on_screen => WindowState::OtherSpace,
+            Some(record) if !record.is_on_screen => WindowState::OtherDesktop,
             _ => WindowState::Normal,
         }
-    }
-
-    fn render_options(&self) -> RenderOptions {
-        let appearance = &self.settings.appearance;
-        RenderOptions {
-            compact_list: appearance.compact_list,
-            large_icons: appearance.large_icons,
-            show_numbers: appearance.show_numbers,
-            show_app_names: appearance.show_app_names,
-            visible_borders: appearance.visible_borders,
-            preview: appearance.preview,
-            icon_mode: appearance.icon_mode,
-        }
-    }
-
-    fn row_model(&self, position: usize, task: &SwitchTask, selected: bool) -> RowModel {
-        let window_id = u32::try_from(task.window_handle).unwrap_or_default();
-        RowModel {
-            position,
-            title: task.title.clone(),
-            app_name: task.process_name.clone(),
-            icon: i32::try_from(task.icon_handle)
-                .ok()
-                .and_then(|pid| self.icons.get(&pid).cloned()),
-            thumbnail: self.thumbnails.get(&window_id).cloned(),
-            selected,
-            state: self.window_state(task.window_handle),
-        }
-    }
-
-    /// The icon-mode rows and rail for `frame`; pane rows are numbered from 1 as shown.
-    fn icon_model(&self, frame: &IconFrame) -> (Vec<RowModel>, IconModel, RowWindow) {
-        let switcher = self.session.switcher();
-        let tasks: Vec<&SwitchTask> = switcher.visible_tasks().collect();
-        let selected = switcher.selected_task().map(|task| task.window_handle);
-        let rows = frame
-            .windows
-            .iter()
-            .skip(frame.rows.start)
-            .take(frame.rows.rows)
-            .enumerate()
-            .filter_map(|(row, index)| {
-                let task = tasks.get(*index)?;
-                Some(self.row_model(row + 1, task, selected == Some(task.window_handle)))
-            })
-            .collect();
-        let rail = frame
-            .apps
-            .iter()
-            .enumerate()
-            .skip(frame.rail.start)
-            .take(frame.rail.rows)
-            .map(|(index, app)| RailItem {
-                name: app.name.clone(),
-                icon: i32::try_from(app.pid)
-                    .ok()
-                    .and_then(|pid| self.icons.get(&pid).cloned()),
-                windows: app.windows.len(),
-                selected: frame.selected_app == Some(index),
-            })
-            .collect();
-        let app = frame.selected_app.and_then(|index| frame.apps.get(index));
-        let count = frame.windows.len();
-        let icon = IconModel {
-            rail,
-            rail_hidden_above: frame.rail.hidden_above,
-            rail_hidden_below: frame.rail.hidden_below,
-            app_name: app.map(|app| app.name.clone()).unwrap_or_default(),
-            window_count: match count {
-                0 => String::new(),
-                1 => "1 window".to_owned(),
-                _ => format!("{count} windows"),
-            },
-        };
-        (rows, icon, frame.rows)
     }
 
     fn redraw(&mut self) {
         let Some(overlay) = self.overlay.clone() else {
             return;
         };
-        let layout = self.layout();
-        let size = self.panel_size(&overlay);
-        let (rows, icon, window) = if self.icon_mode() {
-            overlay.set_content_size(size);
-            let frame = self.icon_frame(size, layout);
-            self.icon_rows_pin = frame
-                .selected_app
-                .and_then(|index| frame.apps.get(index))
-                .map(|app| (app.pid, frame.rows.start));
-            let (rows, icon, window) = self.icon_model(&frame);
-            (rows, Some(icon), window)
+        if !self.switcher.is_active() {
+            return;
+        }
+        let layout = self.layout(&overlay);
+        overlay.resize(layout.size());
+        let selected_app = self.switcher.selected_app_index().unwrap_or_default();
+        let selected_process = self.switcher.selected_app().map(|app| app.process);
+        if self.shown.and_then(|shown| shown.app) != selected_process {
+            self.row_start = 0;
+        }
+
+        let tiles = self.tiles(layout, selected_app);
+        let (rows, selected_row, empty_note, more_note) = self.rows(layout);
+        let preview = self
+            .settings
+            .appearance
+            .preview
+            .then(|| self.preview_model());
+
+        self.shown = Some(Shown {
+            layout,
+            app: selected_process,
+            tile_start: self.tile_start,
+            tiles: tiles.len(),
+            row_start: self.row_start,
+            rows: rows.len(),
+            selected_row,
+        });
+        overlay.present(FrameModel {
+            layout,
+            tokens: SwitcherTokens::new(self.resolved_theme()),
+            tiles,
+            rows,
+            empty_note,
+            more_note,
+            close_state: self.close_button.visual_state(),
+            preview,
+        });
+    }
+
+    /// The strip's tiles, scrolled so the selected app shows.
+    fn tiles(&mut self, layout: Layout, selected_app: usize) -> Vec<Tile> {
+        let apps = self.switcher.apps();
+        self.tile_start =
+            scroll_into_view(self.tile_start, selected_app, apps.len(), layout.tile_slots);
+        apps.iter()
+            .enumerate()
+            .skip(self.tile_start)
+            .take(layout.tile_slots)
+            .map(|(index, app)| Tile {
+                name: app.name.clone(),
+                icon: i32::try_from(app.process.id)
+                    .ok()
+                    .and_then(|pid| self.icons.get(&pid).cloned()),
+                selected: index == selected_app,
+            })
+            .collect()
+    }
+
+    /// The selected app's rows scrolled so the selected window shows, the selected row among
+    /// them, and the notes for an app without windows or a list longer than the panel.
+    fn rows(
+        &mut self,
+        layout: Layout,
+    ) -> (Vec<Row>, Option<usize>, Option<String>, Option<String>) {
+        let windows = self
+            .switcher
+            .selected_app()
+            .map_or(&[][..], |app| &app.windows[..]);
+        let selected_window = self.switcher.selected_window_index();
+        // A list longer than the panel gives its last slot to the count of the rest.
+        let fits = if windows.len() > layout.row_slots {
+            layout.row_slots.saturating_sub(1).max(1)
         } else {
-            let window = self.row_window(size, layout);
-            let switcher = self.session.switcher();
-            let selected = switcher.selected_task().map(|task| task.window_handle);
-            let rows = switcher
-                .positioned_visible_tasks()
-                .skip(window.start)
-                .take(window.rows)
-                .map(|(position, task)| {
-                    self.row_model(position, task, selected == Some(task.window_handle))
-                })
-                .collect();
-            (rows, None, window)
+            layout.row_slots
         };
-        let switcher = self.session.switcher();
-        let no_selection = switcher.selected_task().is_none();
-        let preview_message = if no_selection {
-            Some("No windows match".to_owned())
-        } else if self.preview_image.is_some() {
+        self.row_start = scroll_into_view(
+            self.row_start,
+            selected_window.unwrap_or_default(),
+            windows.len(),
+            fits,
+        );
+        let rows = windows
+            .iter()
+            .enumerate()
+            .skip(self.row_start)
+            .take(fits)
+            .map(|(index, handle)| Row {
+                title: self
+                    .record(*handle)
+                    .map(|record| record.title.clone())
+                    .unwrap_or_default(),
+                state: self.window_state(*handle),
+                selected: selected_window == Some(index),
+            })
+            .collect::<Vec<_>>();
+        let hidden = windows.len() - rows.len();
+        let more_note =
+            (hidden > 0 && rows.len() < layout.row_slots).then(|| format!("{hidden} more"));
+        let empty_note = windows.is_empty().then(|| "No open windows".to_owned());
+        let selected_row = selected_window
+            .and_then(|index| index.checked_sub(self.row_start))
+            .filter(|row| *row < rows.len());
+        (rows, selected_row, empty_note, more_note)
+    }
+
+    /// The selected window's latest capture, or why there is none.
+    fn preview_model(&self) -> PreviewModel {
+        let window = self
+            .switcher
+            .selected_window()
+            .and_then(|handle| u32::try_from(handle).ok());
+        let image = self
+            .preview_image
+            .clone()
+            .filter(|_| window.is_some() && self.preview_window == window);
+        let message = if window.is_none() || image.is_some() {
             None
         } else if !permissions::screen_recording_granted() {
-            Some("Allow Screen Recording in System Settings to see live previews".to_owned())
+            Some("Allow Screen Recording in System Settings to see previews".to_owned())
         } else {
             self.preview_message.map(str::to_owned)
         };
-        let footer = self
-            .settings
-            .appearance
-            .show_hints
-            .then(|| shortcuts::footer(self.footer_context(), self.action_panel.is_some()));
-        let action_panel = self.action_panel.map(|selected| ActionPanelModel {
-            selected,
-            target: switcher
-                .selected_task()
-                .map(|task| task.title.clone())
-                .unwrap_or_default(),
-        });
-        overlay.present(FrameModel {
-            rows,
-            layout,
-            options: self.render_options(),
-            tokens: Self::tokens(self.resolved_theme()),
-            close_state: self.close_button.visual_state(),
-            preview: if no_selection {
-                None
-            } else {
-                self.preview_image.clone()
-            },
-            preview_message,
-            filter: switcher.filter().to_owned(),
-            flash_position: self.flash_position,
-            hidden_above: window.hidden_above,
-            hidden_below: window.hidden_below,
-            footer,
-            action_panel,
-            icon,
-        });
-        if self.icon_mode() {
-            self.request_thumbnails();
-        }
-    }
-
-    /// Asks for the thumbnails the pane rows still lack, a few at a time.
-    fn request_thumbnails(&mut self) {
-        if !self.session.is_visible() || !permissions::screen_recording_granted() {
-            return;
-        }
-        let Some(overlay) = self.overlay.clone() else {
-            return;
-        };
-        if !self.preview.has_content() {
-            self.preview.refresh_content();
-            return;
-        }
-        let layout = self.layout();
-        let frame = self.icon_frame(self.panel_size(&overlay), layout);
-        let wanted: Vec<u32> = {
-            let tasks: Vec<&SwitchTask> = self.session.switcher().visible_tasks().collect();
-            frame
-                .windows
-                .iter()
-                .skip(frame.rows.start)
-                .take(frame.rows.rows)
-                .filter_map(|index| tasks.get(*index))
-                .filter_map(|task| u32::try_from(task.window_handle).ok())
-                .filter(|id| {
-                    !self.thumbnails.contains_key(id) && !self.thumbnails_unavailable.contains(id)
-                })
-                .collect()
-        };
-        for window_id in wanted {
-            if self.thumbnails_in_flight >= THUMBNAIL_CAPTURES_IN_FLIGHT {
-                break;
-            }
-            self.capture_thumbnail(window_id, &overlay);
-        }
-    }
-
-    fn capture_thumbnail(&mut self, window_id: u32, overlay: &Overlay) {
-        let scale = overlay.backing_scale();
-        let request = CaptureRequest {
-            window_id,
-            kind: CaptureKind::Thumbnail,
-            full_desktop: false,
-            pixel_width: pixel_length(overlay::ICON_THUMBNAIL_PIXEL_WIDTH, scale),
-            pixel_height: pixel_length(overlay::ICON_THUMBNAIL_PIXEL_HEIGHT, scale),
-        };
-        match self.preview.capture(&request) {
-            Ok(()) => self.thumbnails_in_flight += 1,
-            Err(_) => {
-                let _ = self.thumbnails_unavailable.insert(window_id);
-            }
-        }
-    }
-
-    pub fn thumbnail_captured(&mut self, window_id: u32, result: MainThreadValue<PreviewResult>) {
-        self.thumbnails_in_flight = self.thumbnails_in_flight.saturating_sub(1);
-        if !self.session.is_visible() {
-            return;
-        }
-        match result.0 {
-            PreviewResult::Image(image) => {
-                let ns_image =
-                    NSImage::initWithCGImage_size(NSImage::alloc(), &image, NSSize::ZERO);
-                self.thumbnails.insert(window_id, ns_image);
-            }
-            PreviewResult::Unavailable(_) => {
-                let _ = self.thumbnails_unavailable.insert(window_id);
-            }
-        }
-        self.redraw();
+        PreviewModel { image, message }
     }
 
     fn start_preview_timer(&mut self) {
@@ -1519,7 +1083,7 @@ impl App {
     }
 
     fn request_preview_capture(&mut self) {
-        if !self.session.is_visible() || !self.settings.appearance.preview || self.preview_in_flight
+        if !self.switcher.is_active() || !self.settings.appearance.preview || self.preview_in_flight
         {
             return;
         }
@@ -1527,9 +1091,13 @@ impl App {
             return;
         };
         let Some(window_id) = self
+            .switcher
             .selected_window()
             .and_then(|handle| u32::try_from(handle).ok())
         else {
+            return;
+        };
+        let Some((width, height)) = self.shown.and_then(|shown| shown.layout.preview_size()) else {
             return;
         };
         if !permissions::screen_recording_granted() {
@@ -1539,22 +1107,11 @@ impl App {
             self.preview.refresh_content();
             return;
         }
-        if self.icon_mode() {
-            // Icon mode has no preview well; the timer keeps the selected row's thumbnail live
-            // instead, one capture at a time.
-            if self.thumbnails_in_flight == 0 && !self.thumbnails_unavailable.contains(&window_id) {
-                self.capture_thumbnail(window_id, &overlay);
-            }
-            return;
-        }
-        let area = overlay::preview_rect(overlay.content_size(), self.layout());
         let scale = overlay.backing_scale();
         let request = CaptureRequest {
             window_id,
-            kind: CaptureKind::Preview,
-            full_desktop: self.settings.appearance.full_desktop_preview,
-            pixel_width: pixel_length(area.width, scale),
-            pixel_height: pixel_length(area.height, scale),
+            pixel_width: pixel_length(width, scale),
+            pixel_height: pixel_length(height, scale),
         };
         match self.preview.capture(&request) {
             Ok(()) => self.preview_in_flight = true,
@@ -1574,7 +1131,7 @@ impl App {
         content: MainThreadValue<Option<Retained<SCShareableContent>>>,
     ) {
         self.preview.set_content(content.0);
-        if self.session.is_visible() {
+        if self.switcher.is_active() {
             self.request_preview_capture();
         }
     }
@@ -1582,9 +1139,10 @@ impl App {
     pub fn preview_captured(&mut self, window_id: u32, result: MainThreadValue<PreviewResult>) {
         self.preview_in_flight = false;
         let selected = self
+            .switcher
             .selected_window()
             .and_then(|handle| u32::try_from(handle).ok());
-        if !self.session.is_visible() || selected != Some(window_id) {
+        if !self.switcher.is_active() || selected != Some(window_id) {
             return;
         }
         match result.0 {
@@ -1605,180 +1163,151 @@ impl App {
         self.redraw();
     }
 
-    /// Everything a pointer event needs to know about the current frame.
-    fn pointer_context(&self, overlay: &Overlay) -> PointerContext {
-        let size = self.panel_size(overlay);
-        let layout = self.layout();
-        let icon_frame = self.icon_mode().then(|| self.icon_frame(size, layout));
-        let window = icon_frame
-            .as_ref()
-            .map_or_else(|| self.row_window(size, layout), |frame| frame.rows);
-        let selected_row = icon_frame.as_ref().map_or_else(
-            || {
-                self.session
-                    .switcher()
-                    .selected_visible_index()
-                    .and_then(|index| index.checked_sub(window.start))
-                    .filter(|row| *row < window.rows)
-            },
-            |frame| frame.selected_row,
-        );
-        PointerContext {
-            size,
-            layout,
-            icon_frame,
-            window,
-            selected_row,
-            panel_open: self.action_panel.is_some(),
-        }
-    }
-
     fn handle_view_event(&mut self, event: ViewEvent) {
-        if !self.session.is_visible() {
+        if !self.switcher.is_active() {
             return;
         }
-        let Some(overlay) = self.overlay.clone() else {
+        let Some(shown) = self.shown else {
             return;
         };
-        let context = self.pointer_context(&overlay);
         match event {
-            ViewEvent::MouseMoved(x, y) => self.handle_mouse_moved(&context, x, y),
-            ViewEvent::MouseDown(x, y) => {
-                let hit = context.hit_test(x, y);
-                let position = hit.and_then(|hit| context.position_of(hit));
-                self.handle_mouse_down(hit, position, context.window.rows);
-            }
-            ViewEvent::MouseUp(x, y) => self.handle_mouse_up(context.hit_test(x, y)),
+            ViewEvent::MouseMoved(x, y) => self.handle_mouse_moved(shown, shown.hit(x, y)),
+            ViewEvent::MouseDown(x, y) => self.handle_mouse_down(shown, shown.hit(x, y)),
+            ViewEvent::MouseUp(x, y) => self.handle_mouse_up(shown.hit(x, y)),
             ViewEvent::RightMouseDown(x, y) => {
-                if let Some(hit @ Hit::Row(_)) = context.hit_test(x, y)
-                    && let Some(position) = context.position_of(hit)
-                {
-                    let icon_mode = context.icon_frame.is_some();
-                    let switcher = self.session.switcher_mut();
-                    if !icon_mode {
-                        switcher.pin_visible_range(context.window.rows);
-                    }
-                    if switcher.select_visible_position(position) {
-                        self.redraw();
-                    }
-                    if self.session.open_context_menu() {
-                        run_later(move || {
-                            let command = overlay.show_context_menu(x, y);
-                            let _ = with_app(|app| app.finish_context_menu(command));
-                        });
-                    }
-                }
+                self.handle_right_mouse_down(shown, shown.hit(x, y), x, y);
             }
             ViewEvent::MouseExited => {
+                self.hovered_tile = None;
+                self.cancel_dwell();
                 if self.close_button.hovered {
                     self.close_button.hovered = false;
                     self.redraw();
                 }
             }
-            ViewEvent::Scroll(delta) => self.apply_action(InputAction::MouseWheel(delta)),
+            ViewEvent::Scroll(step) => self.apply_action(Action::StepWindow(step)),
         }
     }
 
-    fn handle_mouse_moved(&mut self, context: &PointerContext, x: f64, y: f64) {
-        let hit = context.hit_test(x, y);
+    /// Selects the app at `app` and its window `window`, or its last-used window.
+    fn select(&mut self, app: usize, window: Option<usize>) {
+        let before = self.switcher.selected_target();
+        if self.switcher.select(app, window) {
+            self.selection_changed(before);
+        }
+    }
+
+    fn handle_mouse_moved(&mut self, shown: Shown, hit: Option<Hit>) {
         let hovered = matches!(hit, Some(Hit::CloseButton(_)));
-        let mut changed = hovered != self.close_button.hovered;
+        let close_changed = hovered != self.close_button.hovered;
         self.close_button.hovered = hovered;
-        if let Some(Hit::ActionRow(index)) = hit
-            && self.action_panel.is_some_and(|selected| selected != index)
-        {
-            self.action_panel = Some(index);
-            changed = true;
-        }
-        let over_unselected = match hit {
-            Some(Hit::Row(row)) => context.selected_row != Some(row),
-            Some(Hit::RailApp(slot)) => context
-                .icon_frame
-                .as_ref()
-                .is_some_and(|frame| frame.selected_app != Some(frame.rail.start + slot)),
-            _ => false,
+        let tile = match hit {
+            Some(Hit::Tile(slot)) => Some(shown.tile_start + slot),
+            _ => None,
         };
-        if over_unselected
-            && self.settings.general.mouse_over_selection
-            && !self.close_button.pressed
-            && let Some(position) = hit.and_then(|hit| context.position_of(hit))
-        {
-            let switcher = self.session.switcher_mut();
-            if context.icon_frame.is_none() {
-                switcher.pin_visible_range(context.window.rows);
-            }
-            if switcher.select_visible_position(position) {
-                changed = true;
-                self.request_preview_capture();
+        if tile != self.hovered_tile {
+            self.hovered_tile = tile;
+            self.cancel_dwell();
+            if let Some(app) = tile
+                && Some(app) != self.switcher.selected_app_index()
+            {
+                self.dwell_timer = Some(schedule(TILE_DWELL_SECONDS, move |state| {
+                    state.finish_dwell(app);
+                }));
             }
         }
-        if changed {
+        let selected_app = self.switcher.selected_app_index().unwrap_or_default();
+        if let Some(Hit::Row(row)) = hit
+            && !self.close_button.pressed
+            && shown.selected_row != Some(row)
+        {
+            self.select(selected_app, Some(shown.row_start + row));
+        } else if close_changed {
             self.redraw();
         }
     }
 
-    /// `position` is the one-based visible position the hit stands for, when it names a window.
-    fn handle_mouse_down(
-        &mut self,
-        hit: Option<Hit>,
-        position: Option<usize>,
-        visible_rows: usize,
-    ) {
+    fn finish_dwell(&mut self, app: usize) {
+        self.dwell_timer = None;
+        if self.switcher.is_active() && self.hovered_tile == Some(app) {
+            self.select(app, None);
+        }
+    }
+
+    fn cancel_dwell(&mut self) {
+        if let Some(timer) = self.dwell_timer.take() {
+            timer.invalidate();
+        }
+    }
+
+    fn handle_mouse_down(&mut self, shown: Shown, hit: Option<Hit>) {
         match hit {
-            Some(Hit::ActionsButton) => self.apply_action(InputAction::ToggleActionPanel),
-            Some(Hit::ActionRow(index)) => self.run_action(index),
             Some(Hit::CloseButton(_)) => {
                 self.close_button.pressed = true;
                 self.redraw();
             }
-            Some(Hit::Row(row)) => {
-                self.pressed_row = Some(row);
-                self.action_panel = None;
-                let icon_mode = self.icon_mode();
-                let switcher = self.session.switcher_mut();
-                if !icon_mode {
-                    switcher.pin_visible_range(visible_rows);
-                }
-                if position.is_some_and(|position| switcher.select_visible_position(position)) {
-                    self.redraw();
-                    self.request_preview_capture();
-                }
+            Some(Hit::Tile(slot)) => {
+                self.pressed = hit;
+                self.cancel_dwell();
+                self.select(shown.tile_start + slot, None);
             }
-            Some(Hit::RailApp(_)) => {
-                // Choosing an app shows its windows; the switch itself waits for a row click.
-                self.action_panel = None;
-                if position.is_some_and(|position| {
-                    self.session
-                        .switcher_mut()
-                        .select_visible_position(position)
-                }) {
-                    self.redraw();
-                    self.request_preview_capture();
-                }
+            Some(Hit::Row(row)) => {
+                self.pressed = hit;
+                let app = self.switcher.selected_app_index().unwrap_or_default();
+                self.select(app, Some(shown.row_start + row));
             }
             None => {}
         }
     }
 
     fn handle_mouse_up(&mut self, hit: Option<Hit>) {
+        let pressed = self.pressed.take();
         if self.close_button.pressed {
             self.close_button.pressed = false;
             if matches!(hit, Some(Hit::CloseButton(_))) {
-                self.apply_action(InputAction::CloseSelected);
+                self.apply_action(Action::Command(WindowCommand::Close));
             }
             self.redraw();
-        } else if let (Some(Hit::Row(row)), Some(pressed)) = (hit, self.pressed_row)
-            && row == pressed
-        {
-            self.apply_action(InputAction::ActivateSelected);
+        } else if hit.is_some() && hit == pressed {
+            self.apply_action(Action::Activate);
         }
-        self.pressed_row = None;
+    }
+
+    fn handle_right_mouse_down(&mut self, shown: Shown, hit: Option<Hit>, x: f64, y: f64) {
+        let on_window = match hit {
+            Some(Hit::Row(row) | Hit::CloseButton(row)) => {
+                let app = self.switcher.selected_app_index().unwrap_or_default();
+                self.select(app, Some(shown.row_start + row));
+                true
+            }
+            Some(Hit::Tile(slot)) => {
+                self.cancel_dwell();
+                self.select(shown.tile_start + slot, None);
+                false
+            }
+            None => return,
+        };
+        let window = on_window && self.switcher.selected_window().is_some();
+        let app_name = self
+            .switcher
+            .selected_app()
+            .map(|app| app.name.clone())
+            .unwrap_or_default();
+        let Some(overlay) = self.overlay.clone() else {
+            return;
+        };
+        if self.switcher.open_context_menu() {
+            run_later(move || {
+                let command = overlay.show_context_menu(x, y, window, &app_name);
+                let _ = with_app(|app| app.finish_context_menu(command));
+            });
+        }
     }
 
     fn finish_context_menu(&mut self, command: Option<WindowCommand>) {
-        if let SwitcherEffect::Execute(request) = self.session.finish_context_menu(command) {
-            self.execute_command(request);
-        }
+        let before = self.switcher.selected_target();
+        let effect = self.switcher.finish_context_menu(command);
+        self.apply_effect(effect, before);
     }
 
     fn show_settings(&mut self) {
@@ -1808,22 +1337,17 @@ impl App {
     }
 
     fn apply_settings(&mut self, settings: Settings) {
-        let icon_mode_changed = settings.appearance.icon_mode != self.settings.appearance.icon_mode;
         self.settings = settings;
         self.hotkey_settings = hotkey_settings(&self.settings);
-        self.session
-            .update_settings(session_settings(&self.settings));
         self.save_settings();
-        if self.session.is_visible() {
-            if let Some(overlay) = self.overlay.clone() {
+        if self.switcher.is_active() {
+            if let Some(overlay) = &self.overlay {
                 let theme = self.resolved_theme();
-                overlay.set_theme(theme, Self::tokens(theme));
-                if icon_mode_changed {
-                    let size = self.icon_mode().then(|| self.panel_size(&overlay));
-                    overlay.show_on_cursor_screen(size);
-                }
+                overlay.set_theme(theme, SwitcherTokens::new(theme));
             }
+            self.start_preview_timer();
             self.redraw();
+            self.request_preview_capture();
         }
     }
 
@@ -1859,7 +1383,7 @@ impl App {
 
     fn shutdown(&mut self) {
         self.event_tap = None;
-        self.clear_flash();
+        self.cancel_dwell();
         if let Some(timer) = self.preview_timer.take() {
             timer.invalidate();
         }
@@ -1955,99 +1479,9 @@ fn pixel_length(points: f64, scale: f64) -> usize {
     (points * scale).round().max(1.0) as usize
 }
 
-fn session_settings(settings: &Settings) -> SwitcherSessionSettings {
-    SwitcherSessionSettings {
-        typed_search: settings.general.typed_search,
-        release_alt_switches: settings.general.release_alt_switches,
-        release_right_button_switches: settings.general.release_right_button_switches,
-    }
-}
-
 fn hotkey_settings(settings: &Settings) -> HotkeySettings {
     HotkeySettings {
         command_tab: settings.general.replace_alt_tab,
         option_tab: settings.general.replace_win_tab,
-        typed_search: settings.general.typed_search,
-        right_button_wheel_switching: settings.general.right_button_wheel_switching,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{IconApp, IconFrame, RowWindow, centered_range, row_window};
-
-    #[test]
-    fn icon_frames_map_pane_rows_and_rail_slots_to_visible_positions() {
-        let frame = IconFrame {
-            apps: vec![
-                IconApp {
-                    pid: 1,
-                    name: "One".to_owned(),
-                    windows: vec![0, 3],
-                },
-                IconApp {
-                    pid: 2,
-                    name: "Two".to_owned(),
-                    windows: vec![1, 2, 4],
-                },
-            ],
-            rail: RowWindow {
-                start: 1,
-                rows: 1,
-                hidden_above: 1,
-                hidden_below: 0,
-            },
-            selected_app: Some(1),
-            windows: vec![1, 2, 4],
-            rows: RowWindow {
-                start: 1,
-                rows: 2,
-                hidden_above: 1,
-                hidden_below: 0,
-            },
-            selected_row: Some(0),
-        };
-
-        assert_eq!(frame.visible_index(0), Some(2));
-        assert_eq!(frame.visible_index(1), Some(4));
-        assert_eq!(frame.visible_index(2), None);
-        assert_eq!(frame.first_window_of_slot(0), Some(1));
-        assert_eq!(frame.first_window_of_slot(1), None);
-    }
-
-    #[test]
-    fn centered_ranges_keep_the_selection_in_view_and_stop_at_the_ends() {
-        assert_eq!(centered_range(0, 10, 4), 0..4);
-        assert_eq!(centered_range(5, 10, 4), 3..7);
-        assert_eq!(centered_range(9, 10, 4), 6..10);
-        assert_eq!(centered_range(1, 2, 4), 0..2);
-        assert_eq!(centered_range(0, 0, 4), 0..0);
-    }
-
-    #[test]
-    fn lists_that_fit_show_every_row_without_an_overflow_slot() {
-        assert_eq!(
-            row_window(5, 8, |rows| 0..5.min(rows)),
-            RowWindow {
-                start: 0,
-                rows: 8,
-                hidden_above: 0,
-                hidden_below: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn overflowing_lists_give_up_one_row_for_the_note_and_count_the_rest() {
-        assert_eq!(
-            row_window(20, 8, |rows| 3..3 + rows),
-            RowWindow {
-                start: 3,
-                rows: 7,
-                hidden_above: 3,
-                hidden_below: 10,
-            }
-        );
-        assert_eq!(row_window(3, 1, |rows| 1..1 + rows).rows, 1);
     }
 }
