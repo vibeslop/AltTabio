@@ -1,22 +1,25 @@
 #!/bin/zsh
-# Creates the self-signed "AltTabio Code Signing" certificate in the login keychain, or restores it
-# from the backup that creating it wrote.
+# Creates the certificates that sign AltTabio.app.
 #
-# Usage: scripts/mac/make-signing-cert.sh              create the certificate and its backup
-#        scripts/mac/make-signing-cert.sh --import FILE restore the certificate from a backup
+# Usage: scripts/mac/make-signing-cert.sh                a personal certificate for your own builds
+#        scripts/mac/make-signing-cert.sh --release      the release certificate, once per project
+#        scripts/mac/make-signing-cert.sh --import FILE  the release certificate from its backup
 #
-# macOS remembers Accessibility and Screen Recording grants per code signature. A stable
-# certificate keeps them across rebuilds and across releases, so the permissions only have to be
-# granted once. Every published release must be signed with the same certificate: on a new Mac,
-# restore the backup with --import. A release signed with a new certificate makes every user grant
-# both permissions again.
+# macOS ties Accessibility and Screen Recording grants to the certificate an app is signed with.
+# A personal certificate keeps your own grants across rebuilds. Releases all carry one release
+# certificate, pinned in scripts/mac/release-certificate.sha1, so users keep their grants across
+# updates; the release workflow signs with it from the secrets of the repository's "release"
+# environment, and --release puts it there.
 #
-# Whoever holds the private key can sign an app that macOS treats as AltTabio, grants included,
-# so the backup is encrypted with a password you choose.
+# Whoever holds the release key can sign an app that macOS treats as AltTabio, grants included,
+# so it stays out of keychains: --release writes a backup encrypted with a password you choose,
+# for the maintainers' password vault, and --import is for packaging a release by hand.
 set -euo pipefail
 
-name="AltTabio Code Signing"
+cd "$(dirname "$0")/../.."
 keychain="$HOME/Library/Keychains/login.keychain-db"
+pin_file=scripts/mac/release-certificate.sha1
+environment=release
 # The system LibreSSL writes a PKCS#12 file the keychain can import. Homebrew's OpenSSL 3, often
 # first on PATH, needs -legacy for that, and LibreSSL rejects the flag.
 openssl=/usr/bin/openssl
@@ -26,20 +29,6 @@ fail() {
     exit 1
 }
 
-# Read in full before matching: grep -q in a pipe exits at its match, and pipefail would count
-# the writer it cut off as a failure.
-identities=$(security find-identity -p codesigning "$keychain")
-if [[ "$identities" == *"\"$name\""* ]]; then
-    print -- "The '$name' certificate is already in the login keychain."
-    if [[ "$(security find-identity -v -p codesigning "$keychain")" != *"\"$name\""* ]]; then
-        print -- "It is not trusted for code signing, so builds cannot use it. Delete it in"
-        print -- "Keychain Access and run this again."
-        exit 1
-    fi
-    print -- "To replace it, delete it in Keychain Access first."
-    exit 0
-fi
-
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 # zsh skips the exit trap when a signal ends it, which would leave the unencrypted private key
@@ -48,16 +37,78 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# Writes a new key and a self-signed code-signing certificate named $1 to $work.
+make_certificate() {
+    cat >"$work/cert.cnf" <<CONF
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = $1
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CONF
+    # Twenty years: codesign stops offering an expired certificate, and replacing the release one
+    # would cost every user their grants.
+    $openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -config "$work/cert.cnf" \
+        -keyout "$work/key.pem" -out "$work/cert.pem" 2>"$work/openssl.log" ||
+        fail "openssl could not create the certificate: $(<"$work/openssl.log")"
+}
+
+# Packs the key and certificate in $work into the PKCS#12 file $1, named $2, under the password
+# in ALTTABIO_P12_PASSWORD.
+export_p12() {
+    $openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -name "$2" \
+        -passout env:ALTTABIO_P12_PASSWORD -out "$1" 2>"$work/openssl.log" ||
+        fail "openssl could not write $1: $(<"$work/openssl.log")"
+}
+
+# The SHA-1 hash of the PEM certificate $1, as codesign and security print it.
+fingerprint() {
+    $openssl x509 -in "$1" -outform DER | shasum -a 1 | awk '{ print toupper($1) }'
+}
+
+# Read in full before matching: grep -q in a pipe exits at its match, and pipefail would count
+# the writer it cut off as a failure.
+identities=$(security find-identity -p codesigning "$keychain")
+
 case "${1:-}" in
-    --import)
-        backup=${2:-}
-        [[ -f "$backup" ]] || fail "Usage: $0 --import <backup.p12>"
-        read -rs "password?Password of $backup: "
-        print
-        ;;
     "")
-        backup=$HOME/AltTabio-Code-Signing.p12
-        [[ ! -e "$backup" ]] || fail "$backup already exists; restore it with --import, or move it away."
+        if [[ "$identities" == *'"AltTabio Code Signing"'* ]]; then
+            print -- "Your 'AltTabio Code Signing' certificate is already in the login keychain."
+            exit 0
+        fi
+        make_certificate "AltTabio Code Signing"
+        # The file only carries the key into the keychain, so a random password does.
+        password=$($openssl rand -hex 16)
+        export ALTTABIO_P12_PASSWORD=$password
+        export_p12 "$work/personal.p12" "AltTabio Code Signing"
+        security import "$work/personal.p12" -k "$keychain" -f pkcs12 -P "$password" \
+            -T /usr/bin/codesign >/dev/null
+        print -- "Created your 'AltTabio Code Signing' certificate. scripts/mac/build-app.sh signs with"
+        print -- "it, so macOS keeps AltTabio's permissions across your builds. If a build asks"
+        print -- "whether codesign may use the key, choose Always Allow."
+        ;;
+
+    --release)
+        if [[ -f "$pin_file" ]]; then
+            fail "$pin_file already pins the release certificate, and its backup is in the
+maintainers' vault. A new one would make every user grant Accessibility and Screen Recording
+again."
+        fi
+        backup=$HOME/AltTabio-Release-Certificate.p12
+        [[ ! -e "$backup" ]] || fail "$backup already exists; move it away first."
+        # Everything the certificate needs is checked before it exists, so a failure here leaves
+        # nothing half made.
+        command -v gh >/dev/null || fail "The GitHub CLI stores the certificate: brew install gh"
+        repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) ||
+            fail "gh cannot see this repository; sign in with gh auth login."
+        gh api "repos/$repo/environments/$environment" >/dev/null 2>&1 ||
+            fail "$repo has no '$environment' environment for the certificate to go to."
+
         print -- "The backup at $backup is encrypted with a password; it protects the private key."
         read -rs "password?Backup password: "
         print
@@ -65,50 +116,56 @@ case "${1:-}" in
         print
         [[ -n "$password" ]] || fail "The password is empty."
         [[ "$password" == "$again" ]] || fail "The passwords differ."
-        cat > "$work/cert.cnf" <<'CONF'
-[req]
-distinguished_name = dn
-x509_extensions = ext
-prompt = no
-[dn]
-CN = AltTabio Code Signing
-[ext]
-basicConstraints = critical,CA:false
-keyUsage = critical,digitalSignature
-extendedKeyUsage = critical,codeSigning
-CONF
-        # Twenty years: codesign stops offering an expired certificate, and its replacement would
-        # cost every user their grants.
-        $openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -config "$work/cert.cnf" \
-            -keyout "$work/key.pem" -out "$work/cert.pem" 2>"$work/openssl.log" ||
-            fail "openssl could not create the certificate: $(<"$work/openssl.log")"
-        ALTTABIO_P12_PASSWORD=$password $openssl pkcs12 -export -inkey "$work/key.pem" \
-            -in "$work/cert.pem" -name "$name" -passout env:ALTTABIO_P12_PASSWORD \
-            -out "$backup" 2>"$work/openssl.log" ||
-            fail "openssl could not write the backup: $(<"$work/openssl.log")"
+        export ALTTABIO_P12_PASSWORD=$password
+
+        make_certificate "AltTabio Release"
+        export_p12 "$backup" "AltTabio Release"
         chmod 600 "$backup"
+        release=$(fingerprint "$work/cert.pem")
+        print -- "$release" >"$pin_file"
+        print -- ""
+        print -- "Created the release certificate $release."
+        print -- "  $pin_file pins it: commit that file."
+        if base64 -i "$backup" |
+            gh secret set MACOS_RELEASE_CERTIFICATE --env "$environment" --repo "$repo" &&
+            print -rn -- "$password" |
+            gh secret set MACOS_RELEASE_CERTIFICATE_PASSWORD --env "$environment" --repo "$repo"
+        then
+            print -- "  The '$environment' environment of $repo holds it for the release workflow."
+        else
+            print -- "  It did not reach the '$environment' environment. Store it by hand:"
+            print -- "    base64 -i $backup | gh secret set MACOS_RELEASE_CERTIFICATE --env $environment"
+            print -- "    gh secret set MACOS_RELEASE_CERTIFICATE_PASSWORD --env $environment"
+        fi
+        print -- "  $backup is its backup: put the file and its password in the"
+        print -- "  maintainers' password vault, then delete it here."
         ;;
+
+    --import)
+        backup=${2:-}
+        [[ -f "$backup" ]] || fail "Usage: $0 --import <backup.p12>"
+        [[ -f "$pin_file" ]] || fail "$pin_file pins no release certificate yet."
+        release=$(<"$pin_file")
+        if [[ "$identities" == *"$release"* ]]; then
+            print -- "The release certificate is already in the login keychain."
+            exit 0
+        fi
+        read -rs "password?Password of $backup: "
+        print
+        export ALTTABIO_P12_PASSWORD=$password
+        $openssl pkcs12 -in "$backup" -clcerts -nokeys -passin env:ALTTABIO_P12_PASSWORD \
+            -out "$work/cert.pem" 2>"$work/openssl.log" ||
+            fail "Could not open $backup; is the password right? $(<"$work/openssl.log")"
+        found=$(fingerprint "$work/cert.pem")
+        [[ "$found" == "$release" ]] ||
+            fail "$backup holds certificate $found, not the release certificate $release."
+        security import "$backup" -k "$keychain" -f pkcs12 -P "$password" -T /usr/bin/codesign \
+            >/dev/null
+        print -- "The release certificate is in the login keychain; scripts/mac/build-app.sh and"
+        print -- "scripts/mac/package.sh sign with it."
+        ;;
+
     *)
-        fail "Usage: $0 [--import <backup.p12>]"
+        fail "Usage: $0 [--release | --import <backup.p12>]"
         ;;
 esac
-
-ALTTABIO_P12_PASSWORD=$password $openssl pkcs12 -in "$backup" -clcerts -nokeys \
-    -passin env:ALTTABIO_P12_PASSWORD -out "$work/cert.pem" 2>"$work/openssl.log" ||
-    fail "Could not open $backup; is the password right? $(<"$work/openssl.log")"
-security import "$backup" -k "$keychain" -f pkcs12 -P "$password" -T /usr/bin/codesign
-# codesign only offers the certificate once it is trusted for code signing; macOS asks for the
-# login password once for this step.
-security add-trusted-cert -p codeSign -k "$keychain" "$work/cert.pem"
-
-print -- "The '$name' certificate is in the login keychain; scripts/mac/build-app.sh uses it."
-# `security set-key-partition-list` could grant this up front, but the keychain labels every
-# imported key "Imported Private Key", so it cannot single this one out and would open all of
-# them to Apple's command-line tools.
-print -- "The first build asks whether codesign may use the key: enter the login password and"
-print -- "choose Always Allow."
-if [[ "${1:-}" != --import ]]; then
-    print -- ""
-    print -- "Store the backup and its password somewhere safe, such as a password manager, then"
-    print -- "delete $backup. Every release must be signed with this certificate."
-fi
