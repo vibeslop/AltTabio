@@ -323,6 +323,21 @@ pub fn scroll_into_view(start: usize, selected: usize, total: usize, shown: usiz
     }
 }
 
+/// The note in the slot under `shown` rows drawn from `start` out of `total`. It sits below the
+/// rows, so it counts the windows below them; once the list has scrolled to its end, every
+/// hidden window is above.
+#[must_use]
+pub fn more_note(total: usize, start: usize, shown: usize) -> Option<String> {
+    let below = total.saturating_sub(start + shown);
+    if below > 0 {
+        Some(format!("{below} more"))
+    } else if start > 0 {
+        Some(format!("{start} more above"))
+    } else {
+        None
+    }
+}
+
 pub struct Tile {
     pub name: String,
     pub icon: Option<Retained<NSImage>>,
@@ -349,7 +364,8 @@ pub struct FrameModel {
     pub rows: Vec<Row>,
     /// Drawn where the rows go when the selected app has none.
     pub empty_note: Option<String>,
-    /// "4 more", in the slot after the last row when the list scrolls.
+    /// "4 more", or "4 more above" at the end of the list, in the slot after the last row when
+    /// the list scrolls.
     pub more_note: Option<String>,
     pub close_state: CloseButtonVisualState,
     /// Present when previews are on.
@@ -1240,6 +1256,14 @@ mod tests {
         assert_eq!(scroll_into_view(4, 2, 10, 5), 2);
         assert_eq!(scroll_into_view(8, 9, 10, 5), 5);
         assert_eq!(scroll_into_view(3, 1, 2, 5), 0);
+    }
+
+    #[test]
+    fn the_more_note_counts_the_windows_on_the_side_they_are_hidden() {
+        assert_eq!(more_note(10, 0, 7).as_deref(), Some("3 more"));
+        assert_eq!(more_note(10, 2, 7).as_deref(), Some("1 more"));
+        assert_eq!(more_note(10, 3, 7).as_deref(), Some("3 more above"));
+        assert_eq!(more_note(5, 0, 5), None);
     }
 
     #[test]

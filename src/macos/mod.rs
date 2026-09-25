@@ -48,7 +48,7 @@ use objc2_foundation::{
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{
     CloseButtonVisualState, FrameModel, Hit, Layout, Overlay, PreviewModel, Row, Tile, ViewEvent,
-    WindowState, scroll_into_view,
+    WindowState, more_note, scroll_into_view,
 };
 use preview::{CaptureRequest, PreviewResult, PreviewSource};
 use settings_window::{SettingsEvent, SettingsWindow};
@@ -1144,9 +1144,9 @@ impl App {
                 selected: selected_window == Some(index),
             })
             .collect::<Vec<_>>();
-        let hidden = windows.len() - rows.len();
-        let more_note =
-            (hidden > 0 && rows.len() < layout.row_slots).then(|| format!("{hidden} more"));
+        let more_note = (rows.len() < layout.row_slots)
+            .then(|| more_note(windows.len(), self.row_start, rows.len()))
+            .flatten();
         let empty_note = windows.is_empty().then(|| "No open windows".to_owned());
         let selected_row = selected_window
             .and_then(|index| index.checked_sub(self.row_start))
