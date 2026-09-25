@@ -42,6 +42,11 @@ fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# zsh skips the exit trap when a signal ends it, which would leave the unencrypted private key
+# behind; exiting from the signal runs the trap.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 case "${1:-}" in
     --import)
