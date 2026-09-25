@@ -18,10 +18,14 @@ impl SettingsStore {
     pub fn load_adjacent() -> Result<(Self, Settings), String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
-        Self::load_from(executable.with_file_name("AltTabio.ini"))
+        Self::load_from(
+            executable.with_file_name("AltTabio.ini"),
+            &Settings::default(),
+        )
     }
 
-    pub fn load_from(path: PathBuf) -> Result<(Self, Settings), String> {
+    /// Loads the file at `path`, with `defaults` for whatever it does not set.
+    pub fn load_from(path: PathBuf, defaults: &Settings) -> Result<(Self, Settings), String> {
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -33,7 +37,7 @@ impl SettingsStore {
             }
         };
         let document = SettingsDocument::parse(&contents);
-        let settings = document.settings();
+        let settings = document.settings_over(defaults);
         Ok((Self { path, document }, settings))
     }
 
