@@ -8,12 +8,19 @@
 #
 # Users keep their Accessibility and Screen Recording grants across updates only while every
 # release is signed with the same certificate. scripts/mac/release-certificate.sha1 names it by the
-# SHA-1 hash macOS records for it. The first release writes that file; later releases refuse any
-# other certificate, including a new one that carries the same name.
+# SHA-1 hash macOS records for it, and anything signed with another certificate is refused. The
+# release workflow runs this script on a version tag; by hand, it needs the release certificate
+# imported with scripts/mac/make-signing-cert.sh --import.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 pin_file=scripts/mac/release-certificate.sha1
+if [[ ! -f "$pin_file" ]]; then
+    print -u2 -- "$pin_file pins no release certificate yet. Create it once with"
+    print -u2 -- "  scripts/mac/make-signing-cert.sh --release"
+    exit 1
+fi
+release=$(<"$pin_file")
 scripts/mac/build-app.sh --universal
 
 app=target/mac/AltTabio.app
@@ -24,30 +31,17 @@ trap 'rm -rf "$work"' EXIT
 # Writes the signing certificate to certificate0; an ad-hoc signature has none, and neither does a
 # bundle codesign cannot read, which the check below reports the same way.
 codesign -d --extract-certificates="$work/certificate" "$app" 2>/dev/null || true
-if [[ ! -s "$work/certificate0" ]]; then
-    print -u2 -- "$app is signed ad hoc, not with the release certificate."
-    if [[ -f "$pin_file" ]]; then
-        print -u2 -- "Restore the certificate from its backup:"
-        print -u2 -- "  scripts/mac/make-signing-cert.sh --import <backup.p12>"
-    else
-        print -u2 -- "Create it once with scripts/mac/make-signing-cert.sh."
-    fi
-    exit 1
+fingerprint=
+if [[ -s "$work/certificate0" ]]; then
+    fingerprint=$(shasum -a 1 <"$work/certificate0" | awk '{ print toupper($1) }')
 fi
-fingerprint=$(shasum -a 1 <"$work/certificate0" | awk '{ print toupper($1) }')
-
-if [[ ! -f "$pin_file" ]]; then
-    print -- "$fingerprint" >"$pin_file"
-    print -- "This is the first release, so $pin_file now pins its certificate:"
-    print -- "  $fingerprint"
-    print -- "Commit the file; later releases refuse any other certificate."
-elif [[ "$(<"$pin_file")" != "$fingerprint" ]]; then
-    print -u2 -- "$app is signed with a certificate that releases do not use:"
-    print -u2 -- "  this build  $fingerprint"
-    print -u2 -- "  releases    $(<"$pin_file")  ($pin_file)"
+if [[ "$fingerprint" != "$release" ]]; then
+    print -u2 -- "$app is not signed with the release certificate:"
+    print -u2 -- "  this build  ${fingerprint:-ad hoc}"
+    print -u2 -- "  releases    $release  ($pin_file)"
     print -u2 -- "A release with another certificate makes every user grant Accessibility and Screen"
-    print -u2 -- "Recording again. Delete the 'AltTabio Code Signing' certificate in Keychain Access"
-    print -u2 -- "and restore the release one from its backup:"
+    print -u2 -- "Recording again. Push the version tag to have the release workflow build it, or"
+    print -u2 -- "import the certificate from its backup in the maintainers' vault:"
     print -u2 -- "  scripts/mac/make-signing-cert.sh --import <backup.p12>"
     exit 1
 fi
