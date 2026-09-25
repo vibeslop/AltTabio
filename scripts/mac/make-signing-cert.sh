@@ -16,8 +16,18 @@ fail() {
     exit 1
 }
 
-if security find-identity -v -p codesigning 2>/dev/null | grep -q '"AltTabio Code Signing"'; then
-    echo "The 'AltTabio Code Signing' certificate already exists"
+# Read in full before matching: grep -q in a pipe exits at its match, and pipefail would count
+# the writer it cut off as a failure.
+identities=$(security find-identity -p codesigning "$HOME/Library/Keychains/login.keychain-db")
+if [[ "$identities" == *'"AltTabio Code Signing"'* ]]; then
+    echo "The 'AltTabio Code Signing' certificate is already in the login keychain."
+    valid=$(security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db")
+    if [[ "$valid" != *'"AltTabio Code Signing"'* ]]; then
+        echo "It is not trusted for code signing, so builds cannot use it. Delete it in"
+        echo "Keychain Access and run this again."
+        exit 1
+    fi
+    echo "To replace it, delete it in Keychain Access first."
     exit 0
 fi
 
