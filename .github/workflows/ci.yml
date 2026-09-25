@@ -33,9 +33,14 @@ jobs:
       - name: Verify macOS bundle
         run: |
           test -s target/mac/AltTabio.app/Contents/MacOS/AltTabio
+          test -s target/mac/AltTabio.app/Contents/Resources/LICENSE
+          test -s target/mac/AltTabio.app/Contents/Resources/THIRD_PARTY_LICENSES.md
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch arm64
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch x86_64
-          codesign --verify --deep target/mac/AltTabio.app
+          codesign --verify --deep --strict target/mac/AltTabio.app
+
+      - name: Check the install script
+        run: sh -n docs/install.sh
 
   verify:
     runs-on: windows-latest
