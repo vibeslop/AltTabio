@@ -28,11 +28,13 @@ jobs:
         run: cargo test --quiet
 
       - name: Build macOS app bundle
-        run: scripts/mac/build-app.sh
+        run: scripts/mac/build-app.sh --universal
 
       - name: Verify macOS bundle
         run: |
           test -s target/mac/AltTabio.app/Contents/MacOS/AltTabio
+          lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch arm64
+          lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch x86_64
           codesign --verify --deep target/mac/AltTabio.app
 
   verify:
