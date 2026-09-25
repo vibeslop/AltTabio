@@ -38,11 +38,6 @@ pub struct AppearanceSettings {
     pub visible_borders: bool,
     pub preview: bool,
     pub full_desktop_preview: bool,
-    /// Whether the overlay shows the key hint bar under the list.
-    pub show_hints: bool,
-    /// macOS only: app icons in a rail with the selected app's windows beside them, instead of
-    /// the numbered list and preview.
-    pub icon_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -152,8 +147,6 @@ impl Default for Settings {
                 visible_borders: false,
                 preview: true,
                 full_desktop_preview: false,
-                show_hints: true,
-                icon_mode: false,
             },
             monitor: MonitorSettings {
                 monitor_mode: "CurrentByCursor".to_owned(),
@@ -298,12 +291,6 @@ impl SettingsDocument {
                     "FullDesktopPreview",
                     defaults.appearance.full_desktop_preview,
                 ),
-                show_hints: self.read_bool(
-                    "Appearance",
-                    "ShowHints",
-                    defaults.appearance.show_hints,
-                ),
-                icon_mode: self.read_bool("Appearance", "IconMode", defaults.appearance.icon_mode),
             },
             monitor: MonitorSettings {
                 monitor_mode: self.read_string("Monitor", "Mode", &defaults.monitor.monitor_mode),
@@ -354,8 +341,6 @@ impl SettingsDocument {
                 "FullDesktopPreview={}",
                 settings.appearance.full_desktop_preview
             ),
-            format!("ShowHints={}", settings.appearance.show_hints),
-            format!("IconMode={}", settings.appearance.icon_mode),
             String::new(),
             "[Monitor]".to_owned(),
             format!("Mode={}", settings.monitor.monitor_mode),
@@ -434,6 +419,8 @@ fn is_known(entry: &Entry) -> bool {
         ("Appearance", "VisibleBorders"),
         ("Appearance", "Preview"),
         ("Appearance", "FullDesktopPreview"),
+        // Earlier macOS builds wrote these two. Listing them as known makes a save drop them
+        // instead of carrying them along as unknown keys.
         ("Appearance", "ShowHints"),
         ("Appearance", "IconMode"),
         ("Monitor", "Mode"),
@@ -560,11 +547,23 @@ mod tests {
                         RmbWheelSwitching=true\nMouseOverSelection=true\n\n[Appearance]\n\
                         Icon=Azure\nTheme=Auto\nCompactList=true\nLargeIcons=true\nShowNumbers=true\n\
                         ShowAppNames=false\nVisibleBorders=false\nPreview=true\n\
-                        FullDesktopPreview=true\nShowHints=true\nIconMode=false\n\n[Monitor]\n\
+                        FullDesktopPreview=true\n\n[Monitor]\n\
                         Mode=CurrentByCursor\nUseCurrentMonitorFilter=false\n";
         let document = SettingsDocument::parse(contents);
 
         assert_eq!(document.render(&document.settings()), contents);
+    }
+
+    #[test]
+    fn retired_macos_keys_are_dropped_on_save() {
+        let document =
+            SettingsDocument::parse("[Appearance]\nShowHints=false\nIconMode=true\nTheme=Dark\n");
+
+        let rendered = document.render(&document.settings());
+
+        assert!(!rendered.contains("ShowHints"));
+        assert!(!rendered.contains("IconMode"));
+        assert!(rendered.contains("Theme=Dark"));
     }
 
     #[test]
