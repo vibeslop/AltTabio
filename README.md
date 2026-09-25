@@ -103,6 +103,7 @@ The macOS build lists every window of the selected app, which is what people mis
 | Option+Tab | The same, when "Also open with ⌥ Tab" is on |
 | ` (backtick), Left, Right | Previous or next app |
 | Up, Down | The selected app's windows |
+| 1-9 | Switch to that window of the selected app |
 | Release Cmd, Return, or click | Switch to the selected window, or bring forward an app that has none |
 | W or M while holding Cmd | Close or minimize the selected window |
 | H or Q while holding Cmd | Hide or quit the selected app |
