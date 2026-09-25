@@ -156,6 +156,17 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// The macOS defaults: only ⌘ Tab opens the switcher, as with the system switcher; Option+Tab
+    /// stays one checkbox away.
+    #[must_use]
+    pub fn macos_default() -> Self {
+        let mut settings = Self::default();
+        settings.general.replace_win_tab = false;
+        settings
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Entry {
     section: String,
@@ -213,7 +224,12 @@ impl SettingsDocument {
 
     #[must_use]
     pub fn settings(&self) -> Settings {
-        let defaults = Settings::default();
+        self.settings_over(&Settings::default())
+    }
+
+    /// The stored settings, with `defaults` for every key the file does not set.
+    #[must_use]
+    pub fn settings_over(&self, defaults: &Settings) -> Settings {
         Settings {
             general: GeneralSettings {
                 autostart: self.read_bool("General", "Autostart", defaults.general.autostart),
@@ -469,6 +485,21 @@ mod tests {
         assert!(!settings.appearance.visible_borders);
         assert!(!settings.appearance.full_desktop_preview);
         assert!(settings.general.typed_search);
+    }
+
+    #[test]
+    fn macos_defaults_differ_only_in_option_tab() {
+        let macos = SettingsDocument::parse("").settings_over(&Settings::macos_default());
+
+        assert!(!macos.general.replace_win_tab);
+        assert!(macos.appearance.preview);
+        let mut expected = Settings::default();
+        expected.general.replace_win_tab = false;
+        assert_eq!(macos, expected);
+        // A stored value still wins over either set of defaults.
+        let stored = SettingsDocument::parse("[General]\nReplaceWinTab=true\n")
+            .settings_over(&Settings::macos_default());
+        assert!(stored.general.replace_win_tab);
     }
 
     #[test]

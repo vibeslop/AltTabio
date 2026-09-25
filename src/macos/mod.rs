@@ -162,7 +162,7 @@ pub fn run(arguments: &[OsString]) {
     }
     let path = settings_path();
     let first_start = !path.exists();
-    let (store, settings) = match SettingsStore::load_from(path) {
+    let (store, settings) = match SettingsStore::load_from(path, &Settings::macos_default()) {
         Ok(loaded) => loaded,
         Err(error) => {
             show_fatal_error(mtm, &error);
