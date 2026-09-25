@@ -23,6 +23,8 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 
 ## Installation
 
+### Windows
+
 1. Download the latest Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases).
 2. Extract it to a permanent folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
 3. Run `AltTabio.exe` and accept the Windows administrator prompt.
@@ -32,6 +34,29 @@ AltTabio is distributed as one self-contained executable with no separate runtim
 AltTabio requires administrator privileges for its global input hooks and window-management commands.
 
 Enabling **Autostart** creates a highest-privilege Windows scheduled task that launches the executable from its current location. If a non-elevated process can replace that file, it can gain administrator privileges at the next logon. Move AltTabio to an administrator-writable-only folder before enabling Autostart.
+
+### macOS
+
+AltTabio needs macOS 26 or later. Paste this line into Terminal:
+
+```sh
+curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
+```
+
+The script downloads the latest release, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for its two [permissions](#permissions) and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate.
+
+AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. To install by hand anyway:
+
+1. Download `AltTabio-<version>-macos.zip` from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases) and unzip it.
+2. Move `AltTabio.app` to Applications and open it. When macOS says it could not verify the app, choose **Done**.
+3. Open **System Settings > Privacy & Security**, click **Open Anyway** next to the message about AltTabio, and confirm.
+
+To uninstall, turn off **Launch at login** in the settings, quit AltTabio from its menu bar icon, delete `AltTabio.app`, and remove its settings and permissions:
+
+```sh
+rm -rf ~/Library/Application\ Support/AltTabio
+tccutil reset All com.vibeslop.AltTabio
+```
 
 ## Implementation
 
@@ -115,6 +140,8 @@ scripts/mac/build-app.sh           # only build the bundle
 ```
 
 The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds; macOS asks for the login password once while it marks the certificate as trusted.
+
+`scripts/mac/package.sh` builds a release: a universal bundle for Apple silicon and Intel Macs, zipped as `target/mac/AltTabio-<version>-macos.zip` for the `v<version>` release, which is where the install script looks for it. It refuses a bundle that is not signed with that certificate, because users keep their permissions across updates only while every release carries the same one. Keep a backup of the certificate and its private key.
 
 `ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action to the terminal.
 
