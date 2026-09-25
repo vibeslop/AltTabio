@@ -43,7 +43,7 @@ AltTabio needs macOS 26 or later. Paste this line into Terminal:
 curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The script downloads the latest release, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for its two [permissions](#permissions) and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate.
+The script downloads the newest release that has a macOS build, checks its signature, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for its two [permissions](#permissions) and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
 
 AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. To install by hand anyway:
 
@@ -135,9 +135,9 @@ scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
 
-The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds; macOS asks for the login password once while it marks the certificate as trusted.
+The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds. macOS asks for the login password while it marks the certificate as trusted, and the first build asks whether codesign may use the key; choose **Always Allow**. The script also writes `~/AltTabio-Code-Signing.p12`, a backup encrypted with a password you choose; `scripts/mac/make-signing-cert.sh --import <file>` restores it on another Mac.
 
-`scripts/mac/package.sh` builds a release: a universal bundle for Apple silicon and Intel Macs, zipped as `target/mac/AltTabio-<version>-macos.zip` for the `v<version>` release, which is where the install script looks for it. It refuses a bundle that is not signed with that certificate, because users keep their permissions across updates only while every release carries the same one. Keep a backup of the certificate and its private key.
+`scripts/mac/package.sh` builds a release: a universal bundle for Apple silicon and Intel Macs, zipped as `target/mac/AltTabio-<version>-macos.zip` for the `v<version>` release, which is where the install script looks for it. Users keep their permissions across updates only while every release carries the same certificate, so the first release records the certificate's SHA-1 hash in `scripts/mac/release-certificate.sha1`, to be committed, and later releases refuse any other certificate, even one of the same name. Keep the backup and its password somewhere safe, such as a password manager; whoever holds the key can sign an app that macOS treats as AltTabio.
 
 `ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action to the terminal.
 
