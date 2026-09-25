@@ -251,6 +251,8 @@ const APPEARANCE_SECTIONS: &[CheckboxSection] = &[
 #[derive(Clone, Debug)]
 pub enum SettingsEvent {
     Changed(Settings),
+    /// The launch-at-login box was clicked; carries the state the user asked for.
+    Autostart(bool),
     OpenAccessibility,
     OpenScreenRecording,
 }
@@ -304,6 +306,13 @@ define_class!(
                 return;
             };
             let value = button.state() == NSControlStateValueOn;
+            if key == SettingKey::Autostart {
+                // The login item lives in the system, not in the INI; the box shows whatever
+                // the system reports once the request is done.
+                (self.ivars().handler)(SettingsEvent::Autostart(value));
+                self.refresh_status();
+                return;
+            }
             let settings = {
                 let mut settings = self.ivars().settings.borrow_mut();
                 key.set(&mut settings, value);
@@ -400,6 +409,7 @@ impl SettingsController {
             row.update(status.screen_recording);
         }
         let enabled = autostart::is_enabled();
+        self.ivars().settings.borrow_mut().general.autostart = enabled;
         for (key, button) in self.ivars().checkboxes.borrow().iter() {
             if *key == SettingKey::Autostart {
                 button.setState(control_state(enabled));
