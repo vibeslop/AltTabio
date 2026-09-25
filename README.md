@@ -147,7 +147,7 @@ The debug helpers `--list` and `--activate <window id>` work from a plain `cargo
 
 Every release carries the same release certificate, so users keep their permissions across updates. Its SHA-1 hash is pinned in `scripts/mac/release-certificate.sha1`, and its key lives in the secrets of the repository's `release` environment, which only `v*` tags can use. A maintainer creates it once with `scripts/mac/make-signing-cert.sh --release`, commits the pin, and stores the backup the script writes, with its password, in the private [vibeslop/release-signing](https://github.com/vibeslop/release-signing) repository, encrypted to the maintainers' SSH keys. Whoever holds the key can sign an app that macOS treats as AltTabio, and a new certificate would make every user grant both permissions again.
 
-To release, set the version in `Cargo.toml` and push the tag `v<version>`. The Release macOS workflow builds a universal bundle for Apple silicon and Intel Macs, signs it with the release certificate, and attaches `AltTabio-<version>-macos.zip` to the tag's release, creating a draft release when there is none. The install script picks the archive up once the release is published. `scripts/mac/package.sh` does the same by hand on a Mac that imported the certificate with `scripts/mac/make-signing-cert.sh --import <backup.p12>`, and refuses a bundle signed with any other certificate.
+The [Release](#releasing) workflow signs the macOS archive with it. `scripts/mac/package.sh` builds and signs the same archive by hand on a Mac that imported the certificate with `scripts/mac/make-signing-cert.sh --import <backup.p12>`, and refuses a bundle signed with any other certificate.
 
 ## Building from source
 
@@ -171,6 +171,12 @@ The release executable is written to:
 ```text
 target\release\AltTabio.exe
 ```
+
+## Releasing
+
+Set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and push the tag `v<version>` once that commit is on `main`. The Release workflow then builds `AltTabio-<version>-windows-x64.zip` on a Windows runner and `AltTabio-<version>-macos.zip`, a universal bundle for Apple silicon and Intel Macs signed with the [release certificate](#releasing-on-macos), and attaches both to the tag's release, creating a draft release when there is none. Check the draft and publish it; the macOS install script picks the release up once it is published.
+
+Running the workflow by hand with a tag builds that tag's Windows archive alone. Re-running the tag's own run rebuilds both.
 
 ## License
 
