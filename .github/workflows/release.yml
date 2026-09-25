@@ -1,0 +1,179 @@
+name: Release
+
+# Builds a version tag's release archives and attaches them to the tag's release, creating it as a
+# draft when there is none: AltTabio-<version>-windows-x64.zip, and AltTabio-<version>-macos.zip
+# signed with the release certificate, where docs/install.sh finds it. Run it by hand with a tag to
+# build that tag's Windows archive alone; re-running a tag's own run rebuilds both.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag whose Windows archive to build, such as v1.1.0
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+
+jobs:
+  draft:
+    # Creates the release once, before the archives, so the two jobs below cannot each create a
+    # draft of their own for the same tag.
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+
+    steps:
+      - name: Name the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag=${INPUT_TAG:-$GITHUB_REF_NAME}
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$tag is not a version tag such as v1.1.0."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+
+      - name: Check that the tag names the version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p;/^version = /q' Cargo.toml)
+          if [ "$VERSION" != "$cargo_version" ]; then
+            echo "::error::Tag v$VERSION does not match version $cargo_version in Cargo.toml."
+            exit 1
+          fi
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag --title "AltTabio $VERSION" --notes ""
+          fi
+
+  windows:
+    needs: draft
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.draft.outputs.tag }}
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Build
+        run: cargo build --release --locked --quiet
+
+      - name: Package
+        env:
+          VERSION: ${{ needs.draft.outputs.version }}
+        run: |
+          $archive = "AltTabio-$env:VERSION-windows-x64.zip"
+          Compress-Archive -Path target\release\AltTabio.exe, LICENSE, THIRD_PARTY_LICENSES.md `
+            -DestinationPath $archive
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Attach the archive to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: gh release upload $env:TAG $env:ARCHIVE --clobber
+
+  macos:
+    needs: draft
+    # The release environment admits only v* tags, so a run started by hand on main builds the
+    # Windows archive alone.
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    # The environment holds the release certificate.
+    environment: release
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.draft.outputs.tag }}
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Import the release certificate
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_RELEASE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_RELEASE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ] || [ -z "$CERTIFICATE_PASSWORD" ]; then
+            echo "::error::The release environment lacks the certificate; run scripts/mac/make-signing-cert.sh --release."
+            exit 1
+          fi
+          # A keychain of its own for the key. Its password only has to last the job.
+          keychain=$RUNNER_TEMP/release.keychain-db
+          keychain_password=$(openssl rand -hex 32)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          security import "$RUNNER_TEMP/release.p12" -k "$keychain" -f pkcs12 \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/release.p12"
+          # codesign has to reach the key without a prompt, which a runner cannot answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          # codesign on macOS 26 offers only certificates trusted for code signing, and answers
+          # "no identity found" for the rest. Trust in the user domain waits for an authorization
+          # prompt, so it goes in the admin domain, which takes the passwordless sudo that
+          # GitHub's runners allow.
+          security find-certificate -c "AltTabio Release" -p "$keychain" > "$RUNNER_TEMP/release.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/release.pem"
+          rm "$RUNNER_TEMP/release.pem"
+          # codesign builds the certificate chain from the search list only.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          valid=$(security find-identity -v -p codesigning "$keychain")
+          case "$valid" in
+            *"$(cat scripts/mac/release-certificate.sha1)"*) ;;
+            *)
+              echo "::error::The release certificate is not valid for code signing after import:"
+              echo "$valid"
+              exit 1
+              ;;
+          esac
+          echo "ALTTABIO_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Package
+        run: scripts/mac/package.sh
+
+      - name: Attach the archive to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          VERSION: ${{ needs.draft.outputs.version }}
+        run: gh release upload "$TAG" "target/mac/AltTabio-$VERSION-macos.zip" --clobber
+
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/release.keychain-db" || true
