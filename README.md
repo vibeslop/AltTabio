@@ -3,7 +3,7 @@
 **Website:** [https://vibeslop.github.io/AltTabio/](https://vibeslop.github.io/AltTabio/)
 **Download:** [GitHub Releases](https://github.com/vibeslop/AltTabio/releases/latest)
 
-AltTabio is a free, open-source **Alt+Tab replacement** and window switcher for 64-bit Windows 10 and Windows 11, and a **Cmd+Tab replacement** for macOS 26 and later. It shows a numbered list of open windows, a live preview of the selected window, and typed search. No ads, no account, no telemetry.
+AltTabio is a free, open-source **Alt+Tab replacement** and window switcher for 64-bit Windows 10 and Windows 11, and a **Cmd+Tab replacement** for macOS 26 and later. On Windows it shows a numbered list of open windows, a live preview of the selected window, and typed search. No ads, no account, no telemetry.
 
 It was created because Alt+Tab Terminator has had a critical issue for years that causes Alt+Tab to stop working correctly. The issue was reported, but never fixed.
 
@@ -95,31 +95,26 @@ Settings are stored in `AltTabio.ini` next to `AltTabio.exe`.
 
 ## macOS
 
-The macOS build switches between **windows**, not apps, which is what people miss most in the system Cmd+Tab: minimized windows, windows of hidden apps, and windows on other Spaces are all listed and reachable. It uses the same list, preview, search, and number-key layout as the Windows build, drawn on Liquid Glass, and needs macOS 26 or later.
+The macOS build lists every window of the selected app, which is what people miss most in the system Cmd+Tab: minimized windows, windows of hidden apps, and windows on other Spaces are all listed and reachable. It is drawn on Liquid Glass and needs macOS 26 or later.
 
 | Input | Action |
 | --- | --- |
-| Cmd+Tab or Option+Tab | Open the switcher and step through the windows; Shift steps back |
-| Release Cmd (or Option) | Switch to the selected window |
-| 1-9 while holding Cmd | Switch to that row |
-| W, M, H, Q while holding Cmd | Close or minimize the selected window; hide or quit its app |
-| ` (backtick) while holding Cmd | Step through the windows of the selected window's app |
-| K while holding Cmd | Open the actions panel: every window command with its shortcut, driven by arrows and Enter or the mouse |
-| After releasing Cmd | The list stays open when "Switch when the modifier is released" is off, or whenever the actions panel is open: arrows move, typing searches, Enter switches, Cmd+1-9 and Cmd+W/M/H/Q/K still act on the selected row |
-| Everything else | Same keys as on Windows: Home, End, Escape, F4-F9 |
-
-**Icon mode** (Settings > Appearance > Layout) replaces the list and preview with a rail of app icons on the left and the selected app's windows on the right, each with a live thumbnail. Tab still steps through windows; the rail follows the selected window's app and shows a badge with its window count. The numbers 1-9 count the rows of the shown app, hovering or clicking an icon in the rail shows that app's windows, and clicking a row switches to it. Everything else, including search and the action bar, works as in the list.
-
-An action bar under the list works like a launcher's: a short status on the left ("Release ⌘ to switch · 1–9 jumps", the match count while searching) and "Switch ↵" plus "Actions ⌘K" on the right. It can be turned off in the settings, which also carry a Shortcuts tab with the full list. Rows carry a badge when the window is minimized, its app is hidden, or it lives on another Space. Typed searches appear in a search row above the list with the matched text emphasized. On a trackpad the list works by hovering, clicking, scrolling, and right-clicking once the list stays open.
-
-Terminate (F8) force-quits the selected window's app. Run (F9) starts another instance of it.
+| Cmd+Tab | Open the switcher on the previous app; Tab and Shift+Tab step through the apps |
+| Option+Tab | The same, when "Also open with ⌥ Tab" is on |
+| ` (backtick), Left, Right | Previous or next app |
+| Up, Down | The selected app's windows |
+| Release Cmd, Return, or click | Switch to the selected window, or bring forward an app that has none |
+| W or M while holding Cmd | Close or minimize the selected window |
+| H or Q while holding Cmd | Hide or quit the selected app |
+| Escape or a click outside | Close the switcher |
+| Right-click | Window and app commands, including Force Quit |
 
 ### Permissions
 
-AltTabio asks for two permissions in **System Settings > Privacy & Security**:
+AltTabio asks for permissions in **System Settings > Privacy & Security**:
 
 - **Accessibility** to see Cmd+Tab before macOS does and to raise, minimize, and close windows.
-- **Screen Recording** to draw the live preview. Without it the list still works; the preview area shows a hint instead.
+- **Screen Recording**, only once **Show window previews** is on, to draw the preview. Without it the list still works; the preview area shows a hint instead.
 
 Both can be opened from the settings window (menu bar icon > Settings). AltTabio picks up an Accessibility grant while it runs; after granting Screen Recording, quit and start it again so ScreenCaptureKit sees the change. When AltTabio is started from a terminal, macOS applies the terminal's grants to it.
 
