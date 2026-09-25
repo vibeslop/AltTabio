@@ -36,14 +36,14 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-    NSApplicationActivationPolicy, NSImage, NSRunningApplication, NSScreen, NSWorkspace,
+    NSApplicationActivationPolicy, NSEvent, NSImage, NSRunningApplication, NSScreen, NSWorkspace,
     NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidActivateApplicationNotification,
     NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
     NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
 };
 use objc2_foundation::{
-    NSArray, NSNotification, NSNotificationName, NSObjectProtocol, NSOperationQueue, NSSize,
-    NSString, NSTimer, NSURL,
+    NSArray, NSNotification, NSNotificationName, NSObjectProtocol, NSOperationQueue, NSPoint,
+    NSSize, NSString, NSTimer, NSURL,
 };
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{
@@ -73,6 +73,8 @@ const TAP_RETRY_SECONDS: f64 = 2.0;
 // How long the pointer rests on an app's tile before the app is selected, so a pointer that
 // crosses the strip on its way to a window does not change the app underneath it.
 const TILE_DWELL_SECONDS: f64 = 0.08;
+// How far the pointer travels after the panel appears before hovering selects anything.
+const HOVER_ARM_DISTANCE: f64 = 8.0;
 // Activation history kept for ordering the strip; apps activated longer ago than this follow
 // in window order, which is what they would get anyway.
 const RECENT_APPS_KEPT: usize = 64;
@@ -368,6 +370,10 @@ pub struct App {
     close_button: CloseButton,
     // The tile or row a click started on; the switch happens when it ends there too.
     pressed: Option<Hit>,
+    // Where the pointer was when the panel appeared. Hovering selects nothing until the pointer
+    // has moved away from here, so a nudge of the trackpad while ⌘ is down cannot change the
+    // window the release switches to.
+    pointer_origin: Option<NSPoint>,
     // The tile under the pointer, as an app index, and the timer that selects it after a rest.
     hovered_tile: Option<usize>,
     dwell_timer: Option<Retained<NSTimer>>,
@@ -459,6 +465,7 @@ impl App {
             tap_retry_timer: None,
             close_button: CloseButton::default(),
             pressed: None,
+            pointer_origin: None,
             hovered_tile: None,
             dwell_timer: None,
             show_when_listed: false,
@@ -832,6 +839,7 @@ impl App {
             overlay.show(self.layout(&overlay).size());
         }
         self.panel = Panel::Shown;
+        self.pointer_origin = Some(NSEvent::mouseLocation());
         if self.settings.appearance.preview {
             self.preview.refresh_content();
         }
@@ -865,6 +873,7 @@ impl App {
     fn reset_pointer(&mut self) {
         self.close_button = CloseButton::default();
         self.pressed = None;
+        self.pointer_origin = None;
         self.hovered_tile = None;
         self.cancel_dwell();
     }
@@ -1219,6 +1228,16 @@ impl App {
         let hovered = matches!(hit, Some(Hit::CloseButton(_)));
         let close_changed = hovered != self.close_button.hovered;
         self.close_button.hovered = hovered;
+        if let Some(origin) = self.pointer_origin {
+            let now = NSEvent::mouseLocation();
+            if (now.x - origin.x).hypot(now.y - origin.y) < HOVER_ARM_DISTANCE {
+                if close_changed {
+                    self.redraw();
+                }
+                return;
+            }
+            self.pointer_origin = None;
+        }
         let tile = match hit {
             Some(Hit::Tile(slot)) => Some(shown.tile_start + slot),
             _ => None,
