@@ -13,8 +13,8 @@ use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSBackingStoreType, NSBezierPath, NSColor, NSCompositingOperation, NSEvent,
     NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightMedium, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSGlassEffectView, NSGlassEffectViewStyle, NSImage,
-    NSLineBreakMode, NSMenu, NSMenuItem, NSMutableParagraphStyle, NSPanel,
+    NSForegroundColorAttributeName, NSGlassEffectView, NSGlassEffectViewStyle, NSGraphicsContext,
+    NSImage, NSLineBreakMode, NSMenu, NSMenuItem, NSMutableParagraphStyle, NSPanel,
     NSParagraphStyleAttributeName, NSPopUpMenuWindowLevel, NSScreen, NSStringDrawing,
     NSTextAlignment, NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
     NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowAnimationBehavior,
@@ -43,12 +43,16 @@ const ROW_HEIGHT: f64 = 36.0;
 /// The list grows to this many rows; longer window lists scroll.
 const MAX_ROWS: usize = 8;
 const MIN_CONTENT_WIDTH: f64 = 456.0;
+/// Row text lines up with the visible edge of a full-size icon above it: 8pt of tile around the
+/// icon plus the transparent margin macOS app icons carry inside their image, about a tenth of it.
 const TEXT_INSET: f64 = 12.0;
 const CLOSE_SIZE: f64 = 24.0;
 const STATE_GAP: f64 = 12.0;
 const PREVIEW_WIDTH: f64 = 400.0;
 const PREVIEW_MIN_HEIGHT: f64 = 250.0;
 const PREVIEW_GAP: f64 = 12.0;
+/// The capture sits this far inside the preview well, rounded to the well's radius minus it.
+const PREVIEW_INSET: f64 = 8.0;
 const LIST_WIDTH_BESIDE_PREVIEW: f64 = 340.0;
 /// Scrolled points on a trackpad per selection step; a mouse wheel notch is always one step.
 const SCROLL_STEP: f64 = 24.0;
@@ -907,21 +911,25 @@ fn ring_rounded(rect: Rect, radius: f64, color: &NSColor) {
     path.stroke();
 }
 
-/// Draws `image` aspect-fitted into `bounds` and returns where it landed.
-fn draw_image_fit(image: &NSImage, bounds: Rect) -> Option<Rect> {
-    let size = image.size();
+/// Where `size` lands when aspect-fitted and centered in `bounds`.
+fn fitted(size: NSSize, bounds: Rect) -> Option<Rect> {
     if size.width <= 0.0 || size.height <= 0.0 || bounds.width <= 0.0 || bounds.height <= 0.0 {
         return None;
     }
     let scale = (bounds.width / size.width).min(bounds.height / size.height);
     let width = size.width * scale;
     let height = size.height * scale;
-    let rect = Rect {
+    Some(Rect {
         left: bounds.left + (bounds.width - width) / 2.0,
         top: bounds.top + (bounds.height - height) / 2.0,
         width,
         height,
-    };
+    })
+}
+
+/// Draws `image` aspect-fitted into `bounds` and returns where it landed.
+fn draw_image_fit(image: &NSImage, bounds: Rect) -> Option<Rect> {
+    let rect = fitted(image.size(), bounds)?;
     unsafe {
         // SAFETY: drawing happens inside drawRect: with a current graphics context.
         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
@@ -1065,7 +1073,9 @@ fn draw_close_button(state: CloseButtonVisualState, button: Rect, colors: &Color
         CloseButtonVisualState::Pressed => Some(&colors.control_pressed),
     };
     if let Some(background) = background {
-        fill_rounded(button, button.width / 2.0, background);
+        // The button sits inside the row's plate, so its corners follow the plate's.
+        let inset = (ROW_HEIGHT - CLOSE_SIZE) / 2.0;
+        fill_rounded(button, PLATE_RADIUS - inset, background);
     }
     let glyph = 8.0;
     let left = button.left + (button.width - glyph) / 2.0;
@@ -1083,14 +1093,20 @@ fn draw_close_button(state: CloseButtonVisualState, button: Rect, colors: &Color
 fn draw_preview(preview: &PreviewModel, area: Rect, fonts: &Fonts, colors: &Colors) {
     fill_rounded(area, PLATE_RADIUS, &colors.well);
     if let Some(image) = &preview.image {
-        let inset = Rect {
-            left: area.left + 1.0,
-            top: area.top + 1.0,
-            width: (area.width - 2.0).max(0.0),
-            height: (area.height - 2.0).max(0.0),
+        let inner = Rect {
+            left: area.left + PREVIEW_INSET,
+            top: area.top + PREVIEW_INSET,
+            width: (area.width - PREVIEW_INSET * 2.0).max(0.0),
+            height: (area.height - PREVIEW_INSET * 2.0).max(0.0),
         };
-        if let Some(drawn) = draw_image_fit(image, inset) {
-            ring_rounded(drawn, 0.0, &colors.ring);
+        if let Some(rect) = fitted(image.size(), inner) {
+            let radius = PLATE_RADIUS - PREVIEW_INSET;
+            NSGraphicsContext::saveGraphicsState_class();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect.ns(), radius, radius)
+                .addClip();
+            let _ = draw_image_fit(image, rect);
+            NSGraphicsContext::restoreGraphicsState_class();
+            ring_rounded(rect, radius, &colors.ring);
         }
     } else if let Some(message) = &preview.message {
         let paragraph = Rect {
