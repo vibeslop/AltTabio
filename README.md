@@ -114,7 +114,7 @@ scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
 
-The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-dev-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds; macOS asks for the login password once while it marks the certificate as trusted.
+The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds; macOS asks for the login password once while it marks the certificate as trusted.
 
 `ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action to the terminal.
 

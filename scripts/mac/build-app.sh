@@ -7,8 +7,9 @@
 #
 # macOS keys Accessibility and Screen Recording grants to the app bundle identifier plus its code
 # signature. Ad-hoc signatures change with every build, which makes macOS forget the grants. The
-# script therefore signs with a persistent self-signed "AltTabio Dev" certificate when one exists
-# (scripts/mac/make-dev-cert.sh creates it) and falls back to an ad-hoc signature otherwise.
+# script therefore signs with the persistent self-signed "AltTabio Code Signing" certificate when
+# it exists (scripts/mac/make-signing-cert.sh creates it) and falls back to an ad-hoc signature
+# otherwise.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -42,12 +43,12 @@ for size in 16 32 128 256; do
 done
 iconutil -c icns "$iconset" -o "$contents/Resources/AltTabio.icns"
 
-identity=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(AltTabio Dev\)".*/\1/p' | head -1)
+identity=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(AltTabio Code Signing\)".*/\1/p' | head -1)
 if [[ -n "$identity" ]]; then
     codesign --force --sign "$identity" --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app with the persistent '$identity' certificate"
 else
     codesign --force --sign - --identifier com.vibeslop.AltTabio "$app"
-    echo "Signed $app ad hoc; run scripts/mac/make-dev-cert.sh once to keep permissions across builds"
+    echo "Signed $app ad hoc; run scripts/mac/make-signing-cert.sh once to keep permissions across builds"
 fi
 echo "Built $app ($profile, version $version)"
