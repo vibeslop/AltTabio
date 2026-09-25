@@ -72,7 +72,9 @@ basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
 extendedKeyUsage = critical,codeSigning
 CONF
-        $openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$work/cert.cnf" \
+        # Twenty years: codesign stops offering an expired certificate, and its replacement would
+        # cost every user their grants.
+        $openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -config "$work/cert.cnf" \
             -keyout "$work/key.pem" -out "$work/cert.pem" 2>"$work/openssl.log" ||
             fail "openssl could not create the certificate: $(<"$work/openssl.log")"
         ALTTABIO_P12_PASSWORD=$password $openssl pkcs12 -export -inkey "$work/key.pem" \
