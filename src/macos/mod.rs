@@ -1105,6 +1105,7 @@ impl App {
             .skip(self.row_start)
             .take(fits)
             .map(|(index, handle)| Row {
+                number: (index < 9).then_some(index + 1),
                 title: self
                     .record(*handle)
                     .map(|record| record.title.clone())

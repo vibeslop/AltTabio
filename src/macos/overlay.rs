@@ -46,6 +46,8 @@ const MIN_CONTENT_WIDTH: f64 = 456.0;
 /// Row text lines up with the visible edge of a full-size icon above it: 8pt of tile around the
 /// icon plus the transparent margin macOS app icons carry inside their image, about a tenth of it.
 const TEXT_INSET: f64 = 12.0;
+/// The column of window numbers before the titles.
+const NUMBER_WIDTH: f64 = 20.0;
 const CLOSE_SIZE: f64 = 24.0;
 const STATE_GAP: f64 = 12.0;
 const PREVIEW_WIDTH: f64 = 400.0;
@@ -328,6 +330,8 @@ pub struct Tile {
 }
 
 pub struct Row {
+    /// The key that picks this window, for the first nine.
+    pub number: Option<usize>,
     pub title: String,
     pub state: WindowState,
     pub selected: bool,
@@ -825,6 +829,7 @@ struct Fonts {
     title: Retained<NSFont>,
     name: Retained<NSFont>,
     detail: Retained<NSFont>,
+    number: Retained<NSFont>,
 }
 
 fn fonts() -> Fonts {
@@ -834,6 +839,7 @@ fn fonts() -> Fonts {
             title: NSFont::systemFontOfSize_weight(13.0, NSFontWeightRegular),
             name: NSFont::systemFontOfSize_weight(12.0, NSFontWeightMedium),
             detail: NSFont::systemFontOfSize_weight(12.0, NSFontWeightRegular),
+            number: NSFont::monospacedDigitSystemFontOfSize_weight(13.0, NSFontWeightRegular),
         }
     }
 }
@@ -950,13 +956,20 @@ fn draw_frame(model: &FrameModel) {
     draw_strip(model, &fonts, &colors);
     let layout = model.layout;
     if let Some(note) = &model.empty_note {
-        draw_note(note, layout.row_rect(0), &fonts, &colors);
+        draw_note(note, layout.row_rect(0), 0.0, &fonts, &colors);
     }
     for (index, row) in model.rows.iter().enumerate() {
         draw_row(model, row, layout.row_rect(index), &fonts, &colors);
     }
     if let Some(note) = &model.more_note {
-        draw_note(note, layout.row_rect(model.rows.len()), &fonts, &colors);
+        // Under numbered rows, the count lines up with their titles.
+        draw_note(
+            note,
+            layout.row_rect(model.rows.len()),
+            NUMBER_WIDTH,
+            &fonts,
+            &colors,
+        );
     }
     if let (Some(preview), Some(area)) = (&model.preview, layout.preview_rect()) {
         draw_preview(preview, area, &fonts, &colors);
@@ -1039,6 +1052,21 @@ fn draw_row(model: &FrameModel, row: &Row, bounds: Rect, fonts: &Fonts, colors: 
         right -= width + STATE_GAP;
     }
     let left = bounds.left + TEXT_INSET;
+    if let Some(number) = row.number {
+        draw_text(
+            &number.to_string(),
+            Rect {
+                left,
+                width: NUMBER_WIDTH,
+                ..bounds
+            },
+            &fonts.number,
+            &colors.secondary,
+            NSTextAlignment::Left,
+        );
+    }
+    // Rows past the ninth have no number but keep the column, so the titles stay in line.
+    let left = left + NUMBER_WIDTH;
     draw_text(
         &row.title,
         Rect {
@@ -1052,12 +1080,12 @@ fn draw_row(model: &FrameModel, row: &Row, bounds: Rect, fonts: &Fonts, colors: 
     );
 }
 
-fn draw_note(text: &str, bounds: Rect, fonts: &Fonts, colors: &Colors) {
+fn draw_note(text: &str, bounds: Rect, indent: f64, fonts: &Fonts, colors: &Colors) {
     draw_text(
         text,
         Rect {
-            left: bounds.left + TEXT_INSET,
-            width: (bounds.width - TEXT_INSET * 2.0).max(0.0),
+            left: bounds.left + TEXT_INSET + indent,
+            width: (bounds.width - TEXT_INSET * 2.0 - indent).max(0.0),
             ..bounds
         },
         &fonts.title,
