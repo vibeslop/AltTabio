@@ -162,7 +162,7 @@ pub fn run(arguments: &[OsString]) {
     }
     let path = settings_path();
     let first_start = !path.exists();
-    let (store, settings) = match SettingsStore::load_from(path.clone()) {
+    let (store, settings) = match SettingsStore::load_from(path) {
         Ok(loaded) => loaded,
         Err(error) => {
             show_fatal_error(mtm, &error);
@@ -173,13 +173,7 @@ pub fn run(arguments: &[OsString]) {
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-    let app = Rc::new(RefCell::new(App::new(
-        mtm,
-        settings,
-        store,
-        path,
-        preview_mode,
-    )));
+    let app = Rc::new(RefCell::new(App::new(mtm, settings, store, preview_mode)));
     APP.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&app)));
     app.borrow_mut().start();
     if first_start && !preview_mode {
@@ -336,7 +330,6 @@ pub struct App {
     mtm: MainThreadMarker,
     settings: Settings,
     store: SettingsStore,
-    settings_path: PathBuf,
     preview_mode: bool,
     switcher: AppSwitcher,
     hotkey: HotkeyState,
@@ -418,7 +411,6 @@ impl App {
         mtm: MainThreadMarker,
         settings: Settings,
         store: SettingsStore,
-        settings_path: PathBuf,
         preview_mode: bool,
     ) -> Self {
         let hotkey_settings = hotkey_settings(&settings);
@@ -426,7 +418,6 @@ impl App {
             mtm,
             settings,
             store,
-            settings_path,
             preview_mode,
             switcher: AppSwitcher::default(),
             hotkey: HotkeyState::default(),
@@ -1324,12 +1315,7 @@ impl App {
                     permissions::open_screen_recording_settings();
                 }
             });
-            self.settings_window = Some(SettingsWindow::new(
-                self.mtm,
-                &self.settings,
-                &self.settings_path.display().to_string(),
-                handler,
-            ));
+            self.settings_window = Some(SettingsWindow::new(self.mtm, &self.settings, handler));
         }
         if let Some(window) = &self.settings_window {
             window.show(&self.settings);
