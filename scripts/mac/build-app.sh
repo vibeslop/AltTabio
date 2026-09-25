@@ -14,10 +14,13 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
+usage="Usage: scripts/mac/build-app.sh [--debug | --universal]"
+(( $# <= 1 )) || { print -u2 -- "$usage"; exit 2; }
 profile=release
 cargo_flags=(--release)
 targets=()
 case "${1:-}" in
+    "") ;;
     --debug)
         profile=debug
         cargo_flags=()
@@ -25,6 +28,10 @@ case "${1:-}" in
     --universal)
         profile=universal
         targets=(aarch64-apple-darwin x86_64-apple-darwin)
+        ;;
+    *)
+        print -u2 -- "$usage"
+        exit 2
         ;;
 esac
 
