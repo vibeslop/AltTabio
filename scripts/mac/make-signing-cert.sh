@@ -46,7 +46,9 @@ security import "$work/cert.p12" -k "$HOME/Library/Keychains/login.keychain-db" 
 # codesign only accepts the certificate once it is trusted for code signing; macOS asks for the
 # login password once for this step.
 security add-trusted-cert -p codeSign -k "$HOME/Library/Keychains/login.keychain-db" "$work/cert.pem"
-# Without this, codesign stops on a keychain access prompt at every build.
-security set-key-partition-list -S apple-tool:,apple: -s -k "" \
-    "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1 || true
 echo "Created the 'AltTabio Code Signing' certificate; scripts/mac/build-app.sh uses it from now on"
+# `security set-key-partition-list` could grant this up front, but the keychain labels every
+# imported key "Imported Private Key", so it cannot single this one out and would open all of
+# them to Apple's command-line tools.
+echo "The first build asks whether codesign may use the key: enter the login password and"
+echo "choose Always Allow."
