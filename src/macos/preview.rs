@@ -9,7 +9,7 @@ use block2::RcBlock;
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
 use objc2_core_graphics::CGImage;
-use objc2_foundation::{NSArray, NSError};
+use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{
     SCCaptureResolutionType, SCContentFilter, SCScreenshotManager, SCShareableContent,
     SCStreamConfiguration,
@@ -20,19 +20,8 @@ pub enum PreviewResult {
     Unavailable(&'static str),
 }
 
-/// What a capture is for, which decides where the app files the frame.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CaptureKind {
-    /// The large preview of the selected window.
-    Preview,
-    /// A row thumbnail in icon mode.
-    Thumbnail,
-}
-
 pub struct CaptureRequest {
     pub window_id: u32,
-    pub kind: CaptureKind,
-    pub full_desktop: bool,
     /// Pixel size of the preview area; the capture is fitted into it with its aspect ratio kept.
     pub pixel_width: usize,
     pub pixel_height: usize,
@@ -125,49 +114,10 @@ impl PreviewSource {
             // SAFETY: SCWindow properties are plain immutable values.
             window.frame()
         };
-        let mut content_size = (window_frame.size.width, window_frame.size.height);
-        let filter = if request.full_desktop {
-            let frame = window_frame;
-            let displays = unsafe {
-                // SAFETY: the content object is immutable once delivered.
-                content.displays()
-            };
-            let center_x = frame.origin.x + frame.size.width / 2.0;
-            let center_y = frame.origin.y + frame.size.height / 2.0;
-            let display = displays
-                .iter()
-                .find(|display| {
-                    let bounds = unsafe {
-                        // SAFETY: SCDisplay properties are plain immutable values.
-                        display.frame()
-                    };
-                    center_x >= bounds.origin.x
-                        && center_x < bounds.origin.x + bounds.size.width
-                        && center_y >= bounds.origin.y
-                        && center_y < bounds.origin.y + bounds.size.height
-                })
-                .or_else(|| displays.iter().next());
-            let Some(display) = display else {
-                return Err("No display is available for the desktop preview");
-            };
-            let display_frame = unsafe {
-                // SAFETY: SCDisplay properties are plain immutable values.
-                display.frame()
-            };
-            content_size = (display_frame.size.width, display_frame.size.height);
-            unsafe {
-                // SAFETY: both arguments are live objects for the initializer.
-                SCContentFilter::initWithDisplay_includingWindows(
-                    SCContentFilter::alloc(),
-                    &display,
-                    &NSArray::from_retained_slice(&[window]),
-                )
-            }
-        } else {
-            unsafe {
-                // SAFETY: the window is a live object for the initializer.
-                SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
-            }
+        let content_size = (window_frame.size.width, window_frame.size.height);
+        let filter = unsafe {
+            // SAFETY: the window is a live object for the initializer.
+            SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
         };
         let (width, height) =
             fitted_size((request.pixel_width, request.pixel_height), content_size);
@@ -182,7 +132,6 @@ impl PreviewSource {
             configuration
         };
         let window_id = request.window_id;
-        let kind = request.kind;
         let handler = RcBlock::new(move |image: *mut CGImage, _error: *mut NSError| {
             let result = if image.is_null() {
                 PreviewResult::Unavailable("Preview is not available for this window")
@@ -196,10 +145,7 @@ impl PreviewSource {
                 PreviewResult::Image(image)
             };
             let result = MainThreadValue(result);
-            post_to_app(move |app| match kind {
-                CaptureKind::Preview => app.preview_captured(window_id, result),
-                CaptureKind::Thumbnail => app.thumbnail_captured(window_id, result),
-            });
+            post_to_app(move |app| app.preview_captured(window_id, result));
         });
         unsafe {
             // SAFETY: the filter, configuration, and retained block stay valid for the call.

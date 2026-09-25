@@ -3,7 +3,7 @@
 //! Every tab is an `NSStackView` built from the same section helpers so the spacing is uniform;
 //! the window sizes itself once to the tallest tab and never resizes.
 
-use super::{autostart, permissions, shortcuts};
+use super::{autostart, permissions};
 use alttabio::settings::{Settings, Theme};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -11,14 +11,13 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBorderType, NSButton, NSColor,
     NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSFontWeightMedium,
-    NSGridCellPlacement, NSGridRowAlignment, NSGridView, NSImage, NSImageSymbolConfiguration,
-    NSImageView, NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityRequired,
-    NSLineBreakMode, NSPopUpButton, NSScrollView, NSStackView, NSStackViewDistribution, NSTabView,
-    NSTabViewItem, NSTextAlignment, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowStyleMask,
+    NSImage, NSImageSymbolConfiguration, NSImageView, NSLayoutAttribute,
+    NSLayoutConstraintOrientation, NSLayoutPriorityRequired, NSLineBreakMode, NSPopUpButton,
+    NSScrollView, NSStackView, NSStackViewDistribution, NSTabView, NSTabViewItem, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSArray, NSEdgeInsets, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
+    NSEdgeInsets, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,43 +39,17 @@ pub enum SettingKey {
     Autostart,
     CommandTab,
     OptionTab,
-    ReleaseSwitches,
-    TypedSearch,
-    MouseOverSelection,
-    RightButtonWheel,
-    ReleaseRightButtonSwitches,
-    CompactList,
-    LargeIcons,
-    ShowNumbers,
-    ShowAppNames,
-    ShowHints,
-    VisibleBorders,
-    IconMode,
     Preview,
-    FullDesktopPreview,
     CurrentDisplayOnly,
 }
 
 impl SettingKey {
     /// Every key once; the index doubles as the checkbox tag.
-    const ALL: [Self; 18] = [
+    const ALL: [Self; 5] = [
         Self::Autostart,
         Self::CommandTab,
         Self::OptionTab,
-        Self::ReleaseSwitches,
-        Self::TypedSearch,
-        Self::MouseOverSelection,
-        Self::RightButtonWheel,
-        Self::ReleaseRightButtonSwitches,
-        Self::CompactList,
-        Self::LargeIcons,
-        Self::ShowNumbers,
-        Self::ShowAppNames,
-        Self::ShowHints,
-        Self::VisibleBorders,
-        Self::IconMode,
         Self::Preview,
-        Self::FullDesktopPreview,
         Self::CurrentDisplayOnly,
     ];
 
@@ -85,21 +58,8 @@ impl SettingKey {
             Self::Autostart => "Launch at login",
             Self::CommandTab => "Replace ⌘ Tab",
             Self::OptionTab => "Also open with ⌥ Tab",
-            Self::ReleaseSwitches => "Switch when the modifier is released",
-            Self::TypedSearch => "Type to search",
-            Self::MouseOverSelection => "Select on mouse over",
-            Self::RightButtonWheel => "Right mouse button + wheel switching",
-            Self::ReleaseRightButtonSwitches => "Switch when the right mouse button is released",
-            Self::CompactList => "Compact list",
-            Self::LargeIcons => "Large icons",
-            Self::ShowNumbers => "Show numbers",
-            Self::ShowAppNames => "Show app names",
-            Self::ShowHints => "Show the action bar",
-            Self::VisibleBorders => "Visible borders",
-            Self::IconMode => "Icon mode",
-            Self::Preview => "Live preview",
-            Self::FullDesktopPreview => "Show the preview on the full desktop",
-            Self::CurrentDisplayOnly => "Only list windows on the current display",
+            Self::Preview => "Show window previews",
+            Self::CurrentDisplayOnly => "Only windows on the current display",
         }
     }
 
@@ -107,26 +67,6 @@ impl SettingKey {
     const fn description(self) -> Option<&'static str> {
         match self {
             Self::CommandTab => Some("AltTabio opens instead of the system app switcher"),
-            Self::ReleaseSwitches => Some("Off keeps the list open until you press Return"),
-            Self::TypedSearch => {
-                Some("After releasing the modifier, typing filters by title and app")
-            }
-            Self::ShowHints => {
-                Some("A bar under the list with the main action and the ⌘K actions menu")
-            }
-            Self::IconMode => Some(
-                "App icons in a rail, with the selected app's windows and their thumbnails \
-                 beside them instead of the list and preview",
-            ),
-            _ => None,
-        }
-    }
-
-    /// The checkbox that has to be on for this one to do anything.
-    const fn enabled_by(self) -> Option<Self> {
-        match self {
-            Self::ReleaseRightButtonSwitches => Some(Self::RightButtonWheel),
-            Self::FullDesktopPreview => Some(Self::Preview),
             _ => None,
         }
     }
@@ -148,20 +88,7 @@ impl SettingKey {
             Self::Autostart => settings.general.autostart,
             Self::CommandTab => settings.general.replace_alt_tab,
             Self::OptionTab => settings.general.replace_win_tab,
-            Self::ReleaseSwitches => settings.general.release_alt_switches,
-            Self::TypedSearch => settings.general.typed_search,
-            Self::MouseOverSelection => settings.general.mouse_over_selection,
-            Self::RightButtonWheel => settings.general.right_button_wheel_switching,
-            Self::ReleaseRightButtonSwitches => settings.general.release_right_button_switches,
-            Self::CompactList => settings.appearance.compact_list,
-            Self::LargeIcons => settings.appearance.large_icons,
-            Self::ShowNumbers => settings.appearance.show_numbers,
-            Self::ShowAppNames => settings.appearance.show_app_names,
-            Self::ShowHints => settings.appearance.show_hints,
-            Self::VisibleBorders => settings.appearance.visible_borders,
-            Self::IconMode => settings.appearance.icon_mode,
             Self::Preview => settings.appearance.preview,
-            Self::FullDesktopPreview => settings.appearance.full_desktop_preview,
             Self::CurrentDisplayOnly => settings.monitor.use_current_monitor_filter,
         }
     }
@@ -171,22 +98,7 @@ impl SettingKey {
             Self::Autostart => settings.general.autostart = value,
             Self::CommandTab => settings.general.replace_alt_tab = value,
             Self::OptionTab => settings.general.replace_win_tab = value,
-            Self::ReleaseSwitches => settings.general.release_alt_switches = value,
-            Self::TypedSearch => settings.general.typed_search = value,
-            Self::MouseOverSelection => settings.general.mouse_over_selection = value,
-            Self::RightButtonWheel => settings.general.right_button_wheel_switching = value,
-            Self::ReleaseRightButtonSwitches => {
-                settings.general.release_right_button_switches = value;
-            }
-            Self::CompactList => settings.appearance.compact_list = value,
-            Self::LargeIcons => settings.appearance.large_icons = value,
-            Self::ShowNumbers => settings.appearance.show_numbers = value,
-            Self::ShowAppNames => settings.appearance.show_app_names = value,
-            Self::ShowHints => settings.appearance.show_hints = value,
-            Self::VisibleBorders => settings.appearance.visible_borders = value,
-            Self::IconMode => settings.appearance.icon_mode = value,
             Self::Preview => settings.appearance.preview = value,
-            Self::FullDesktopPreview => settings.appearance.full_desktop_preview = value,
             Self::CurrentDisplayOnly => settings.monitor.use_current_monitor_filter = value,
         }
     }
@@ -207,40 +119,13 @@ const GENERAL_SECTIONS: &[CheckboxSection] = &[
         title: "Hotkeys",
         keys: &[SettingKey::CommandTab, SettingKey::OptionTab],
     },
-    CheckboxSection {
-        title: "Switching",
-        keys: &[SettingKey::ReleaseSwitches, SettingKey::TypedSearch],
-    },
-    CheckboxSection {
-        title: "Mouse and trackpad",
-        keys: &[
-            SettingKey::MouseOverSelection,
-            SettingKey::RightButtonWheel,
-            SettingKey::ReleaseRightButtonSwitches,
-        ],
-    },
 ];
 
 /// The Appearance tab after its theme row.
 const APPEARANCE_SECTIONS: &[CheckboxSection] = &[
     CheckboxSection {
-        title: "Layout",
-        keys: &[SettingKey::IconMode],
-    },
-    CheckboxSection {
-        title: "List",
-        keys: &[
-            SettingKey::CompactList,
-            SettingKey::LargeIcons,
-            SettingKey::ShowNumbers,
-            SettingKey::ShowAppNames,
-            SettingKey::ShowHints,
-            SettingKey::VisibleBorders,
-        ],
-    },
-    CheckboxSection {
         title: "Preview",
-        keys: &[SettingKey::Preview, SettingKey::FullDesktopPreview],
+        keys: &[SettingKey::Preview],
     },
     CheckboxSection {
         title: "Displays",
@@ -318,7 +203,6 @@ define_class!(
                 key.set(&mut settings, value);
                 settings.clone()
             };
-            self.apply_dependencies(&settings);
             (self.ivars().handler)(SettingsEvent::Changed(settings));
         }
 
@@ -387,16 +271,7 @@ impl SettingsController {
         if let Some(theme) = self.ivars().theme.borrow().as_ref() {
             theme.selectItemAtIndex(theme_index(settings.appearance.theme));
         }
-        self.apply_dependencies(settings);
         self.refresh_status();
-    }
-
-    fn apply_dependencies(&self, settings: &Settings) {
-        for (key, button) in self.ivars().checkboxes.borrow().iter() {
-            if let Some(parent) = key.enabled_by() {
-                button.setEnabled(parent.get(settings));
-            }
-        }
     }
 
     /// Re-reads what the system says, since permissions and login items change outside the app.
@@ -476,7 +351,7 @@ impl SettingsWindow {
         let content = tab_view.contentRect();
         let chrome_height = probe.height - content.size.height;
         let description_width = content.size.width - 2.0 * MARGIN - CHECKBOX_TITLE_INDENT;
-        let tabs: [(&str, Retained<NSView>); 4] = [
+        let tabs: [(&str, Retained<NSView>); 3] = [
             (
                 "General",
                 general_tab(mtm, settings, &controller, description_width),
@@ -485,7 +360,6 @@ impl SettingsWindow {
                 "Appearance",
                 appearance_tab(mtm, settings, &controller, description_width),
             ),
-            ("Shortcuts", shortcuts_tab(mtm)),
             ("Permissions", permissions_tab(mtm, &controller)),
         ];
         let mut content_height: f64 = 0.0;
@@ -620,16 +494,6 @@ fn appearance_tab(
             controller,
             description_width,
         ));
-    }
-    Retained::into_super(tab)
-}
-
-fn shortcuts_tab(mtm: MainThreadMarker) -> Retained<NSView> {
-    let tab = tab_stack(mtm);
-    for shortcut_section in shortcuts::SECTIONS {
-        let stack = section(mtm, shortcut_section.title);
-        stack.addArrangedSubview(&shortcut_grid(mtm, shortcut_section.rows));
-        tab.addArrangedSubview(&stack);
     }
     Retained::into_super(tab)
 }
@@ -773,30 +637,6 @@ fn theme_row(
     row.addArrangedSubview(&popup);
     *controller.ivars().theme.borrow_mut() = Some(popup);
     row
-}
-
-/// Keys right-aligned in a monospaced column, descriptions to their right.
-fn shortcut_grid(mtm: MainThreadMarker, rows: &[shortcuts::ShortcutRow]) -> Retained<NSGridView> {
-    let grid = NSGridView::gridViewWithNumberOfColumns_rows(2, 0, mtm);
-    grid.setColumnSpacing(16.0);
-    grid.setRowSpacing(4.0);
-    grid.setRowAlignment(NSGridRowAlignment::FirstBaseline);
-    grid.columnAtIndex(0)
-        .setXPlacement(NSGridCellPlacement::Trailing);
-    let key_font = unsafe {
-        // SAFETY: the font weight constant is a static value exported by AppKit.
-        NSFont::monospacedSystemFontOfSize_weight(12.0, NSFontWeightMedium)
-    };
-    for row in rows {
-        let keys = NSTextField::labelWithString(&NSString::from_str(row.keys), mtm);
-        keys.setFont(Some(&key_font));
-        keys.setAlignment(NSTextAlignment::Right);
-        let description = NSTextField::labelWithString(&NSString::from_str(row.description), mtm);
-        let keys: &NSView = &keys;
-        let description: &NSView = &description;
-        grid.addRowWithViews(&NSArray::from_slice(&[keys, description]));
-    }
-    grid
 }
 
 /// One permission: a status dot, "name: state", the System Settings button at the trailing

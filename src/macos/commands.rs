@@ -1,12 +1,17 @@
-//! Window activation and the window commands (F4-F9 and the ⌘ chords) on top of Accessibility
-//! and `AppKit`.
+//! Switching to a window or an app, and the commands the switcher runs on them, on top of
+//! Accessibility and `AppKit`.
 
 use super::window_list::{WindowRecord, launch_time};
 use alttabio::input::WindowCommand;
+use alttabio::switcher::ProcessIdentity;
 use objc2::rc::Retained;
-use objc2_app_kit::{
-    NSApplicationActivationOptions, NSRunningApplication, NSWorkspace, NSWorkspaceOpenConfiguration,
-};
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+/// A running app as the switcher lists it.
+pub struct AppRef<'a> {
+    pub process: ProcessIdentity,
+    pub name: &'a str,
+}
 
 pub fn activate(record: &WindowRecord) -> Result<(), String> {
     let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(record.pid)
@@ -26,15 +31,7 @@ pub fn activate(record: &WindowRecord) -> Result<(), String> {
             eprintln!("Could not raise the window {}", record.title);
         }
     }
-    #[allow(
-        deprecated,
-        reason = "cooperative activation cannot target another app's window; the ignoring-other-apps path is the documented behaviour for switchers"
-    )]
-    let activated =
-        app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-    if !activated {
-        return Err(format!("macOS refused to activate {}", record.app_name));
-    }
+    bring_forward(&app, &record.app_name)?;
     if let Some(ax) = &record.ax
         && !ax.perform("AXRaise")
     {
@@ -43,139 +40,109 @@ pub fn activate(record: &WindowRecord) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandOutcome {
-    /// The window list changes soon; the caller should refresh a few times.
-    ListChanges,
-    Unchanged,
+/// Brings an app forward on its own, as the system switcher does for an app with no window.
+pub fn activate_app(app: &AppRef<'_>) -> Result<(), String> {
+    let running = running_application(app)?;
+    if running.isHidden() && !running.unhide() {
+        eprintln!("Could not unhide {}", app.name);
+    }
+    bring_forward(&running, app.name)
 }
 
-pub fn execute(command: WindowCommand, record: &WindowRecord) -> Result<CommandOutcome, String> {
-    match command {
-        WindowCommand::Close => {
-            let ax = accessible(record)?;
-            let close = ax
-                .element("AXCloseButton")
-                .ok_or_else(|| format!("{} has no close button", record.title))?;
-            if !close.perform("AXPress") {
-                return Err(format!("Could not close {}", record.title));
-            }
-            Ok(CommandOutcome::ListChanges)
-        }
-        WindowCommand::Minimize => {
-            let ax = accessible(record)?;
-            if !ax.set_boolean("AXMinimized", true) {
-                return Err(format!("Could not minimize {}", record.title));
-            }
-            Ok(CommandOutcome::ListChanges)
-        }
-        WindowCommand::Maximize => {
-            let ax = accessible(record)?;
-            let zoom = ax
-                .element("AXZoomButton")
-                .ok_or_else(|| format!("{} has no zoom button", record.title))?;
-            if !zoom.perform("AXPress") {
-                return Err(format!("Could not zoom {}", record.title));
-            }
-            Ok(CommandOutcome::Unchanged)
-        }
-        WindowCommand::Restore => {
-            let ax = accessible(record)?;
-            if ax.boolean("AXMinimized") == Some(true) && !ax.set_boolean("AXMinimized", false) {
-                return Err(format!("Could not restore {}", record.title));
-            }
-            if ax.boolean("AXFullScreen") == Some(true) && !ax.set_boolean("AXFullScreen", false) {
-                return Err(format!("Could not leave full screen for {}", record.title));
-            }
-            Ok(CommandOutcome::ListChanges)
-        }
-        WindowCommand::Terminate => terminate(record),
-        WindowCommand::Run => run_another_instance(record),
-        WindowCommand::Quit => {
-            let app = running_application(record)?;
-            if !app.terminate() {
-                return Err(format!(
-                    "{} did not accept the quit request",
-                    record.app_name
-                ));
-            }
-            Ok(CommandOutcome::ListChanges)
-        }
-        WindowCommand::Hide => {
-            let app = running_application(record)?;
-            if !app.hide() {
-                return Err(format!("Could not hide {}", record.app_name));
-            }
-            Ok(CommandOutcome::ListChanges)
-        }
+fn bring_forward(app: &NSRunningApplication, name: &str) -> Result<(), String> {
+    #[allow(
+        deprecated,
+        reason = "cooperative activation cannot target another app's window; the ignoring-other-apps path is the documented behaviour for switchers"
+    )]
+    let activated =
+        app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+    if activated {
+        Ok(())
+    } else {
+        Err(format!("macOS refused to activate {name}"))
     }
 }
 
-fn running_application(record: &WindowRecord) -> Result<Retained<NSRunningApplication>, String> {
-    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(record.pid)
-        .ok_or_else(|| format!("{} is no longer running", record.app_name))?;
-    // A reused pid after the listed app exited must not act on an unrelated process.
-    if launch_time(&app) != record.launched_at {
-        return Err(format!(
-            "{} was replaced by another process; leaving it alone",
-            record.app_name
-        ));
-    }
-    Ok(app)
-}
-
-fn accessible(record: &WindowRecord) -> Result<&super::ax::AxElement, String> {
-    record.ax.as_ref().ok_or_else(|| {
+/// Runs a command that acts on one window: Close or Minimize.
+pub fn execute_on_window(command: WindowCommand, record: &WindowRecord) -> Result<(), String> {
+    let ax = record.ax.as_ref().ok_or_else(|| {
         format!(
             "{} is not reachable through Accessibility; grant AltTabio Accessibility access",
             record.title
         )
-    })
+    })?;
+    match command {
+        WindowCommand::Close => {
+            let close = ax
+                .element("AXCloseButton")
+                .ok_or_else(|| format!("{} has no close button", record.title))?;
+            if close.perform("AXPress") {
+                Ok(())
+            } else {
+                Err(format!("Could not close {}", record.title))
+            }
+        }
+        WindowCommand::Minimize => {
+            if ax.set_boolean("AXMinimized", true) {
+                Ok(())
+            } else {
+                Err(format!("Could not minimize {}", record.title))
+            }
+        }
+        other => Err(format!("{other:?} does not act on a single window")),
+    }
 }
 
-fn terminate(record: &WindowRecord) -> Result<CommandOutcome, String> {
-    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(record.pid)
-    else {
-        return Ok(CommandOutcome::ListChanges);
-    };
-    // A reused pid after the listed app exited must not kill an unrelated process.
-    if launch_time(&app) != record.launched_at {
+/// Runs a command that acts on the whole app: Hide, Quit, or Force Quit.
+pub fn execute_on_app(command: WindowCommand, app: &AppRef<'_>) -> Result<(), String> {
+    match command {
+        WindowCommand::Hide => {
+            if running_application(app)?.hide() {
+                Ok(())
+            } else {
+                Err(format!("Could not hide {}", app.name))
+            }
+        }
+        WindowCommand::Quit => {
+            if running_application(app)?.terminate() {
+                Ok(())
+            } else {
+                Err(format!("{} did not accept the quit request", app.name))
+            }
+        }
+        WindowCommand::Terminate => force_quit(app),
+        other => Err(format!("{other:?} does not act on an app")),
+    }
+}
+
+fn running_application(app: &AppRef<'_>) -> Result<Retained<NSRunningApplication>, String> {
+    let pid = i32::try_from(app.process.id)
+        .map_err(|_| format!("{} has an invalid process id", app.name))?;
+    let running = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        .ok_or_else(|| format!("{} is no longer running", app.name))?;
+    // A reused pid after the listed app exited must not act on an unrelated process.
+    if launch_time(&running) != app.process.started_at {
         return Err(format!(
-            "{} was replaced by another process; not terminating it",
-            record.app_name
+            "{} was replaced by another process; leaving it alone",
+            app.name
         ));
     }
+    Ok(running)
+}
+
+fn force_quit(app: &AppRef<'_>) -> Result<(), String> {
+    let running = running_application(app)?;
+    let pid = running.processIdentifier();
     let result = unsafe {
         // SAFETY: kill has no memory preconditions; the pid was verified against its launch time.
-        libc::kill(record.pid, libc::SIGKILL)
+        libc::kill(pid, libc::SIGKILL)
     };
     if result != 0 {
         return Err(format!(
-            "Could not terminate {}: {}",
-            record.app_name,
+            "Could not force quit {}: {}",
+            app.name,
             std::io::Error::last_os_error()
         ));
     }
-    Ok(CommandOutcome::ListChanges)
-}
-
-fn run_another_instance(record: &WindowRecord) -> Result<CommandOutcome, String> {
-    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(record.pid)
-    else {
-        return Err(format!("{} is no longer running", record.app_name));
-    };
-    let Some(url) = app.bundleURL() else {
-        return Err(format!(
-            "{} has no application bundle to launch",
-            record.app_name
-        ));
-    };
-    let configuration = NSWorkspaceOpenConfiguration::configuration();
-    configuration.setCreatesNewApplicationInstance(true);
-    NSWorkspace::sharedWorkspace().openApplicationAtURL_configuration_completionHandler(
-        &url,
-        &configuration,
-        None,
-    );
-    Ok(CommandOutcome::ListChanges)
+    Ok(())
 }

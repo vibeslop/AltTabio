@@ -7,20 +7,17 @@
 use super::hotkey::{ModifierState, TapEvent};
 use super::keymap::key_for_code;
 use objc2_core_foundation::{
-    CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource, CGPoint, kCFRunLoopCommonModes,
+    CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource, kCFRunLoopCommonModes,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventTapOptions,
-    CGEventTapPlacement, CGEventTapProxy, CGEventType, CGMouseButton,
+    CGEventTapPlacement, CGEventTapProxy, CGEventType,
 };
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
 
-pub type TapHandler = Box<dyn FnMut(TapEvent, CGPoint) -> bool>;
-
-// Marks events this process posts so the tap does not feed them back into the gesture state.
-const SYNTHETIC_EVENT_MARKER: i64 = 0x616C_7474; // "altt"
+pub type TapHandler = Box<dyn FnMut(TapEvent) -> bool>;
 
 struct TapContext {
     handler: TapHandler,
@@ -48,9 +45,6 @@ impl EventTap {
             CGEventType::KeyUp,
             CGEventType::FlagsChanged,
             CGEventType::LeftMouseDown,
-            CGEventType::RightMouseDown,
-            CGEventType::RightMouseUp,
-            CGEventType::ScrollWheel,
         ]);
         let port = unsafe {
             // SAFETY: `context` stays allocated until `Drop` disables the tap and frees it after
@@ -104,27 +98,6 @@ impl EventTap {
             source,
             context,
         })
-    }
-
-    /// Balances a right-button press that already reached the app under the cursor before the
-    /// wheel gesture claimed the button.
-    pub fn post_right_button_release(location: CGPoint) {
-        let event = CGEvent::new_mouse_event(
-            None,
-            CGEventType::RightMouseUp,
-            location,
-            CGMouseButton::Right,
-        );
-        let Some(event) = event else {
-            eprintln!("Could not create the synthetic right-button release");
-            return;
-        };
-        CGEvent::set_integer_value_field(
-            Some(&event),
-            CGEventField::EventSourceUserData,
-            SYNTHETIC_EVENT_MARKER,
-        );
-        CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&event));
     }
 }
 
@@ -191,16 +164,9 @@ fn handle_event(context: &mut TapContext, event_type: CGEventType, event: &CGEve
         }
         return false;
     }
-    if CGEvent::integer_value_field(Some(event), CGEventField::EventSourceUserData)
-        == SYNTHETIC_EVENT_MARKER
-    {
-        return false;
-    }
-    let location = CGEvent::location(Some(event));
     let tap_event = match event_type {
         CGEventType::KeyDown => TapEvent::KeyDown {
             key: key_for_code(key_code(event)),
-            text: typed_character(event),
             repeated: CGEvent::integer_value_field(
                 Some(event),
                 CGEventField::KeyboardEventAutorepeat,
@@ -219,21 +185,9 @@ fn handle_event(context: &mut TapContext, event_type: CGEventType, event: &CGEve
         CGEventType::LeftMouseDown => TapEvent::LeftMouseDown {
             inside_overlay: false,
         },
-        CGEventType::RightMouseDown => TapEvent::RightMouseDown,
-        CGEventType::RightMouseUp => TapEvent::RightMouseUp,
-        CGEventType::ScrollWheel => {
-            let delta = CGEvent::integer_value_field(
-                Some(event),
-                CGEventField::ScrollWheelEventPointDeltaAxis1,
-            );
-            if delta == 0 {
-                return false;
-            }
-            TapEvent::ScrollWheel(delta.signum().try_into().unwrap_or(1))
-        }
         _ => return false,
     };
-    (context.handler)(tap_event, location)
+    (context.handler)(tap_event)
 }
 
 fn key_code(event: &CGEvent) -> u16 {
@@ -242,22 +196,4 @@ fn key_code(event: &CGEvent) -> u16 {
         CGEventField::KeyboardEventKeycode,
     ))
     .unwrap_or(u16::MAX)
-}
-
-fn typed_character(event: &CGEvent) -> Option<char> {
-    let mut buffer = [0_u16; 4];
-    let mut length = 0_u64;
-    unsafe {
-        // SAFETY: `buffer` has room for the declared maximum and `length` is writable.
-        CGEvent::keyboard_get_unicode_string(
-            Some(event),
-            buffer.len() as u64,
-            &raw mut length,
-            buffer.as_mut_ptr(),
-        );
-    }
-    let written = buffer.get(..usize::try_from(length).ok()?)?;
-    char::decode_utf16(written.iter().copied())
-        .next()
-        .and_then(Result::ok)
 }
