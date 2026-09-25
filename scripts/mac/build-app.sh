@@ -6,11 +6,13 @@
 #
 # Output: target/mac/AltTabio.app
 #
-# macOS keys Accessibility and Screen Recording grants to the app bundle identifier plus its code
-# signature. Ad-hoc signatures change with every build, which makes macOS forget the grants. The
-# script therefore signs with the persistent self-signed "AltTabio Code Signing" certificate when
-# it exists (scripts/mac/make-signing-cert.sh creates it) and falls back to an ad-hoc signature
-# otherwise.
+# macOS keys Accessibility and Screen Recording grants to the app bundle identifier plus the
+# certificate it is signed with. Ad-hoc signatures change with every build, which makes macOS
+# forget the grants. The script therefore signs with the release certificate pinned in
+# scripts/mac/release-certificate.sha1 when the keychain holds it, else with a personal
+# "AltTabio Code Signing" certificate (scripts/mac/make-signing-cert.sh creates either), and ad hoc
+# only when there is neither. ALTTABIO_KEYCHAIN names a keychain outside the search list to take
+# them from, as the release workflow does.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -85,11 +87,34 @@ for size in 16 32 128 256; do
 done
 iconutil -c icns "$iconset" -o "$contents/Resources/AltTabio.icns"
 
-identity="AltTabio Code Signing"
-identities=$(security find-identity -v -p codesigning 2>/dev/null) || identities=
-if [[ "$identities" == *"\"$identity\""* ]]; then
-    codesign --force --sign "$identity" --identifier com.vibeslop.AltTabio "$app"
-    echo "Signed $app with the persistent '$identity' certificate"
+# codesign takes a certificate by its SHA-1 hash whether or not it is trusted, and macOS matches
+# the grants against that hash alone, so neither certificate has to be trusted.
+keychain=()
+codesign_keychain=()
+if [[ -n "${ALTTABIO_KEYCHAIN:-}" ]]; then
+    keychain=("$ALTTABIO_KEYCHAIN")
+    codesign_keychain=(--keychain "$ALTTABIO_KEYCHAIN")
+fi
+identities=$(security find-identity -p codesigning "${keychain[@]}" 2>/dev/null) || identities=
+pin_file=scripts/mac/release-certificate.sha1
+identity=
+if [[ -f "$pin_file" && "$identities" == *"$(<"$pin_file")"* ]]; then
+    identity=$(<"$pin_file")
+    certificate="the release certificate"
+else
+    for line in "${(@f)identities}"; do
+        if [[ "$line" == *'"AltTabio Code Signing"'* ]]; then
+            # "  1) <SHA-1> "AltTabio Code Signing" (...)"
+            identity=${${line##*\) }%% *}
+            certificate="the personal 'AltTabio Code Signing' certificate"
+            break
+        fi
+    done
+fi
+if [[ -n "$identity" ]]; then
+    codesign --force --sign "$identity" "${codesign_keychain[@]}" \
+        --identifier com.vibeslop.AltTabio "$app"
+    echo "Signed $app with $certificate"
 else
     codesign --force --sign - --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app ad hoc; run scripts/mac/make-signing-cert.sh once to keep permissions across builds"
