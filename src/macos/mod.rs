@@ -20,7 +20,7 @@ mod window_list;
 
 use crate::settings_io::SettingsStore;
 use alttabio::app_switcher::{
-    Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, group_by_app,
+    Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, WindowHistory, group_by_app,
 };
 use alttabio::input::WindowCommand;
 use alttabio::settings::Settings;
@@ -361,6 +361,8 @@ pub struct App {
     icons: HashMap<i32, Retained<NSImage>>,
     // Process ids in the order their apps were last activated, the frontmost first.
     recent_apps: Vec<u32>,
+    // Windows in the order they last had focus, which orders each app's windows.
+    window_history: WindowHistory,
     // The most apps and the longest window list this session has listed. The panel is sized
     // for them, so it never shrinks under the pointer while it shows.
     extent: (usize, usize),
@@ -462,6 +464,7 @@ impl App {
             order: Vec::new(),
             icons: HashMap::new(),
             recent_apps: frontmost_pid().into_iter().collect(),
+            window_history: WindowHistory::default(),
             extent: (0, 0),
             tile_start: 0,
             row_start: 0,
@@ -699,6 +702,19 @@ impl App {
             .map(|record| record.window_id)
             .collect::<Vec<_>>();
         self.order = merge_order(&self.order, &on_screen, &others);
+        // The front app's topmost window is the one with focus; the window list refreshes on
+        // every activation and every two seconds, so the history follows within that time.
+        let front = frontmost_pid();
+        let focused = records
+            .iter()
+            .find(|record| record.is_on_screen && Some(record_process(record).id) == front)
+            .and_then(|record| isize::try_from(record.window_id).ok());
+        let listed = self
+            .order
+            .iter()
+            .filter_map(|id| isize::try_from(*id).ok())
+            .collect::<Vec<_>>();
+        self.window_history.note(focused, &listed);
         let pids = records
             .iter()
             .map(|record| record.pid)
@@ -743,8 +759,12 @@ impl App {
 
     /// The listed windows grouped by app, the most recently used app first.
     fn app_entries(&self) -> Vec<AppEntry> {
-        let windows = self
-            .order
+        // Focus history first, then stacking order for windows it has not seen.
+        let mut order = self.order.clone();
+        order.sort_by_key(|id| {
+            isize::try_from(*id).map_or(usize::MAX, |handle| self.window_history.rank(handle))
+        });
+        let windows = order
             .iter()
             .filter_map(|id| self.records.iter().find(|record| record.window_id == *id))
             .map(|record| WindowEntry {
