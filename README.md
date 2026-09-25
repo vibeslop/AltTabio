@@ -135,15 +135,19 @@ scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
 
-The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the app's code signature, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once to create a self-signed certificate that the build script then uses, so the permissions survive rebuilds. macOS asks for the login password while it marks the certificate as trusted, and the first build asks whether codesign may use the key; choose **Always Allow**. The script also writes `~/AltTabio-Code-Signing.p12`, a backup encrypted with a password you choose; `scripts/mac/make-signing-cert.sh --import <file>` restores it on another Mac.
-
-`scripts/mac/package.sh` builds a release: a universal bundle for Apple silicon and Intel Macs, zipped as `target/mac/AltTabio-<version>-macos.zip` for the `v<version>` release, which is where the install script looks for it. Users keep their permissions across updates only while every release carries the same certificate, so the first release records the certificate's SHA-1 hash in `scripts/mac/release-certificate.sha1`, to be committed, and later releases refuse any other certificate, even one of the same name. Keep the backup and its password somewhere safe, such as a password manager; whoever holds the key can sign an app that macOS treats as AltTabio.
+The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` to keep it. macOS ties Accessibility and Screen Recording grants to the certificate the app is signed with, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once to create a personal certificate that the build script then uses, so your grants survive rebuilds. If a build asks whether codesign may use the key, choose **Always Allow**.
 
 `ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action to the terminal.
 
 Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there. The file uses the same keys as the Windows build; `ReplaceAltTab` maps to Cmd+Tab and `ReplaceWinTab` to Option+Tab.
 
 The debug helpers `--list` and `--activate <window id>` work from a plain `cargo run` as well.
+
+### Releasing on macOS
+
+Every release carries the same release certificate, so users keep their permissions across updates. Its SHA-1 hash is pinned in `scripts/mac/release-certificate.sha1`, and its key lives in the secrets of the repository's `release` environment, which only `v*` tags can use. A maintainer creates it once with `scripts/mac/make-signing-cert.sh --release`, commits the pin, and keeps the backup the script writes, with its password, in the maintainers' password vault. Whoever holds the key can sign an app that macOS treats as AltTabio, and a new certificate would make every user grant both permissions again.
+
+To release, set the version in `Cargo.toml` and push the tag `v<version>`. The Release macOS workflow builds a universal bundle for Apple silicon and Intel Macs, signs it with the release certificate, and attaches `AltTabio-<version>-macos.zip` to the tag's release, creating a draft release when there is none. The install script picks the archive up once the release is published. `scripts/mac/package.sh` does the same by hand on a Mac that imported the certificate with `scripts/mac/make-signing-cert.sh --import <backup.p12>`, and refuses a bundle signed with any other certificate.
 
 ## Building from source
 
