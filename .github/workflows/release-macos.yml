@@ -48,8 +48,7 @@ jobs:
             echo "::error::The release environment lacks the certificate; run scripts/mac/make-signing-cert.sh --release."
             exit 1
           fi
-          # A keychain of its own, outside the search list, so nothing but this job's codesign
-          # sees the key. Its password only has to last the job.
+          # A keychain of its own for the key. Its password only has to last the job.
           keychain=$RUNNER_TEMP/release.keychain-db
           keychain_password=$(openssl rand -hex 32)
           security create-keychain -p "$keychain_password" "$keychain"
@@ -59,6 +58,28 @@ jobs:
           security import "$RUNNER_TEMP/release.p12" -k "$keychain" -f pkcs12 \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/release.p12"
+          # codesign has to reach the key without a prompt, which a runner cannot answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          # codesign on macOS 26 offers only certificates trusted for code signing, and answers
+          # "no identity found" for the rest. Trust in the user domain waits for an authorization
+          # prompt, so it goes in the admin domain, which takes the passwordless sudo that
+          # GitHub's runners allow.
+          security find-certificate -c "AltTabio Release" -p "$keychain" > "$RUNNER_TEMP/release.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/release.pem"
+          rm "$RUNNER_TEMP/release.pem"
+          # codesign builds the certificate chain from the search list only.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          valid=$(security find-identity -v -p codesigning "$keychain")
+          case "$valid" in
+            *"$(cat scripts/mac/release-certificate.sha1)"*) ;;
+            *)
+              echo "::error::The release certificate is not valid for code signing after import:"
+              echo "$valid"
+              exit 1
+              ;;
+          esac
           echo "ALTTABIO_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
       - name: Package
