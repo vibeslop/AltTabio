@@ -709,11 +709,7 @@ impl App {
             .iter()
             .find(|record| record.is_on_screen && Some(record_process(record).id) == front)
             .and_then(|record| isize::try_from(record.window_id).ok());
-        let listed = self
-            .order
-            .iter()
-            .filter_map(|id| isize::try_from(*id).ok())
-            .collect::<Vec<_>>();
+        let listed = self.listed_windows();
         self.window_history.note(focused, &listed);
         let pids = records
             .iter()
@@ -744,6 +740,32 @@ impl App {
             } else {
                 self.hide_overlay();
             }
+        }
+    }
+
+    fn listed_windows(&self) -> Vec<isize> {
+        self.order
+            .iter()
+            .filter_map(|id| isize::try_from(*id).ok())
+            .collect()
+    }
+
+    /// Records the window in focus right now. A switch between two windows of one app sends no
+    /// notification, so the refreshes see it only on their next tick, and the switcher keeps the
+    /// order it opens with.
+    fn note_focus(&mut self) {
+        let Some(front) = frontmost_pid() else {
+            return;
+        };
+        let focused = i32::try_from(front)
+            .map(window_list::on_screen_windows_of)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|id| isize::try_from(id).ok())
+            .find(|handle| self.record(*handle).is_some());
+        if focused.is_some() {
+            let listed = self.listed_windows();
+            self.window_history.note(focused, &listed);
         }
     }
 
@@ -861,6 +883,7 @@ impl App {
     }
 
     fn show_overlay(&mut self, step: Option<i32>) {
+        self.note_focus();
         self.switcher
             .open(self.app_entries(), step, frontmost_pid());
         if !self.switcher.is_active() {
