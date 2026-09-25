@@ -87,15 +87,16 @@ for size in 16 32 128 256; do
 done
 iconutil -c icns "$iconset" -o "$contents/Resources/AltTabio.icns"
 
-# codesign takes a certificate by its SHA-1 hash whether or not it is trusted, and macOS matches
-# the grants against that hash alone, so neither certificate has to be trusted.
+# macOS matches the grants against the certificate's SHA-1 hash, so codesign gets the hash. It
+# offers only certificates trusted for code signing, at least on macOS 26, so an untrusted one is
+# passed over here rather than failing in codesign; make-signing-cert.sh trusts what it adds.
 keychain=()
 codesign_keychain=()
 if [[ -n "${ALTTABIO_KEYCHAIN:-}" ]]; then
     keychain=("$ALTTABIO_KEYCHAIN")
     codesign_keychain=(--keychain "$ALTTABIO_KEYCHAIN")
 fi
-identities=$(security find-identity -p codesigning "${keychain[@]}" 2>/dev/null) || identities=
+identities=$(security find-identity -v -p codesigning "${keychain[@]}" 2>/dev/null) || identities=
 pin_file=scripts/mac/release-certificate.sha1
 identity=
 if [[ -f "$pin_file" && "$identities" == *"$(<"$pin_file")"* ]]; then

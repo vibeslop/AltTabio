@@ -73,14 +73,24 @@ fingerprint() {
 }
 
 # Read in full before matching: grep -q in a pipe exits at its match, and pipefail would count
-# the writer it cut off as a failure.
+# the writer it cut off as a failure. The second list holds only the identities trusted for code
+# signing, the only ones codesign offers.
 identities=$(security find-identity -p codesigning "$keychain")
+trusted=$(security find-identity -v -p codesigning "$keychain")
+
+# Trusts the certificate in $work/cert.pem for code signing; macOS asks for the login password.
+trust() {
+    security add-trusted-cert -p codeSign -k "$keychain" "$work/cert.pem"
+}
 
 case "${1:-}" in
     "")
-        if [[ "$identities" == *'"AltTabio Code Signing"'* ]]; then
+        if [[ "$trusted" == *'"AltTabio Code Signing"'* ]]; then
             print -- "Your 'AltTabio Code Signing' certificate is already in the login keychain."
             exit 0
+        elif [[ "$identities" == *'"AltTabio Code Signing"'* ]]; then
+            fail "Your 'AltTabio Code Signing' certificate is not trusted for code signing, so builds
+pass it over. Delete it in Keychain Access and run this again."
         fi
         make_certificate "AltTabio Code Signing"
         # The file only carries the key into the keychain, so a random password does.
@@ -89,6 +99,7 @@ case "${1:-}" in
         export_p12 "$work/personal.p12" "AltTabio Code Signing"
         security import "$work/personal.p12" -k "$keychain" -f pkcs12 -P "$password" \
             -T /usr/bin/codesign >/dev/null
+        trust
         print -- "Created your 'AltTabio Code Signing' certificate. scripts/mac/build-app.sh signs with"
         print -- "it, so macOS keeps AltTabio's permissions across your builds. If a build asks"
         print -- "whether codesign may use the key, choose Always Allow."
@@ -147,9 +158,12 @@ Recording again."
         [[ -f "$backup" ]] || fail "Usage: $0 --import <backup.p12>"
         [[ -f "$pin_file" ]] || fail "$pin_file pins no release certificate yet."
         release=$(<"$pin_file")
-        if [[ "$identities" == *"$release"* ]]; then
+        if [[ "$trusted" == *"$release"* ]]; then
             print -- "The release certificate is already in the login keychain."
             exit 0
+        elif [[ "$identities" == *"$release"* ]]; then
+            fail "The release certificate is in the login keychain but not trusted for code signing.
+Delete it in Keychain Access and run this again."
         fi
         read -rs "password?Password of $backup: "
         print
@@ -162,6 +176,7 @@ Recording again."
             fail "$backup holds certificate $found, not the release certificate $release."
         security import "$backup" -k "$keychain" -f pkcs12 -P "$password" -T /usr/bin/codesign \
             >/dev/null
+        trust
         print -- "The release certificate is in the login keychain; scripts/mac/build-app.sh and"
         print -- "scripts/mac/package.sh sign with it."
         ;;
