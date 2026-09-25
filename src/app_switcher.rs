@@ -130,6 +130,8 @@ pub enum Action {
     StepWindow(i32),
     /// Return, a click, or letting go of the switch modifier.
     Activate,
+    /// A number key: the selected app's window at that position, counted from 1, at once.
+    ChooseWindow(usize),
     Dismiss,
     Command(WindowCommand),
 }
@@ -328,6 +330,16 @@ impl AppSwitcher {
                 }
                 None => Effect::None,
             },
+            Action::ChooseWindow(position) => {
+                let listed = self.selected_app().map_or(0, |app| app.windows.len());
+                match position.checked_sub(1).filter(|index| *index < listed) {
+                    Some(index) => {
+                        self.window = index;
+                        self.handle(Action::Activate)
+                    }
+                    None => Effect::None,
+                }
+            }
             Action::Dismiss => {
                 self.hide();
                 Effect::Hide
@@ -521,6 +533,23 @@ mod tests {
         assert_eq!(switcher.selected_window(), Some(21));
         assert_eq!(switcher.handle(Action::StepWindow(-5)), Effect::Redraw);
         assert_eq!(switcher.selected_window(), Some(20));
+    }
+
+    #[test]
+    fn a_number_switches_to_that_window_of_the_selected_app() {
+        let mut switcher = opened(vec![app(1, &[10]), app(2, &[20, 21, 22])], Some(1));
+
+        assert_eq!(switcher.handle(Action::ChooseWindow(4)), Effect::None);
+        assert_eq!(switcher.handle(Action::ChooseWindow(0)), Effect::None);
+        assert!(switcher.is_active());
+        assert_eq!(
+            switcher.handle(Action::ChooseWindow(3)),
+            Effect::Activate(Target::Window {
+                handle: 22,
+                process: process(2),
+            })
+        );
+        assert!(!switcher.is_active());
     }
 
     #[test]
