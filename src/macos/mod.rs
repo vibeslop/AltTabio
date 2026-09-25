@@ -465,7 +465,6 @@ impl App {
         self.status_item = Some(status_item::install(mtm, Rc::new(handle_menu_action)));
         self.observe_workspace();
         self.request_refresh();
-        self.preview.refresh_content();
         let refresh_block = RcBlock::new(|_timer: NonNull<NSTimer>| {
             let _ = with_app(App::request_refresh);
         });
@@ -490,10 +489,8 @@ impl App {
                  soon as the access is granted."
             );
         }
-        if !permissions::screen_recording_granted() && !permissions::request_screen_recording() {
-            eprintln!(
-                "Screen Recording is not granted; live previews stay blank until it is allowed."
-            );
+        if self.settings.appearance.preview {
+            self.ask_for_screen_recording();
         }
         if !self.install_event_tap() {
             self.start_tap_retry_timer();
@@ -1323,9 +1320,13 @@ impl App {
     }
 
     fn apply_settings(&mut self, settings: Settings) {
+        let previews_turned_on = settings.appearance.preview && !self.settings.appearance.preview;
         self.settings = settings;
         self.hotkey_settings = hotkey_settings(&self.settings);
         self.save_settings();
+        if previews_turned_on {
+            self.ask_for_screen_recording();
+        }
         if self.switcher.is_active() {
             if let Some(overlay) = &self.overlay {
                 let theme = self.resolved_theme();
@@ -1334,6 +1335,16 @@ impl App {
             self.start_preview_timer();
             self.redraw();
             self.request_preview_capture();
+        }
+    }
+
+    /// Previews are the only thing that needs Screen Recording, so the system prompt comes with
+    /// them: on a start with previews on, and when they are turned on.
+    fn ask_for_screen_recording(&mut self) {
+        if permissions::screen_recording_granted() {
+            self.preview.refresh_content();
+        } else if !permissions::request_screen_recording() {
+            eprintln!("Screen Recording is not granted; previews stay blank until it is allowed.");
         }
     }
 
