@@ -198,6 +198,17 @@ pub fn merge_order(previous: &[u32], on_screen: &[u32], others: &[u32]) -> Vec<u
     order
 }
 
+/// The on-screen windows of `pid`, front to back. It asks only the window server, not
+/// Accessibility, so a hung app cannot stall it.
+#[must_use]
+pub fn on_screen_windows_of(pid: i32) -> Vec<u32> {
+    on_screen_windows()
+        .into_iter()
+        .filter(|window| window.pid == pid)
+        .map(|window| window.id)
+        .collect()
+}
+
 fn bounds_on_display(bounds: [f64; 4], display: [f64; 4]) -> bool {
     let center_x = bounds[0] + bounds[2] / 2.0;
     let center_y = bounds[1] + bounds[3] / 2.0;
