@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Builds AltTabio.app from the Rust executable without Xcode.
 #
-# Usage: scripts/mac/build-app.sh [--debug]
+# Usage: scripts/mac/build-app.sh [--debug | --universal]
+#   --universal   build the release binary for Apple silicon and Intel, as published releases are
 #
 # Output: target/mac/AltTabio.app
 #
@@ -15,22 +16,48 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 profile=release
 cargo_flags=(--release)
-if [[ "${1:-}" == "--debug" ]]; then
-    profile=debug
-    cargo_flags=()
-fi
+targets=()
+case "${1:-}" in
+    --debug)
+        profile=debug
+        cargo_flags=()
+        ;;
+    --universal)
+        profile=universal
+        targets=(aarch64-apple-darwin x86_64-apple-darwin)
+        ;;
+esac
 
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app=target/mac/AltTabio.app
 contents="$app/Contents"
 
-cargo build --quiet "${cargo_flags[@]}"
+binaries=()
+if (( ${#targets} )); then
+    installed=$(rustup target list --installed)
+    for target in "${targets[@]}"; do
+        if [[ "$installed" != *"$target"* ]]; then
+            rustup target add "$target"
+        fi
+        cargo build --quiet --release --target "$target"
+        binaries+=("target/$target/release/AltTabio")
+    done
+else
+    cargo build --quiet "${cargo_flags[@]}"
+    binaries=("target/$profile/AltTabio")
+fi
 
 rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources"
-cp "target/$profile/AltTabio" "$contents/MacOS/AltTabio"
+if (( ${#binaries} > 1 )); then
+    lipo -create "${binaries[@]}" -output "$contents/MacOS/AltTabio"
+else
+    cp "${binaries[@]}" "$contents/MacOS/AltTabio"
+fi
 sed "s/__VERSION__/$version/g" assets/mac/Info.plist > "$contents/Info.plist"
 printf 'APPL????' > "$contents/PkgInfo"
+# The notices ship inside the bundle because the bundle is all that an install keeps.
+cp LICENSE THIRD_PARTY_LICENSES.md "$contents/Resources/"
 
 # The .icns is generated from the product icon with the tools that ship with macOS.
 iconset=target/mac/AltTabio.iconset
