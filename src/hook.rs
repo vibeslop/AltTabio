@@ -61,8 +61,6 @@ const ACTION_SELECT_LAST: usize = 13;
 const ACTION_DISMISS_OVERLAY: usize = 14;
 const ACTION_CLOSE_SELECTED: usize = 15;
 const ACTION_WINDOW_COMMAND: usize = 16;
-const ACTION_SWITCH_WITHIN_PROCESS: usize = 17;
-const ACTION_TOGGLE_ACTION_PANEL: usize = 18;
 const REPLAYED_INPUT_MARKER: usize = 0x0A17_AB10;
 const INTERCEPTION_SUSPENDED: usize = 1;
 const SEARCH_ACTIVE: usize = 2;
@@ -397,10 +395,6 @@ pub fn decode_action(wparam: WPARAM, lparam: LPARAM) -> Option<InputAction> {
             .map(InputAction::AppendSearchCharacter),
         ACTION_BACKSPACE_SEARCH => Some(InputAction::BackspaceSearch),
         ACTION_NAVIGATE => i32::try_from(lparam.0).ok().map(InputAction::Navigate),
-        ACTION_SWITCH_WITHIN_PROCESS => i32::try_from(lparam.0)
-            .ok()
-            .map(InputAction::SwitchWithinProcess),
-        ACTION_TOGGLE_ACTION_PANEL => Some(InputAction::ToggleActionPanel),
         ACTION_ACTIVATE_SELECTED => Some(InputAction::ActivateSelected),
         ACTION_SELECT_FIRST => Some(InputAction::SelectFirst),
         ACTION_SELECT_LAST => Some(InputAction::SelectLast),
@@ -1147,8 +1141,6 @@ fn post_action_message(target: HWND, action: InputAction, generation: usize, mes
             ACTION_ACTIVATE_POSITION,
             isize::try_from(position).unwrap_or_default(),
         ),
-        InputAction::SwitchWithinProcess(delta) => (ACTION_SWITCH_WITHIN_PROCESS, delta as isize),
-        InputAction::ToggleActionPanel => (ACTION_TOGGLE_ACTION_PANEL, 0),
         InputAction::AltReleased => (ACTION_ALT_RELEASED, 0),
         InputAction::RightButtonPressed => (ACTION_RIGHT_BUTTON_PRESSED, 0),
         InputAction::RightButtonReleased => (ACTION_RIGHT_BUTTON_RELEASED, 0),
