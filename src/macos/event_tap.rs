@@ -5,7 +5,8 @@
 //! a slow frame can never trip the system's tap timeout.
 
 use super::hotkey::{ModifierState, TapEvent};
-use super::keymap::key_for_code;
+use super::keymap::key_for;
+use objc2_app_kit::NSEvent;
 use objc2_core_foundation::{
     CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource, kCFRunLoopCommonModes,
 };
@@ -166,7 +167,7 @@ fn handle_event(context: &mut TapContext, event_type: CGEventType, event: &CGEve
     }
     let tap_event = match event_type {
         CGEventType::KeyDown => TapEvent::KeyDown {
-            key: key_for_code(key_code(event)),
+            key: key_for(key_code(event), typed_character(event)),
             repeated: CGEvent::integer_value_field(
                 Some(event),
                 CGEventField::KeyboardEventAutorepeat,
@@ -196,4 +197,14 @@ fn key_code(event: &CGEvent) -> u16 {
         CGEventField::KeyboardEventKeycode,
     ))
     .unwrap_or(u16::MAX)
+}
+
+/// What the key types under the current layout with every modifier but Shift ignored, which is
+/// what macOS matches menu shortcuts against. Option would otherwise turn Q into œ.
+fn typed_character(event: &CGEvent) -> Option<char> {
+    NSEvent::eventWithCGEvent(event)?
+        .charactersIgnoringModifiers()?
+        .to_string()
+        .chars()
+        .next()
 }
