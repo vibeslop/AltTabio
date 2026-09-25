@@ -177,16 +177,10 @@ impl Rgba {
     pub const fn new(color: Rgb8, alpha: f64) -> Self {
         Self { color, alpha }
     }
-
-    #[must_use]
-    pub const fn opaque(color: Rgb8) -> Self {
-        Self { color, alpha: 1.0 }
-    }
 }
 
 /// The one palette the macOS switcher draws from: pure greys, in a light and a dark set. There
-/// is no accent; emphasis is the inverse of the surface, so nothing on the glass competes with
-/// the window previews and app icons for color.
+/// is no accent, so nothing on the glass competes with the app icons and previews for color.
 ///
 /// Every token is authored in OKLCH so that lightness gaps, which carry contrast, can be read
 /// off directly; every text token is a real color rather than an opacity of another.
@@ -194,22 +188,10 @@ impl Rgba {
 pub struct SwitcherTokens {
     /// The glass tint behind everything.
     pub canvas: Rgba,
-    /// Inset areas: the preview well and the search row.
+    /// The inset preview well.
     pub well: Rgba,
-    /// Raised chips: keycaps and footer keys.
-    pub raised: Rgb8,
-    pub raised_edge: Rgba,
-    /// The darker bottom edge that makes a keycap look pressable.
-    pub raised_base: Rgba,
-    /// The action panel floating over the preview.
-    pub surface: Rgba,
-    pub surface_edge: Rgba,
-    /// The selected row and the selected action.
+    /// The plate behind the selected app and the selected window.
     pub selection: Rgba,
-    /// The inverse of the surface, for the moment a number key is pressed and for the rail's
-    /// window-count badge: the only fill that has to read at a glance from across the row.
-    pub emphasis: Rgb8,
-    pub emphasis_text: Rgb8,
     pub text: Rgb8,
     pub text_secondary: Rgb8,
     /// Pure white or black at low alpha for image outlines and the panel edge.
@@ -234,14 +216,7 @@ impl SwitcherTokens {
             ResolvedTheme::Dark => Self {
                 canvas: Rgba::new(neutral(0.21).to_rgb8(), 0.74),
                 well: Rgba::new(neutral(0.27).to_rgb8(), 0.85),
-                raised: neutral(0.34).to_rgb8(),
-                raised_edge: Rgba::opaque(neutral(0.45).to_rgb8()),
-                raised_base: Rgba::new(neutral(0.12).to_rgb8(), 0.9),
-                surface: Rgba::new(neutral(0.25).to_rgb8(), 0.97),
-                surface_edge: Rgba::opaque(neutral(0.38).to_rgb8()),
                 selection: Rgba::new(neutral(0.36).to_rgb8(), 0.96),
-                emphasis: neutral(0.96).to_rgb8(),
-                emphasis_text: neutral(0.16).to_rgb8(),
                 text: neutral(0.96).to_rgb8(),
                 text_secondary: neutral(0.72).to_rgb8(),
                 ring: Rgba::new(white, 0.10),
@@ -251,14 +226,7 @@ impl SwitcherTokens {
             ResolvedTheme::Light => Self {
                 canvas: Rgba::new(neutral(0.965).to_rgb8(), 0.74),
                 well: Rgba::new(neutral(0.92).to_rgb8(), 0.85),
-                raised: neutral(0.995).to_rgb8(),
-                raised_edge: Rgba::new(black, 0.10),
-                raised_base: Rgba::new(black, 0.16),
-                surface: Rgba::new(neutral(0.985).to_rgb8(), 0.97),
-                surface_edge: Rgba::new(black, 0.10),
                 selection: Rgba::new(neutral(0.86).to_rgb8(), 0.96),
-                emphasis: neutral(0.22).to_rgb8(),
-                emphasis_text: neutral(0.985).to_rgb8(),
                 text: neutral(0.22).to_rgb8(),
                 text_secondary: neutral(0.48).to_rgb8(),
                 ring: Rgba::new(black, 0.10),
@@ -362,15 +330,14 @@ mod tests {
         assert!(lightness(dark.canvas.color) < 0.25);
         assert!(lightness(dark.text) > 0.9);
         assert!(lightness(dark.text_secondary) > 0.7);
-        assert!(lightness(dark.raised) - lightness(dark.canvas.color) > 0.1);
+        assert!(lightness(dark.selection.color) - lightness(dark.canvas.color) > 0.1);
         assert!(lightness(dark.text) - lightness(dark.selection.color) > 0.5);
-        assert!(lightness(dark.emphasis) - lightness(dark.emphasis_text) > 0.6);
 
         assert!(lightness(light.canvas.color) > 0.9);
         assert!(lightness(light.text) < 0.25);
         assert!(lightness(light.text_secondary) < 0.5);
+        assert!(lightness(light.canvas.color) - lightness(light.selection.color) > 0.1);
         assert!(lightness(light.selection.color) - lightness(light.text) > 0.6);
-        assert!(lightness(light.emphasis_text) - lightness(light.emphasis) > 0.6);
     }
 
     #[test]
@@ -381,11 +348,7 @@ mod tests {
             for color in [
                 tokens.canvas.color,
                 tokens.well.color,
-                tokens.raised,
-                tokens.surface.color,
                 tokens.selection.color,
-                tokens.emphasis,
-                tokens.emphasis_text,
                 tokens.text,
                 tokens.text_secondary,
             ] {
