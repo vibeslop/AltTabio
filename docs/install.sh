@@ -30,6 +30,10 @@ function run() {
     return "";
 }'
 
+work=
+staged=
+previous=
+
 fail() {
     printf 'AltTabio: %s\n' "$1" >&2
     exit 1
@@ -42,6 +46,20 @@ certificate() {
     codesign -d --extract-certificates="$work/certificate" "$1" 2>/dev/null || return 0
     [ -s "$work/certificate0" ] || return 0
     shasum -a 1 <"$work/certificate0" | cut -c1-40
+}
+
+cleanup() {
+    # Cut short between the two renames, the install has set the old copy aside with no new one
+    # in its place; put it back.
+    if [ -n "$previous" ] && [ -e "$previous" ] && [ ! -e "$target/AltTabio.app" ]; then
+        if ! mv "$previous" "$target/AltTabio.app"; then
+            printf 'AltTabio: the previous copy is at %s\n' "$previous" >&2
+            previous=
+        fi
+    fi
+    [ -z "$previous" ] || rm -rf "$previous"
+    [ -z "$staged" ] || rm -rf "$staged"
+    [ -z "$work" ] || rm -rf "$work"
 }
 
 main() {
@@ -60,7 +78,11 @@ main() {
     version=${tag#v}
 
     work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT
+    trap cleanup EXIT
+    # Ctrl-C and the like exit through the cleanup too.
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
     printf 'Downloading AltTabio %s\n' "$version"
     curl -fL --progress-bar -o "$work/AltTabio.zip" "$url" || fail "could not download $url."
     ditto -x -k "$work/AltTabio.zip" "$work" || fail "the download is not a readable archive."
@@ -85,6 +107,16 @@ main() {
     [ -w "$target" ] ||
         fail "this account cannot replace $target/AltTabio.app; run the command as an administrator."
 
+    # The new copy goes next to the old one first, so the swap below is two renames on one volume.
+    staged=$target/.AltTabio.app.new
+    previous=$target/.AltTabio.app.old
+    # A run killed outright between the renames left the old copy aside; it comes back first.
+    if [ -e "$previous" ] && [ ! -e "$target/AltTabio.app" ]; then
+        mv "$previous" "$target/AltTabio.app"
+    fi
+    rm -rf "$staged" "$previous"
+    ditto "$work/AltTabio.app" "$staged" || fail "could not copy AltTabio.app into $target."
+
     # A running copy keeps the old code and turns the new one away as a second instance. Only
     # this account's copy is asked to quit; another account's is not ours to stop.
     account=$(id -u)
@@ -102,9 +134,12 @@ main() {
     if [ -e "$target/AltTabio.app" ]; then
         updating=true
         old_certificate=$(certificate "$target/AltTabio.app")
-        mv "$target/AltTabio.app" "$work/previous.app"
+        mv "$target/AltTabio.app" "$previous"
     fi
-    mv "$work/AltTabio.app" "$target/AltTabio.app"
+    mv "$staged" "$target/AltTabio.app"
+    staged=
+    rm -rf "$previous"
+    previous=
     open "$target/AltTabio.app"
 
     if $updating; then
