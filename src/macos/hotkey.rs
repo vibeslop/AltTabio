@@ -4,6 +4,7 @@
 //! machine only decides which events the switcher owns and what they mean to it. The keys are the
 //! ones the system app switcher already taught: Tab and the backtick step through apps, the arrows
 //! move, Return or letting go switches, Escape cancels, and W, M, H, and Q act on the selection.
+//! The numbers drawn beside the selected app's windows pick one of them.
 
 use super::keymap::MacKey;
 use alttabio::app_switcher::Action;
@@ -147,13 +148,19 @@ impl HotkeyState {
             MacKey::Up => Some(Action::StepWindow(-1)),
             MacKey::Down => Some(Action::StepWindow(1)),
             MacKey::Return if !repeated => Some(Action::Activate),
+            MacKey::Digit(position) if !repeated => {
+                Some(Action::ChooseWindow(usize::from(position)))
+            }
             MacKey::Escape if !repeated => Some(Action::Dismiss),
             MacKey::Command(command) if !repeated && !modifiers.control && self.modifier_held() => {
                 Some(Action::Command(command))
             }
             _ => None,
         };
-        if matches!(action, Some(Action::Activate | Action::Dismiss)) {
+        if matches!(
+            action,
+            Some(Action::Activate | Action::ChooseWindow(_) | Action::Dismiss)
+        ) {
             // A later Tab while the modifier stays down starts a new gesture.
             self.gesture = None;
         }
@@ -349,6 +356,23 @@ mod tests {
         assert_eq!(
             action(state.process(key(MacKey::Tab), settings())),
             Some(Action::StepApp(1))
+        );
+    }
+
+    #[test]
+    fn a_number_picks_a_window_and_ends_the_gesture() {
+        let mut state = in_gesture();
+
+        assert_eq!(
+            action(state.process(key(MacKey::Digit(2)), settings())),
+            Some(Action::ChooseWindow(2))
+        );
+        assert_eq!(
+            action(state.process(
+                TapEvent::ModifiersChanged(ModifierState::default()),
+                settings()
+            )),
+            None
         );
     }
 
