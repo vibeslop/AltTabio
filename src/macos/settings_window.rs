@@ -364,7 +364,8 @@ impl SettingsWindow {
     }
 }
 
-/// The form: permission rows, then each group's label beside its checkboxes, then the theme.
+/// The form: permission rows, then each group's label beside its checkboxes, then the theme
+/// under Appearance, the word macOS uses for the same choice.
 fn form(
     mtm: MainThreadMarker,
     settings: &Settings,
@@ -410,7 +411,7 @@ fn form(
         }
     }
     let theme = theme_popup(mtm, settings, controller);
-    add_row(&grid, &label_view(mtm, "Theme"), &theme).setTopPadding(GROUP_SPACING);
+    add_row(&grid, &label_view(mtm, "Appearance"), &theme).setTopPadding(GROUP_SPACING);
     grid
 }
 
