@@ -35,6 +35,15 @@ fail() {
     exit 1
 }
 
+# The SHA-1 hash of the certificate that signed the app at $1, which macOS ties the permissions
+# to; empty for an ad-hoc signature.
+certificate() {
+    rm -f "$work/certificate0"
+    codesign -d --extract-certificates="$work/certificate" "$1" 2>/dev/null || return 0
+    [ -s "$work/certificate0" ] || return 0
+    shasum -a 1 <"$work/certificate0" | cut -c1-40
+}
+
 main() {
     macos=$(sw_vers -productVersion)
     if [ "${macos%%.*}" -lt 26 ]; then
@@ -54,8 +63,14 @@ main() {
     trap 'rm -rf "$work"' EXIT
     printf 'Downloading AltTabio %s\n' "$version"
     curl -fL --progress-bar -o "$work/AltTabio.zip" "$url" || fail "could not download $url."
-    ditto -x -k "$work/AltTabio.zip" "$work"
+    ditto -x -k "$work/AltTabio.zip" "$work" || fail "the download is not a readable archive."
     [ -d "$work/AltTabio.app" ] || fail "the download holds no AltTabio.app."
+    # A damaged download fails here, before anything is replaced.
+    codesign --verify --deep --strict "$work/AltTabio.app" ||
+        fail "the downloaded AltTabio.app fails its signature check; nothing was changed."
+    new_certificate=$(certificate "$work/AltTabio.app")
+    [ -n "$new_certificate" ] ||
+        fail "the downloaded AltTabio.app is not signed with a certificate; nothing was changed."
 
     # An update replaces the installed copy. A first install goes to /Applications unless this
     # account cannot write there.
@@ -83,8 +98,10 @@ main() {
     fi
 
     updating=false
+    old_certificate=
     if [ -e "$target/AltTabio.app" ]; then
         updating=true
+        old_certificate=$(certificate "$target/AltTabio.app")
         mv "$target/AltTabio.app" "$work/previous.app"
     fi
     mv "$work/AltTabio.app" "$target/AltTabio.app"
@@ -92,6 +109,11 @@ main() {
 
     if $updating; then
         printf 'Updated AltTabio in %s to %s.\n' "$target" "$version"
+        if [ "$old_certificate" != "$new_certificate" ]; then
+            printf '%s\n' \
+                "The new copy is signed with another certificate than the one it replaced, so" \
+                "macOS asks for Accessibility and Screen Recording again."
+        fi
         return
     fi
     printf 'Installed AltTabio %s in %s. It runs from the menu bar.\n\n' "$version" "$target"
