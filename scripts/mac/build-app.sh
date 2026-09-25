@@ -18,12 +18,16 @@ usage="Usage: scripts/mac/build-app.sh [--debug | --universal]"
 (( $# <= 1 )) || { print -u2 -- "$usage"; exit 2; }
 profile=release
 cargo_flags=(--release)
-targets=()
+output=release
+# Naming the target keeps these objects apart from a plain `cargo build`, which would otherwise
+# rebuild everything each time the two alternate, since they differ in the deployment target.
+targets=("$(rustc -vV | sed -n 's/^host: //p')")
 case "${1:-}" in
     "") ;;
     --debug)
         profile=debug
         cargo_flags=()
+        output=debug
         ;;
     --universal)
         profile=universal
@@ -39,20 +43,22 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app=target/mac/AltTabio.app
 contents="$app/Contents"
 
+# The binaries name the same oldest macOS as Info.plist; unset, rustc would mark them as running on
+# macOS 11.
+minimum=$(plutil -extract LSMinimumSystemVersion raw assets/mac/Info.plist)
+export MACOSX_DEPLOYMENT_TARGET=$minimum
 binaries=()
-if (( ${#targets} )); then
+installed=
+if [[ "$profile" == universal ]]; then
     installed=$(rustup target list --installed)
-    for target in "${targets[@]}"; do
-        if [[ "$installed" != *"$target"* ]]; then
-            rustup target add "$target"
-        fi
-        cargo build --quiet --release --target "$target"
-        binaries+=("target/$target/release/AltTabio")
-    done
-else
-    cargo build --quiet "${cargo_flags[@]}"
-    binaries=("target/$profile/AltTabio")
 fi
+for target in "${targets[@]}"; do
+    if [[ "$profile" == universal && "$installed" != *"$target"* ]]; then
+        rustup target add "$target"
+    fi
+    cargo build --quiet "${cargo_flags[@]}" --target "$target"
+    binaries+=("target/$target/$output/AltTabio")
+done
 
 rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources"
