@@ -1,6 +1,6 @@
 # AltTabio
 
-> AltTabio is a free, open-source Alt+Tab replacement and window switcher for 64-bit Windows 10 and Windows 11. It shows a numbered list of open windows, a live preview of the selected window, and filters the list as you type. No ads, no account, no telemetry, no network access.
+> AltTabio is a free, open-source Alt+Tab replacement and window switcher for 64-bit Windows 10 and Windows 11, and a Cmd+Tab replacement for macOS 26 and later. On Windows it shows a numbered list of open windows, a live preview of the selected window, and filters the list as you type. On macOS it lists the running apps and every window of the selected one, minimized windows and windows on other Spaces included. No ads, no account, no telemetry, no network access.
 
 AltTabio is an independent project. It is not affiliated with Alt+Tab Terminator or Microsoft.
 
@@ -13,6 +13,7 @@ AltTabio is an independent project. It is not affiliated with Alt+Tab Terminator
 ## Download and source
 
 - [Latest Windows download](https://github.com/vibeslop/AltTabio/releases/latest)
+- [macOS install script](https://vibeslop.github.io/AltTabio/install.sh): run `curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh` in Terminal
 - [GitHub repository](https://github.com/vibeslop/AltTabio)
 - [MIT License](https://github.com/vibeslop/AltTabio/blob/main/LICENSE)
 - [Issues and help](https://github.com/vibeslop/AltTabio/issues)
