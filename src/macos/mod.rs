@@ -150,6 +150,7 @@ pub fn run(arguments: &[OsString]) {
         return;
     }
     let path = settings_path();
+    let first_start = !path.exists();
     let (store, mut settings) = match SettingsStore::load_from(path.clone()) {
         Ok(loaded) => loaded,
         Err(error) => {
@@ -177,6 +178,9 @@ pub fn run(arguments: &[OsString]) {
     )));
     APP.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&app)));
     app.borrow_mut().start();
+    if first_start && !preview_mode {
+        app.borrow_mut().complete_first_start();
+    }
     if settings_mode {
         app.borrow_mut().show_settings();
     }
@@ -1783,6 +1787,9 @@ impl App {
                 SettingsEvent::Changed(settings) => {
                     let _ = with_app(|app| app.apply_settings(settings));
                 }
+                SettingsEvent::Autostart(enabled) => {
+                    let _ = with_app(|app| app.set_autostart(enabled));
+                }
                 SettingsEvent::OpenAccessibility => permissions::open_accessibility_settings(),
                 SettingsEvent::OpenScreenRecording => {
                     permissions::open_screen_recording_settings();
@@ -1801,21 +1808,12 @@ impl App {
     }
 
     fn apply_settings(&mut self, settings: Settings) {
-        let autostart_changed = settings.general.autostart != self.settings.general.autostart;
         let icon_mode_changed = settings.appearance.icon_mode != self.settings.appearance.icon_mode;
         self.settings = settings;
         self.hotkey_settings = hotkey_settings(&self.settings);
         self.session
             .update_settings(session_settings(&self.settings));
-        if let Err(error) = self.store.save(&self.settings) {
-            eprintln!("{error}");
-        }
-        if autostart_changed
-            && let Err(error) = autostart::set_enabled(self.settings.general.autostart)
-        {
-            let mtm = self.mtm;
-            run_later(move || show_fatal_error(mtm, &error));
-        }
+        self.save_settings();
         if self.session.is_visible() {
             if let Some(overlay) = self.overlay.clone() {
                 let theme = self.resolved_theme();
@@ -1826,6 +1824,36 @@ impl App {
                 }
             }
             self.redraw();
+        }
+    }
+
+    /// Registers or removes the login item. The system owns that state, so the settings file
+    /// records whatever it reports afterwards rather than what was asked for.
+    fn set_autostart(&mut self, enabled: bool) {
+        if let Err(error) = autostart::set_enabled(enabled) {
+            let mtm = self.mtm;
+            run_later(move || show_fatal_error(mtm, &error));
+        }
+        self.settings.general.autostart = autostart::is_enabled();
+        self.save_settings();
+    }
+
+    /// The defaults promise launch at login, but only a registration makes it true. Saving right
+    /// away marks the first start as done, so a login item the user later removes in System
+    /// Settings stays removed.
+    fn complete_first_start(&mut self) {
+        if self.settings.general.autostart
+            && let Err(error) = autostart::set_enabled(true)
+        {
+            eprintln!("{error}");
+        }
+        self.settings.general.autostart = autostart::is_enabled();
+        self.save_settings();
+    }
+
+    fn save_settings(&mut self) {
+        if let Err(error) = self.store.save(&self.settings) {
+            eprintln!("{error}");
         }
     }
 
