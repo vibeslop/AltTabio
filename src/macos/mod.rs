@@ -64,6 +64,9 @@ use std::time::Duration;
 use window_list::{EnumerationOptions, WindowRecord, merge_order};
 
 const PREVIEW_INTERVAL_SECONDS: f64 = 0.15;
+// The panel waits this long after ⌘ Tab. A quick press and release switches before it passes,
+// so flipping between two windows never flashes the panel, as with the system switcher.
+const REVEAL_SECONDS: f64 = 0.12;
 const BACKGROUND_REFRESH_SECONDS: f64 = 2.0;
 // How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
@@ -353,6 +356,7 @@ pub struct App {
     row_start: usize,
     // What the last frame drew, for resolving pointer events against it.
     shown: Option<Shown>,
+    panel: Panel,
     preview: PreviewSource,
     preview_image: Option<Retained<NSImage>>,
     preview_message: Option<&'static str>,
@@ -372,6 +376,14 @@ pub struct App {
     // The front app named in the last secure-keyboard-input report, so the log says it once per
     // app rather than on every activation.
     secure_input_holder: Option<String>,
+}
+
+/// Whether the panel is on screen. After ⌘ Tab the session is open while the panel waits for its
+/// timer; nothing draws until it fires.
+enum Panel {
+    Hidden,
+    Waiting(Retained<NSTimer>),
+    Shown,
 }
 
 /// The geometry and scroll positions of the last frame drawn.
@@ -436,6 +448,7 @@ impl App {
             tile_start: 0,
             row_start: 0,
             shown: None,
+            panel: Panel::Hidden,
             preview: PreviewSource::default(),
             preview_image: None,
             preview_message: None,
@@ -798,16 +811,30 @@ impl App {
         self.preview_image = None;
         self.preview_window = None;
         self.preview_message = None;
+        self.hotkey.set_overlay_active(true);
+        self.request_refresh();
+        // Only the keyboard gesture waits; a list opened from the menu bar shows at once.
+        if step.is_some() {
+            self.panel = Panel::Waiting(schedule(REVEAL_SECONDS, App::reveal));
+        } else {
+            self.reveal();
+        }
+    }
+
+    fn reveal(&mut self) {
+        self.panel = Panel::Hidden;
+        if !self.switcher.is_active() {
+            return;
+        }
         let theme = self.resolved_theme();
         if let Some(overlay) = self.overlay.clone() {
             overlay.set_theme(theme, SwitcherTokens::new(theme));
             overlay.show(self.layout(&overlay).size());
         }
-        self.hotkey.set_overlay_active(true);
+        self.panel = Panel::Shown;
         if self.settings.appearance.preview {
             self.preview.refresh_content();
         }
-        self.request_refresh();
         self.start_preview_timer();
         self.redraw();
         self.request_preview_capture();
@@ -815,6 +842,9 @@ impl App {
 
     fn hide_overlay(&mut self) {
         self.switcher.hide();
+        if let Panel::Waiting(timer) = std::mem::replace(&mut self.panel, Panel::Hidden) {
+            timer.invalidate();
+        }
         if let Some(overlay) = &self.overlay {
             overlay.hide();
         }
@@ -927,7 +957,7 @@ impl App {
         let Some(overlay) = self.overlay.clone() else {
             return;
         };
-        if !self.switcher.is_active() {
+        if !self.switcher.is_active() || !matches!(self.panel, Panel::Shown) {
             return;
         }
         let layout = self.layout(&overlay);
