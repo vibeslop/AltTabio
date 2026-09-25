@@ -13,7 +13,8 @@
 #
 # Whoever holds the release key can sign an app that macOS treats as AltTabio, grants included,
 # so it stays out of keychains: --release writes a backup encrypted with a password you choose,
-# for the maintainers' password vault, and --import is for packaging a release by hand.
+# which goes to the private vibeslop/release-signing repository, encrypted again to the
+# maintainers' SSH keys, and --import is for packaging a release by hand.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -95,9 +96,9 @@ case "${1:-}" in
 
     --release)
         if [[ -f "$pin_file" ]]; then
-            fail "$pin_file already pins the release certificate, and its backup is in the
-maintainers' vault. A new one would make every user grant Accessibility and Screen Recording
-again."
+            fail "$pin_file already pins the release certificate, and its backup is in
+vibeslop/release-signing. A new one would make every user grant Accessibility and Screen
+Recording again."
         fi
         backup=$HOME/AltTabio-Release-Certificate.p12
         [[ ! -e "$backup" ]] || fail "$backup already exists; move it away first."
@@ -137,8 +138,8 @@ again."
             print -- "    base64 -i $backup | gh secret set MACOS_RELEASE_CERTIFICATE --env $environment"
             print -- "    gh secret set MACOS_RELEASE_CERTIFICATE_PASSWORD --env $environment"
         fi
-        print -- "  $backup is its backup: put the file and its password in the"
-        print -- "  maintainers' password vault, then delete it here."
+        print -- "  $backup is its backup: store it and its password in"
+        print -- "  vibeslop/release-signing as its README says, then delete it here."
         ;;
 
     --import)

@@ -41,7 +41,7 @@ if [[ "$fingerprint" != "$release" ]]; then
     print -u2 -- "  releases    $release  ($pin_file)"
     print -u2 -- "A release with another certificate makes every user grant Accessibility and Screen"
     print -u2 -- "Recording again. Push the version tag to have the release workflow build it, or"
-    print -u2 -- "import the certificate from its backup in the maintainers' vault:"
+    print -u2 -- "import the certificate from its backup in vibeslop/release-signing (see its README):"
     print -u2 -- "  scripts/mac/make-signing-cert.sh --import <backup.p12>"
     exit 1
 fi
