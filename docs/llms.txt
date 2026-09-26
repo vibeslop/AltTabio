@@ -2,17 +2,19 @@
 
 > AltTabio is a free, open-source Alt+Tab replacement and window switcher for 64-bit Windows 10 and Windows 11, and a Cmd+Tab replacement for macOS 26 and later. On Windows it shows a numbered list of open windows, a live preview of the selected window, and filters the list as you type. On macOS it lists the running apps and every window of the selected one, minimized windows and windows on other Spaces included. No ads, no account, no telemetry, no network access.
 
-AltTabio is an independent project. It is not affiliated with Alt+Tab Terminator or Microsoft.
+AltTabio is an independent project. It is not affiliated with Microsoft, Apple, or Alt+Tab Terminator.
 
 ## Product
 
-- [Product page](https://vibeslop.github.io/AltTabio/): Consumer landing page with screenshots, shortcuts, install steps, and FAQ
+- [Product page](https://vibeslop.github.io/AltTabio/): Landing page for both platforms with an interactive replica, shortcuts, install steps, and FAQ
+- [AltTabio for Windows](https://vibeslop.github.io/AltTabio/windows/): Alt+Tab replacement for Windows 11 and 10, with a comparison to the built-in Alt+Tab
+- [AltTabio for Mac](https://vibeslop.github.io/AltTabio/mac/): Cmd+Tab replacement for macOS 26 and later, with a comparison to the built-in Cmd+Tab, permissions, and uninstall steps
 - [Product notes (Markdown)](https://vibeslop.github.io/AltTabio/product.md): Facts for search engines and language models
 - [Full description](https://vibeslop.github.io/AltTabio/llms-full.txt): Complete product description for AI systems
 
 ## Download and source
 
-- [Latest Windows download](https://github.com/vibeslop/AltTabio/releases/latest)
+- [Latest release for Windows and macOS](https://github.com/vibeslop/AltTabio/releases/latest)
 - [macOS install script](https://vibeslop.github.io/AltTabio/install.sh): run `curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh` in Terminal
 - [GitHub repository](https://github.com/vibeslop/AltTabio)
 - [MIT License](https://github.com/vibeslop/AltTabio/blob/main/LICENSE)
