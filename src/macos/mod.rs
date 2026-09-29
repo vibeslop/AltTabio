@@ -301,7 +301,9 @@ impl RefreshWorker {
                     while let Ok(latest) = receiver.try_recv() {
                         options = latest;
                     }
-                    let listing = window_list::enumerate(options);
+                    // AppKit drains no pool on a thread it didn't start, so without this
+                    // every autoreleased runningApplications snapshot lives forever.
+                    let listing = objc2::rc::autoreleasepool(|_| window_list::enumerate(options));
                     post_to_app(move |app| app.refresh_completed(listing));
                 }
             })
