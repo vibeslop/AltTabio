@@ -1,8 +1,9 @@
-//! Live preview frames through `ScreenCaptureKit` screenshots.
+//! Preview frames through `ScreenCaptureKit` screenshots.
 //!
-//! A repeated `SCScreenshotManager` capture is enough for the switcher's preview: it needs no
+//! One `SCScreenshotManager` capture per window is enough for the switcher's preview: it needs no
 //! stream lifecycle, costs nothing while the overlay is hidden, and yields a frame within tens of
-//! milliseconds after the selection moves.
+//! milliseconds after the selection moves. Capturing the selected window again every 150 ms kept
+//! the window server and `replayd` busy for a picture that barely changes while the panel shows.
 
 use super::{MainThreadValue, post_to_app};
 use block2::RcBlock;
@@ -25,6 +26,21 @@ pub struct CaptureRequest {
     /// Pixel size of the preview area; the capture is fitted into it with its aspect ratio kept.
     pub pixel_width: usize,
     pub pixel_height: usize,
+    /// The window's size in points from the latest window list, which is fresher than the
+    /// frame `ScreenCaptureKit` reported when its own list was fetched.
+    pub window_size: Option<(f64, f64)>,
+    /// The switcher session asking, so a capture that ends after its session is dropped.
+    pub session: u64,
+}
+
+/// What asking for a capture did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Capture {
+    Started,
+    /// The window list is loading; the app asks again from `preview_content_ready`.
+    Waiting,
+    /// The window list, asked for during this session, does not have the window.
+    NotListed,
 }
 
 /// The largest size with `content`'s aspect ratio that fits the preview area.
@@ -50,6 +66,10 @@ pub fn fitted_size(area: (usize, usize), content: (f64, f64)) -> (usize, usize) 
 pub struct PreviewSource {
     content: Option<Retained<SCShareableContent>>,
     fetching: bool,
+    // Whether this session asked for the window list already. Fetching it costs the window
+    // server more than a capture, so it is fetched only for a window it lacks, once a session;
+    // a list that failed to load is not asked for again until the next one.
+    fetched: bool,
 }
 
 impl PreviewSource {
@@ -60,6 +80,7 @@ impl PreviewSource {
             return;
         }
         self.fetching = true;
+        self.fetched = true;
         let handler = RcBlock::new(
             move |content: *mut SCShareableContent, _error: *mut NSError| {
                 let content = if content.is_null() {
@@ -90,31 +111,46 @@ impl PreviewSource {
         }
     }
 
-    #[must_use]
-    pub fn has_content(&self) -> bool {
-        self.content.is_some()
+    /// Lets the session that starts now fetch the window list once.
+    pub fn start_session(&mut self) {
+        self.fetched = false;
+    }
+
+    /// Lets go of the window list while previews are off.
+    pub fn clear(&mut self) {
+        self.content = None;
     }
 
     /// Starts one capture; the app receives the frame through `preview_captured`.
-    pub fn capture(&self, request: &CaptureRequest) -> Result<(), &'static str> {
-        let Some(content) = &self.content else {
-            return Err("Preview is loading");
+    pub fn capture(&mut self, request: &CaptureRequest) -> Capture {
+        let window = self.content.as_ref().and_then(|content| {
+            let windows = unsafe {
+                // SAFETY: the content object is immutable once delivered.
+                content.windows()
+            };
+            windows.iter().find(|window| unsafe {
+                // SAFETY: SCWindow properties are plain immutable values.
+                window.windowID() == request.window_id
+            })
+        });
+        let Some(window) = window else {
+            if self.fetching {
+                return Capture::Waiting;
+            }
+            if self.fetched {
+                return Capture::NotListed;
+            }
+            // The window may have opened since the list was fetched.
+            self.refresh_content();
+            return Capture::Waiting;
         };
-        let windows = unsafe {
-            // SAFETY: the content object is immutable once delivered.
-            content.windows()
-        };
-        let Some(window) = windows.iter().find(|window| unsafe {
-            // SAFETY: SCWindow properties are plain immutable values.
-            window.windowID() == request.window_id
-        }) else {
-            return Err("This window cannot be captured");
-        };
-        let window_frame = unsafe {
-            // SAFETY: SCWindow properties are plain immutable values.
-            window.frame()
-        };
-        let content_size = (window_frame.size.width, window_frame.size.height);
+        let content_size = request.window_size.unwrap_or_else(|| {
+            let frame = unsafe {
+                // SAFETY: SCWindow properties are plain immutable values.
+                window.frame()
+            };
+            (frame.size.width, frame.size.height)
+        });
         let filter = unsafe {
             // SAFETY: the window is a live object for the initializer.
             SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
@@ -132,6 +168,7 @@ impl PreviewSource {
             configuration
         };
         let window_id = request.window_id;
+        let session = request.session;
         let handler = RcBlock::new(move |image: *mut CGImage, _error: *mut NSError| {
             let result = if image.is_null() {
                 PreviewResult::Unavailable("Preview is not available for this window")
@@ -145,7 +182,7 @@ impl PreviewSource {
                 PreviewResult::Image(image)
             };
             let result = MainThreadValue(result);
-            post_to_app(move |app| app.preview_captured(window_id, result));
+            post_to_app(move |app| app.preview_captured(session, window_id, result));
         });
         unsafe {
             // SAFETY: the filter, configuration, and retained block stay valid for the call.
@@ -155,7 +192,7 @@ impl PreviewSource {
                 Some(&handler),
             );
         }
-        Ok(())
+        Capture::Started
     }
 }
 

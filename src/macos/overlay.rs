@@ -240,10 +240,13 @@ impl Layout {
         }
     }
 
-    /// The preview well's size, for sizing the captures that fill it.
+    /// The size a capture fills inside the preview well, for sizing the captures.
     #[must_use]
     pub fn preview_size(&self) -> Option<(f64, f64)> {
-        self.preview_rect().map(|area| (area.width, area.height))
+        self.preview_rect().map(|well| {
+            let area = image_area(well);
+            (area.width, area.height)
+        })
     }
 
     fn preview_rect(&self) -> Option<Rect> {
@@ -298,6 +301,16 @@ impl Layout {
     }
 }
 
+/// Where a capture goes inside the preview well.
+fn image_area(well: Rect) -> Rect {
+    Rect {
+        left: well.left + PREVIEW_INSET,
+        top: well.top + PREVIEW_INSET,
+        width: (well.width - PREVIEW_INSET * 2.0).max(0.0),
+        height: (well.height - PREVIEW_INSET * 2.0).max(0.0),
+    }
+}
+
 fn close_button_rect(row: Rect) -> Rect {
     let inset = (row.height - CLOSE_SIZE) / 2.0;
     Rect {
@@ -344,6 +357,24 @@ pub struct Tile {
     pub selected: bool,
 }
 
+impl PartialEq for Tile {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.selected == other.selected
+            && same_image(self.icon.as_deref(), other.icon.as_deref())
+    }
+}
+
+/// Images compare by identity: the app hands the view the same object until the picture changes.
+fn same_image(first: Option<&NSImage>, second: Option<&NSImage>) -> bool {
+    match (first, second) {
+        (Some(first), Some(second)) => std::ptr::eq(first, second),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[derive(PartialEq)]
 pub struct Row {
     /// The key that picks this window, for the first nine.
     pub number: Option<usize>,
@@ -357,6 +388,13 @@ pub struct PreviewModel {
     pub message: Option<String>,
 }
 
+impl PartialEq for PreviewModel {
+    fn eq(&self, other: &Self) -> bool {
+        self.message == other.message && same_image(self.image.as_deref(), other.image.as_deref())
+    }
+}
+
+#[derive(PartialEq)]
 pub struct FrameModel {
     pub layout: Layout,
     pub tokens: SwitcherTokens,
@@ -725,6 +763,9 @@ impl Overlay {
 
     pub fn hide(&self) {
         self.panel.orderOut(None);
+        // The last frame holds the preview capture and the app icons; the next session draws its
+        // own, so nothing needs them while the panel is hidden.
+        *self.view.ivars().model.borrow_mut() = None;
     }
 
     #[must_use]
@@ -747,7 +788,14 @@ impl Overlay {
     }
 
     pub fn present(&self, model: FrameModel) {
-        *self.view.ivars().model.borrow_mut() = Some(model);
+        let mut shown = self.view.ivars().model.borrow_mut();
+        // A refresh that changes nothing on screen, such as the list arriving while the panel
+        // shows, redraws nothing.
+        if shown.as_ref() == Some(&model) {
+            return;
+        }
+        *shown = Some(model);
+        drop(shown);
         self.view.setNeedsDisplay(true);
     }
 
@@ -1137,13 +1185,7 @@ fn draw_close_button(state: CloseButtonVisualState, button: Rect, colors: &Color
 fn draw_preview(preview: &PreviewModel, area: Rect, fonts: &Fonts, colors: &Colors) {
     fill_rounded(area, PLATE_RADIUS, &colors.well);
     if let Some(image) = &preview.image {
-        let inner = Rect {
-            left: area.left + PREVIEW_INSET,
-            top: area.top + PREVIEW_INSET,
-            width: (area.width - PREVIEW_INSET * 2.0).max(0.0),
-            height: (area.height - PREVIEW_INSET * 2.0).max(0.0),
-        };
-        if let Some(rect) = fitted(image.size(), inner) {
+        if let Some(rect) = fitted(image.size(), image_area(area)) {
             let radius = PLATE_RADIUS - PREVIEW_INSET;
             NSGraphicsContext::saveGraphicsState_class();
             NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect.ns(), radius, radius)
@@ -1215,6 +1257,48 @@ mod tests {
             Some((list.right() + PREVIEW_GAP, list.top, list.height))
         );
         assert!(Layout::new(2, 1, false, SCREEN).preview_rect().is_none());
+    }
+
+    #[test]
+    fn captures_are_sized_to_the_area_inside_the_well() {
+        let layout = Layout::new(2, 1, true, SCREEN);
+        let well = layout.preview_rect().map(|well| (well.width, well.height));
+
+        assert_eq!(
+            layout.preview_size(),
+            well.map(|(width, height)| (width - PREVIEW_INSET * 2.0, height - PREVIEW_INSET * 2.0))
+        );
+    }
+
+    fn frame(title: &str) -> FrameModel {
+        FrameModel {
+            layout: Layout::new(1, 1, true, SCREEN),
+            tokens: SwitcherTokens::new(ResolvedTheme::Dark),
+            tiles: vec![Tile {
+                name: "App".to_owned(),
+                icon: None,
+                selected: true,
+            }],
+            rows: vec![Row {
+                number: Some(1),
+                title: title.to_owned(),
+                state: WindowState::Normal,
+                selected: true,
+            }],
+            empty_note: None,
+            more_note: None,
+            close_state: CloseButtonVisualState::Normal,
+            preview: Some(PreviewModel {
+                image: None,
+                message: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_the_same_content_is_equal_and_a_new_title_is_not() {
+        assert!(frame("Doc") == frame("Doc"));
+        assert!(frame("Doc") != frame("Sheet"));
     }
 
     #[test]

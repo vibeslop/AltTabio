@@ -8,12 +8,15 @@
 
 use super::ax::AxElement;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
+use objc2_application_services::AXError;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType, Type};
 use objc2_core_graphics::{
     CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowAlpha, kCGWindowBounds,
     kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
+use std::collections::HashMap;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct WindowRecord {
@@ -58,6 +61,7 @@ struct AppInfo {
     pid: i32,
     name: String,
     hidden: bool,
+    active: bool,
     launched_at: u64,
 }
 
@@ -77,16 +81,54 @@ struct AxWindow {
 }
 
 // Accessibility calls block until the target app answers; a frozen app must not stall the list.
-const AX_TIMEOUT_SECONDS: f32 = 0.25;
+pub const AX_TIMEOUT_SECONDS: f32 = 0.25;
+// How long an app that let a request time out is left out of the Accessibility pass. The apps
+// are asked one after another, so one that never answers, such as a headless Blender, added the
+// whole timeout to every listing.
+const UNRESPONSIVE_SKIP: Duration = Duration::from_mins(5);
+
+/// Apps that let an Accessibility request time out, and until when they are not asked again.
+#[derive(Debug, Default)]
+pub struct Unresponsive(HashMap<i32, Instant>);
+
+impl Unresponsive {
+    /// Whether to leave `app` out now. The front app is asked regardless: someone is using it,
+    /// so it has likely recovered.
+    fn skips(&self, app: &AppInfo, now: Instant) -> bool {
+        !app.active && self.0.get(&app.pid).is_some_and(|until| now < *until)
+    }
+
+    fn note(&mut self, pid: i32, answered: bool, now: Instant) {
+        if answered {
+            self.0.remove(&pid);
+        } else {
+            self.0.insert(pid, now + UNRESPONSIVE_SKIP);
+        }
+    }
+}
 
 #[must_use]
-pub fn enumerate(options: EnumerationOptions) -> Listing {
+pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -> Listing {
     let apps = regular_applications(options.current_pid);
     let on_screen = on_screen_windows();
     let mut records = Vec::new();
     let mut ax_windows = Vec::new();
+    let now = Instant::now();
+    unresponsive
+        .0
+        .retain(|pid, _| apps.iter().any(|app| app.pid == *pid));
     for app in &apps {
-        for window in accessibility_windows(app.pid) {
+        // An app left out keeps its on-screen windows, as one that answers nothing does.
+        if unresponsive.skips(app, now) {
+            continue;
+        }
+        let windows = accessibility_windows(app.pid);
+        unresponsive.note(
+            app.pid,
+            !matches!(windows, Err(AXError::CannotComplete)),
+            now,
+        );
+        for window in windows.unwrap_or_default() {
             ax_windows.push((app.pid, window));
         }
     }
@@ -234,6 +276,7 @@ fn regular_applications(current_pid: i32) -> Vec<AppInfo> {
                 .map(|name| name.to_string())
                 .unwrap_or_default(),
             hidden: app.isHidden(),
+            active: app.isActive(),
             launched_at: launch_time(&app),
         })
         .collect()
@@ -307,11 +350,11 @@ fn on_screen_windows() -> Vec<CgWindow> {
         .collect()
 }
 
-fn accessibility_windows(pid: i32) -> Vec<AxWindow> {
+fn accessibility_windows(pid: i32) -> Result<Vec<AxWindow>, AXError> {
     let application = AxElement::application(pid);
     application.set_messaging_timeout(AX_TIMEOUT_SECONDS);
-    application
-        .elements("AXWindows")
+    Ok(application
+        .elements("AXWindows")?
         .into_iter()
         .filter_map(|element| {
             let subrole = element.string("AXSubrole").unwrap_or_default();
@@ -325,7 +368,7 @@ fn accessibility_windows(pid: i32) -> Vec<AxWindow> {
                 element,
             })
         })
-        .collect()
+        .collect())
 }
 
 fn dictionary_value<T: objc2_core_foundation::ConcreteType + Type>(
@@ -401,6 +444,38 @@ mod tests {
         assert!(app_answers_accessibility(&pending, &matched, 7));
         assert!(app_answers_accessibility(&pending, &matched, 9));
         assert!(!app_answers_accessibility(&pending, &matched, 11));
+    }
+
+    fn app(pid: i32, active: bool) -> AppInfo {
+        AppInfo {
+            pid,
+            name: "App".to_owned(),
+            hidden: false,
+            active,
+            launched_at: 0,
+        }
+    }
+
+    #[test]
+    fn an_app_that_timed_out_is_skipped_until_the_wait_is_over() {
+        let mut unresponsive = Unresponsive::default();
+        let start = Instant::now();
+        unresponsive.note(7, false, start);
+
+        assert!(unresponsive.skips(&app(7, false), start + Duration::from_secs(1)));
+        assert!(!unresponsive.skips(&app(7, false), start + UNRESPONSIVE_SKIP));
+        assert!(!unresponsive.skips(&app(8, false), start));
+    }
+
+    #[test]
+    fn the_front_app_and_an_app_that_answers_are_asked_again() {
+        let mut unresponsive = Unresponsive::default();
+        let start = Instant::now();
+        unresponsive.note(7, false, start);
+
+        assert!(!unresponsive.skips(&app(7, true), start));
+        unresponsive.note(7, true, start);
+        assert!(!unresponsive.skips(&app(7, false), start));
     }
 
     #[test]
