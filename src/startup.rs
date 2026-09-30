@@ -26,6 +26,9 @@ use windows::core::{BOOL, PCWSTR};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+mod migration;
+pub(crate) use migration::repair_legacy_task_timeout;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AutostartStatus {
     pub enabled: bool,

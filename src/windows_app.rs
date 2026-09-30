@@ -95,6 +95,10 @@ pub fn run(
         return Ok(());
     };
     let _apartment = ComApartment::initialize()?;
+    // Temporary repair for autostart tasks created with the old 72-hour default.
+    if !preview_mode && let Err(error) = startup::repair_legacy_task_timeout() {
+        eprintln!("Could not repair the legacy autostart runtime limit: {error}");
+    }
 
     let instance = module_instance()?;
     register_window_class(instance)?;
