@@ -71,15 +71,19 @@ impl EventTap {
             );
         };
         let Some(source) = CFMachPort::new_run_loop_source(None, Some(&port), 0) else {
+            port.invalidate();
             unsafe {
-                // SAFETY: the tap was never enabled; no callback can reference `context`.
+                // SAFETY: the port is invalidated and was never on a run loop, so no callback
+                // can reference `context`.
                 drop(Box::from_raw(context));
             }
             return Err("Could not create the event tap run loop source".to_owned());
         };
         let Some(run_loop) = CFRunLoop::main() else {
+            port.invalidate();
             unsafe {
-                // SAFETY: the tap was never enabled; no callback can reference `context`.
+                // SAFETY: the port is invalidated and was never on a run loop, so no callback
+                // can reference `context`.
                 drop(Box::from_raw(context));
             }
             return Err("The main run loop is unavailable".to_owned());
@@ -111,9 +115,13 @@ impl Drop for EventTap {
                 kCFRunLoopCommonModes
             });
         }
+        // Releasing the port leaves the tap registered with the window server, disabled but
+        // still on the path of every input event. The app reinstalls the tap on every app
+        // switch, so without this the leaked taps slowed all typing and clicking over time.
+        self.port.invalidate();
         unsafe {
-            // SAFETY: the tap is disabled and its source removed, so no callback runs again and
-            // this is the unique allocation created in `install`.
+            // SAFETY: the tap is disabled, its source removed, and its port invalidated, so no
+            // callback runs again and this is the unique allocation created in `install`.
             drop(Box::from_raw(self.context));
         }
     }
