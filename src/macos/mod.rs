@@ -895,10 +895,11 @@ impl App {
         }
         let event = match event {
             TapEvent::LeftMouseDown { .. } => TapEvent::LeftMouseDown {
-                inside_overlay: self
-                    .overlay
-                    .as_ref()
-                    .is_some_and(|overlay| overlay.contains_mouse()),
+                inside_overlay: self.switcher.is_active()
+                    && self
+                        .overlay
+                        .as_ref()
+                        .is_some_and(|overlay| overlay.contains_mouse()),
             },
             other => other,
         };

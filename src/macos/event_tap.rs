@@ -174,13 +174,21 @@ fn handle_event(context: &mut TapContext, event_type: CGEventType, event: &CGEve
         return false;
     }
     let tap_event = match event_type {
-        CGEventType::KeyDown => TapEvent::KeyDown {
-            key: key_for(key_code(event), typed_character(event)),
-            repeated: CGEvent::integer_value_field(
-                Some(event),
-                CGEventField::KeyboardEventAutorepeat,
-            ) != 0,
-        },
+        CGEventType::KeyDown => {
+            // Only a letter pressed with ⌘ or ⌥ is ever a command, so every other key goes by its
+            // position, and plain typing skips building an NSEvent to ask the layout.
+            let typed = CGEvent::flags(Some(event))
+                .intersects(CGEventFlags::MaskCommand | CGEventFlags::MaskAlternate)
+                .then(|| typed_character(event))
+                .flatten();
+            TapEvent::KeyDown {
+                key: key_for(key_code(event), typed),
+                repeated: CGEvent::integer_value_field(
+                    Some(event),
+                    CGEventField::KeyboardEventAutorepeat,
+                ) != 0,
+            }
+        }
         CGEventType::KeyUp => TapEvent::KeyUp,
         CGEventType::FlagsChanged => {
             let flags = CGEvent::flags(Some(event));
