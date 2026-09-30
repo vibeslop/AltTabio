@@ -4,16 +4,18 @@
 use super::{autostart, permissions};
 use alttabio::settings::{Settings, Theme};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlStateValue,
     NSControlStateValueOff, NSControlStateValueOn, NSFont, NSGridCell, NSGridCellPlacement,
     NSGridRow, NSGridRowAlignment, NSGridView, NSLayoutAttribute, NSPopUpButton, NSStackView,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSArray, NSEdgeInsets, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
+    NSArray, NSEdgeInsets, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSString,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -193,9 +195,15 @@ define_class!(
         fn open_screen_recording(&self, _sender: Option<&AnyObject>) {
             (self.ivars().handler)(SettingsEvent::OpenScreenRecording);
         }
+    }
 
-        #[unsafe(method(refreshStatus:))]
-        fn refresh_status_timer(&self, _sender: Option<&AnyObject>) {
+    // SAFETY: NSWindowDelegate has no safety requirements.
+    unsafe impl NSWindowDelegate for SettingsController {
+        // Permissions and the login item change in System Settings, so they are read again
+        // whenever the window comes back to the front rather than on a timer.
+        // SAFETY: the signature matches windowDidBecomeKey:.
+        #[unsafe(method(windowDidBecomeKey:))]
+        fn window_did_become_key(&self, _notification: &NSNotification) {
             self.refresh_status();
         }
     }
@@ -290,7 +298,6 @@ impl SettingsController {
 pub struct SettingsWindow {
     window: Retained<NSWindow>,
     controller: Retained<SettingsController>,
-    _timer: Retained<NSTimer>,
     mtm: MainThreadMarker,
 }
 
@@ -334,21 +341,11 @@ impl SettingsWindow {
         controller.load(settings);
         controller.fit_window();
         window.center();
-
-        let timer = unsafe {
-            // SAFETY: the controller stays alive through SettingsWindow; the timer retains it too.
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                2.0,
-                &controller,
-                sel!(refreshStatus:),
-                None,
-                true,
-            )
-        };
+        // The window holds its delegate weakly; SettingsWindow keeps the controller alive.
+        window.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
         Self {
             window,
             controller,
-            _timer: timer,
             mtm,
         }
     }
