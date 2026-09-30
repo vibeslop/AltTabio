@@ -58,7 +58,7 @@ It is a practical answer for people searching for:
 - Minimized windows, windows of hidden apps, and windows on other desktops are listed and marked
 - Keys 1-9 switch to that window of the selected app
 - W, M, H, and Q close, minimize, hide, or quit while Cmd is held; the right-click menu adds Force Quit
-- Optional live preview of the selected window (needs Screen Recording)
+- Optional preview of the selected window, captured when it is selected (needs Screen Recording)
 - Optional filter for the current display
 - Drawn on Liquid Glass, with a system, light, or dark appearance
 - Keeps working inside remote desktop and virtual machine apps that capture Cmd+Tab
