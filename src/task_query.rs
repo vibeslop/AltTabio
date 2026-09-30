@@ -2,13 +2,13 @@ use crate::process_info::ProcessInfo;
 use crate::task_icon::TaskIcons;
 use crate::{about_dialog, settings_dialog};
 use alttabio::settings::Settings;
-use alttabio::switcher::{SwitchTask, WindowEligibility, is_switchable_window};
+use alttabio::switcher::{SwitchTask, WindowCloaking, WindowEligibility, is_switchable_window};
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT};
-use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_APP, DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint, MonitorFromWindow,
 };
@@ -124,7 +124,7 @@ fn create_switch_task(
             current_process_id,
             &class_name,
         ) || hwnd == shell,
-        is_cloaked: is_cloaked(hwnd),
+        cloaking: window_cloaking(hwnd),
         is_tool_window: (extended_style & isize::try_from(WS_EX_TOOLWINDOW.0).unwrap_or_default())
             != 0,
         has_owner,
@@ -227,7 +227,7 @@ fn utf16_prefix(buffer: &[u16], written: i32) -> String {
     String::from_utf16_lossy(buffer.get(..length).unwrap_or_default())
 }
 
-fn is_cloaked(hwnd: HWND) -> bool {
+fn window_cloaking(hwnd: HWND) -> WindowCloaking {
     let mut cloaked = 0_u32;
     let result = unsafe {
         // SAFETY: `cloaked` is writable for its exact byte size and HWND is supplied by EnumWindows.
@@ -238,18 +238,51 @@ fn is_cloaked(hwnd: HWND) -> bool {
             u32::try_from(size_of::<u32>()).unwrap_or_default(),
         )
     };
-    result.is_ok() && cloaked != 0
+    // A failed query supplies no evidence of cloaking; keep the existing fallback.
+    if result.is_err() {
+        return WindowCloaking::None;
+    }
+    classify_cloaking(cloaked)
+}
+
+fn classify_cloaking(flags: u32) -> WindowCloaking {
+    match flags {
+        0 => WindowCloaking::None,
+        DWM_CLOAKED_APP => WindowCloaking::Application,
+        _ => WindowCloaking::Other,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use windows::Win32::Foundation::{HINSTANCE, LRESULT, WPARAM};
+    use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_INHERITED, DWM_CLOAKED_SHELL};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, WNDCLASSEXW, WS_POPUP,
     };
     use windows::core::{Error, w};
+
+    #[test]
+    fn only_exclusively_application_cloaked_windows_are_recoverable_tasks() {
+        assert_eq!(classify_cloaking(0), WindowCloaking::None);
+        assert_eq!(
+            classify_cloaking(DWM_CLOAKED_APP),
+            WindowCloaking::Application
+        );
+        for flags in [
+            DWM_CLOAKED_SHELL,
+            DWM_CLOAKED_INHERITED,
+            DWM_CLOAKED_APP | DWM_CLOAKED_SHELL,
+            DWM_CLOAKED_APP | DWM_CLOAKED_INHERITED,
+            DWM_CLOAKED_APP | DWM_CLOAKED_SHELL | DWM_CLOAKED_INHERITED,
+            8,
+            DWM_CLOAKED_APP | 8,
+        ] {
+            assert_eq!(classify_cloaking(flags), WindowCloaking::Other);
+        }
+    }
     #[test]
     fn hosted_frame_uses_core_window_executable() -> Result<()> {
         use windows::Win32::UI::WindowsAndMessaging::{

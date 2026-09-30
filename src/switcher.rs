@@ -51,6 +51,15 @@ impl SwitchTask {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowCloaking {
+    None,
+    /// Keep application-hidden tasks available for window commands after session changes.
+    Application,
+    /// Shell, inherited, combined, or unrecognized cloaking still excludes the window.
+    Other,
+}
+
 #[derive(Clone, Copy)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -61,7 +70,7 @@ pub struct WindowEligibility<'a> {
     pub class_name: &'a str,
     pub is_visible: bool,
     pub is_current_process: bool,
-    pub is_cloaked: bool,
+    pub cloaking: WindowCloaking,
     pub is_tool_window: bool,
     pub has_owner: bool,
     pub is_app_window: bool,
@@ -72,7 +81,7 @@ pub struct WindowEligibility<'a> {
 pub fn is_switchable_window(window: &WindowEligibility<'_>) -> bool {
     if !window.is_visible
         || window.is_current_process
-        || window.is_cloaked
+        || window.cloaking == WindowCloaking::Other
         || window.is_tool_window
         || !window.matches_monitor_filter
         || window.title.trim().is_empty()
@@ -1302,13 +1311,35 @@ mod tests {
             class_name: "EditorWindow",
             is_visible: true,
             is_current_process: false,
-            is_cloaked: false,
+            cloaking: WindowCloaking::None,
             is_tool_window: false,
             has_owner: false,
             is_app_window: false,
             matches_monitor_filter: true,
         };
         assert!(is_switchable_window(&ordinary));
+
+        // Telegram after RDP: visible, titled, unowned, but application-cloaked.
+        assert!(is_switchable_window(&WindowEligibility {
+            cloaking: WindowCloaking::Application,
+            ..ordinary
+        }));
+        assert!(!is_switchable_window(&WindowEligibility {
+            cloaking: WindowCloaking::Other,
+            ..ordinary
+        }));
+        for cloaking in [WindowCloaking::None, WindowCloaking::Application] {
+            assert!(!is_switchable_window(&WindowEligibility {
+                cloaking,
+                is_visible: false,
+                ..ordinary
+            }));
+            assert!(!is_switchable_window(&WindowEligibility {
+                cloaking,
+                is_tool_window: true,
+                ..ordinary
+            }));
+        }
 
         assert!(!is_switchable_window(&WindowEligibility {
             class_name: "Shell_TrayWnd",
