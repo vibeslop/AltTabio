@@ -344,6 +344,24 @@ pub struct Tile {
     pub selected: bool,
 }
 
+impl PartialEq for Tile {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.selected == other.selected
+            && same_image(self.icon.as_deref(), other.icon.as_deref())
+    }
+}
+
+/// Images compare by identity: the app hands the view the same object until the picture changes.
+fn same_image(first: Option<&NSImage>, second: Option<&NSImage>) -> bool {
+    match (first, second) {
+        (Some(first), Some(second)) => std::ptr::eq(first, second),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[derive(PartialEq)]
 pub struct Row {
     /// The key that picks this window, for the first nine.
     pub number: Option<usize>,
@@ -357,6 +375,13 @@ pub struct PreviewModel {
     pub message: Option<String>,
 }
 
+impl PartialEq for PreviewModel {
+    fn eq(&self, other: &Self) -> bool {
+        self.message == other.message && same_image(self.image.as_deref(), other.image.as_deref())
+    }
+}
+
+#[derive(PartialEq)]
 pub struct FrameModel {
     pub layout: Layout,
     pub tokens: SwitcherTokens,
@@ -750,7 +775,14 @@ impl Overlay {
     }
 
     pub fn present(&self, model: FrameModel) {
-        *self.view.ivars().model.borrow_mut() = Some(model);
+        let mut shown = self.view.ivars().model.borrow_mut();
+        // A refresh that changes nothing on screen, such as the list arriving while the panel
+        // shows, redraws nothing.
+        if shown.as_ref() == Some(&model) {
+            return;
+        }
+        *shown = Some(model);
+        drop(shown);
         self.view.setNeedsDisplay(true);
     }
 
@@ -1218,6 +1250,37 @@ mod tests {
             Some((list.right() + PREVIEW_GAP, list.top, list.height))
         );
         assert!(Layout::new(2, 1, false, SCREEN).preview_rect().is_none());
+    }
+
+    fn frame(title: &str) -> FrameModel {
+        FrameModel {
+            layout: Layout::new(1, 1, true, SCREEN),
+            tokens: SwitcherTokens::new(ResolvedTheme::Dark),
+            tiles: vec![Tile {
+                name: "App".to_owned(),
+                icon: None,
+                selected: true,
+            }],
+            rows: vec![Row {
+                number: Some(1),
+                title: title.to_owned(),
+                state: WindowState::Normal,
+                selected: true,
+            }],
+            empty_note: None,
+            more_note: None,
+            close_state: CloseButtonVisualState::Normal,
+            preview: Some(PreviewModel {
+                image: None,
+                message: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_the_same_content_is_equal_and_a_new_title_is_not() {
+        assert!(frame("Doc") == frame("Doc"));
+        assert!(frame("Doc") != frame("Sheet"));
     }
 
     #[test]
