@@ -26,6 +26,7 @@ use alttabio::input::WindowCommand;
 use alttabio::settings::Settings;
 use alttabio::switcher::ProcessIdentity;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
+use ax::{AppObserver, WindowChange};
 use block2::RcBlock;
 use commands::AppRef;
 use dispatch2::DispatchQueue;
@@ -62,7 +63,8 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 use window_list::{
-    EnumerationOptions, Listing, Unresponsive, WindowRecord, WindowlessApp, merge_order,
+    AX_TIMEOUT_SECONDS, EnumerationOptions, Listing, Unresponsive, WindowRecord, WindowlessApp,
+    merge_order,
 };
 
 // Each kept capture holds about a megabyte and a half.
@@ -70,7 +72,6 @@ const PREVIEWS_KEPT: usize = 8;
 // The panel waits this long after ⌘ Tab. A quick press and release switches before it passes,
 // so flipping between two windows never flashes the panel, as with the system switcher.
 const REVEAL_SECONDS: f64 = 0.12;
-const BACKGROUND_REFRESH_SECONDS: f64 = 2.0;
 // How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
 // How long the pointer rests on an app's tile before the app is selected, so a pointer that
@@ -295,28 +296,48 @@ fn current_pid() -> i32 {
     i32::try_from(std::process::id()).unwrap_or_default()
 }
 
+/// Accessibility work for the window list thread.
+enum Job {
+    List(EnumerationOptions),
+    /// Follow this app's windows, replacing the app followed before.
+    Watch(i32),
+}
+
+/// The thread that asks apps over Accessibility, so an app that is slow to answer never stalls
+/// the main thread.
 struct RefreshWorker {
-    sender: mpsc::Sender<EnumerationOptions>,
+    sender: mpsc::Sender<Job>,
 }
 
 impl RefreshWorker {
     fn spawn() -> Self {
-        let (sender, receiver) = mpsc::channel::<EnumerationOptions>();
+        let (sender, receiver) = mpsc::channel::<Job>();
         std::thread::Builder::new()
             .name("alttabio-window-list".to_owned())
             .spawn(move || {
                 let mut unresponsive = Unresponsive::default();
-                while let Ok(mut options) = receiver.recv() {
-                    // Coalesce bursts of notifications into one enumeration.
-                    while let Ok(latest) = receiver.try_recv() {
-                        options = latest;
+                while let Ok(job) = receiver.recv() {
+                    // Coalesce bursts of notifications: the latest job of each kind counts.
+                    let mut list = None;
+                    let mut watch = None;
+                    for job in std::iter::once(job).chain(receiver.try_iter()) {
+                        match job {
+                            Job::List(options) => list = Some(options),
+                            Job::Watch(pid) => watch = Some(pid),
+                        }
                     }
                     // AppKit drains no pool on a thread it didn't start, so without this
                     // every autoreleased runningApplications snapshot lives forever.
-                    let listing = objc2::rc::autoreleasepool(|_| {
-                        window_list::enumerate(options, &mut unresponsive)
+                    objc2::rc::autoreleasepool(|_| {
+                        if let Some(pid) = watch {
+                            let observer = AppObserver::new(pid, AX_TIMEOUT_SECONDS);
+                            post_to_app(move |app| app.observer_ready(pid, observer));
+                        }
+                        if let Some(options) = list {
+                            let listing = window_list::enumerate(options, &mut unresponsive);
+                            post_to_app(move |app| app.refresh_completed(listing));
+                        }
                     });
-                    post_to_app(move |app| app.refresh_completed(listing));
                 }
             })
             .map_or_else(
@@ -330,8 +351,8 @@ impl RefreshWorker {
             )
     }
 
-    fn request(&self, options: EnumerationOptions) {
-        if self.sender.send(options).is_err() {
+    fn request(&self, job: Job) {
+        if self.sender.send(job).is_err() {
             eprintln!("The window list thread is gone; the switcher keeps its last list");
         }
     }
@@ -368,6 +389,10 @@ pub struct App {
     settings_window: Option<SettingsWindow>,
     event_tap: Option<EventTap>,
     observers: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
+    // Reports focus moving between the front app's windows and the windows it opens, which no
+    // workspace notification does, so the list stays current without asking every app on a
+    // timer.
+    front_observer: Option<AppObserver>,
     refresh: RefreshWorker,
     records: Vec<WindowRecord>,
     windowless: Vec<WindowlessApp>,
@@ -395,7 +420,6 @@ pub struct App {
     preview_in_flight: Option<u32>,
     // Counts switcher sessions, so a capture that ends after its session is dropped.
     session: u64,
-    refresh_timer: Option<Retained<NSTimer>>,
     tap_retry_timer: Option<Retained<NSTimer>>,
     close_button: CloseButton,
     // The tile or row a click started on; the switch happens when it ends there too.
@@ -480,6 +504,7 @@ impl App {
             settings_window: None,
             event_tap: None,
             observers: Vec::new(),
+            front_observer: None,
             refresh: RefreshWorker::spawn(),
             records: Vec::new(),
             windowless: Vec::new(),
@@ -496,7 +521,6 @@ impl App {
             previews: Vec::new(),
             preview_in_flight: None,
             session: 0,
-            refresh_timer: None,
             tap_retry_timer: None,
             close_button: CloseButton::default(),
             pressed: None,
@@ -520,17 +544,7 @@ impl App {
         self.status_item = Some(status_item::install(mtm, Rc::new(handle_menu_action)));
         self.observe_workspace();
         self.request_refresh();
-        let refresh_block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-            let _ = with_app(App::request_refresh);
-        });
-        self.refresh_timer = Some(unsafe {
-            // SAFETY: scheduled from the main thread onto the main run loop.
-            NSTimer::scheduledTimerWithTimeInterval_repeats_block(
-                BACKGROUND_REFRESH_SECONDS,
-                true,
-                &refresh_block,
-            )
-        });
+        self.watch_front_app();
 
         if self.preview_mode {
             self.show_when_listed = true;
@@ -567,8 +581,8 @@ impl App {
         });
     }
 
-    /// Records the new front app for the strip's order, then puts the tap back at the head of
-    /// the session taps.
+    /// Records the new front app for the strip's order and follows its windows, then puts the
+    /// tap back at the head of the session taps.
     ///
     /// Remote desktop and VM clients insert a tap of their own to hand ⌘ Tab to the guest; the
     /// system asks the newest head-inserted tap first, so reinserting ours keeps the switcher
@@ -576,6 +590,7 @@ impl App {
     /// it is named in the log when it is on.
     fn front_app_changed(&mut self) {
         self.note_front_app();
+        self.watch_front_app();
         if self.preview_mode || self.event_tap.is_none() {
             return;
         }
@@ -687,10 +702,36 @@ impl App {
             .use_current_monitor_filter
             .then(|| cursor_display_bounds(self.mtm))
             .flatten();
-        self.refresh.request(EnumerationOptions {
+        self.refresh.request(Job::List(EnumerationOptions {
             current_pid: current_pid(),
             display_bounds,
-        });
+        }));
+    }
+
+    /// Moves the observer to the front app; the window list thread registers it.
+    fn watch_front_app(&mut self) {
+        match frontmost_pid().and_then(|pid| i32::try_from(pid).ok()) {
+            Some(pid) if pid != current_pid() => self.refresh.request(Job::Watch(pid)),
+            _ => self.front_observer = None,
+        }
+    }
+
+    pub fn observer_ready(&mut self, pid: i32, observer: Option<AppObserver>) {
+        // Another app may have come to the front while this one was registering.
+        if frontmost_pid().and_then(|front| i32::try_from(front).ok()) != Some(pid) {
+            return;
+        }
+        if let Some(observer) = &observer {
+            observer.attach();
+        }
+        self.front_observer = observer;
+    }
+
+    pub fn front_window_changed(&mut self, change: WindowChange) {
+        match change {
+            WindowChange::Focused => self.note_focus(),
+            WindowChange::Opened => self.request_refresh(),
+        }
     }
 
     fn schedule_refresh_burst() {
@@ -722,8 +763,8 @@ impl App {
             .map(|record| record.window_id)
             .collect::<Vec<_>>();
         self.order = merge_order(&self.order, &on_screen, &others);
-        // The front app's topmost window is the one with focus; the window list refreshes on
-        // every activation and every two seconds, so the history follows within that time.
+        // The front app's topmost window is the one with focus. The list refreshes on every
+        // activation, and the front app's observer notes focus moving between its windows.
         let front = frontmost_pid();
         let focused = records
             .iter()
@@ -770,9 +811,8 @@ impl App {
             .collect()
     }
 
-    /// Records the window in focus right now. A switch between two windows of one app sends no
-    /// notification, so the refreshes see it only on their next tick, and the switcher keeps the
-    /// order it opens with.
+    /// Records the front app's topmost window as the one in focus. The window server knows the
+    /// order, so no app is asked.
     fn note_focus(&mut self) {
         let Some(front) = frontmost_pid() else {
             return;
@@ -971,6 +1011,12 @@ impl App {
     }
 
     fn activate_target(&mut self, target: Target) {
+        if let Target::Window { handle, .. } = target {
+            // The switch is the window's latest use; the refresh the activation brings may run
+            // before the app has raised it.
+            let listed = self.listed_windows();
+            self.window_history.note(Some(handle), &listed);
+        }
         let result = match target {
             Target::Window { handle, .. } => self.record(handle).map_or_else(
                 || Err("The selected window is no longer listed".to_owned()),
@@ -985,7 +1031,6 @@ impl App {
             eprintln!("{error}");
         }
         self.hide_overlay();
-        Self::schedule_refresh_burst();
     }
 
     fn execute_command(&mut self, command: WindowCommand, target: Target) {
@@ -1545,9 +1590,7 @@ impl App {
     fn shutdown(&mut self) {
         self.event_tap = None;
         self.cancel_dwell();
-        if let Some(timer) = self.refresh_timer.take() {
-            timer.invalidate();
-        }
+        self.front_observer = None;
         if let Some(timer) = self.tap_retry_timer.take() {
             timer.invalidate();
         }

@@ -81,7 +81,7 @@ struct AxWindow {
 }
 
 // Accessibility calls block until the target app answers; a frozen app must not stall the list.
-const AX_TIMEOUT_SECONDS: f32 = 0.25;
+pub const AX_TIMEOUT_SECONDS: f32 = 0.25;
 // How long an app that let a request time out is left out of the Accessibility pass. The apps
 // are asked one after another, so one that never answers, such as a headless Blender, added the
 // whole timeout to every listing.
