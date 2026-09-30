@@ -394,7 +394,7 @@ fn form(
         &grid,
         controller,
         "Screen Recording",
-        "Window previews need this. Quit and reopen AltTabio after allowing it.",
+        "Window previews need this.",
         sel!(openScreenRecording:),
     );
     *controller.ivars().accessibility.borrow_mut() = Some(accessibility);
