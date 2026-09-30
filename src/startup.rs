@@ -1,8 +1,10 @@
 use std::ffi::OsString;
+use std::io::Write;
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows::Win32::Security::{
@@ -65,7 +67,8 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
         validate_autostart_target(&executable)?;
-        run_owned(create_arguments(&executable))?
+        let task_file = AutostartTaskFile::create(&executable)?;
+        run_owned(create_arguments(&task_file.path))?
     } else {
         if !status()?.task_exists {
             return Ok(());
@@ -323,17 +326,76 @@ fn paths_match(left: &Path, right: &Path) -> bool {
     normalized(left).eq_ignore_ascii_case(&normalized(right))
 }
 
-fn create_arguments(executable: &Path) -> Vec<OsString> {
+fn autostart_task_xml(executable: &Path) -> Result<String, String> {
+    let executable = executable
+        .to_str()
+        .ok_or_else(|| "The autostart executable path is not valid Unicode".to_owned())?
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger /></Triggers>
+  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
+  <Actions Context="Author"><Exec><Command>{executable}</Command></Exec></Actions>
+</Task>"#
+    ))
+}
+
+struct AutostartTaskFile {
+    path: PathBuf,
+}
+
+impl AutostartTaskFile {
+    fn create(executable: &Path) -> Result<Self, String> {
+        let xml = autostart_task_xml(executable)?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("Could not timestamp the autostart definition: {error}"))?
+            .as_nanos();
+        // The caller validates this directory's permissions before enabling elevated autostart.
+        // Keeping the XML beside the executable prevents an unelevated process from replacing it.
+        let path = executable.with_file_name(format!(
+            "AltTabio-autostart-{}-{timestamp}.xml",
+            std::process::id()
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| format!("Could not create the autostart definition: {error}"))?;
+        let task_file = Self { path };
+        // schtasks reads task definitions as UTF-16, including the byte-order mark.
+        let bytes = [0xff, 0xfe]
+            .into_iter()
+            .chain(xml.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect::<Vec<_>>();
+        let write_result = file
+            .write_all(&bytes)
+            .map_err(|error| format!("Could not write the autostart definition: {error}"));
+        drop(file);
+        write_result?;
+        Ok(task_file)
+    }
+}
+
+impl Drop for AutostartTaskFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            eprintln!("Could not remove the temporary autostart definition: {error}");
+        }
+    }
+}
+
+fn create_arguments(task_file: &Path) -> Vec<OsString> {
     vec![
         "/Create".into(),
         "/TN".into(),
         "AltTabio".into(),
-        "/SC".into(),
-        "ONLOGON".into(),
-        "/RL".into(),
-        "HIGHEST".into(),
-        "/TR".into(),
-        format!("\"{}\"", executable.display()).into(),
+        "/XML".into(),
+        task_file.as_os_str().to_owned(),
         "/F".into(),
     ]
 }
@@ -437,20 +499,83 @@ mod tests {
     }
 
     #[test]
-    fn create_arguments_quote_the_executable_and_request_highest_on_logon() {
-        let arguments = create_arguments(Path::new(r"C:\Program Files\AltTabio\AltTabio.exe"));
+    fn autostart_definition_preserves_the_path_and_disables_the_runtime_limit() -> Result<(), String>
+    {
+        let executable = Path::new(r"C:\Apps & Tools\中文\AltTabio.exe");
+        let xml = autostart_task_xml(executable)?;
+        assert!(task_targets_executable(&xml, executable)?);
+        assert_eq!(element_contents(&xml, "ExecutionTimeLimit"), Some("PT0S"));
+        assert_eq!(element_contents(&xml, "RunLevel"), Some("HighestAvailable"));
+        assert_eq!(
+            element_contents(&xml, "LogonType"),
+            Some("InteractiveToken")
+        );
+        assert!(xml.contains("<LogonTrigger />"));
+        Ok(())
+    }
+
+    #[test]
+    fn create_arguments_import_the_task_definition() {
+        let task_file = Path::new(r"C:\Program Files\AltTabio\task.xml");
+        let arguments = create_arguments(task_file);
         let arguments = arguments
             .iter()
             .map(|value| value.to_string_lossy())
             .collect::<Vec<_>>();
 
-        assert!(arguments.windows(2).any(|pair| pair == ["/SC", "ONLOGON"]));
-        assert!(arguments.windows(2).any(|pair| pair == ["/RL", "HIGHEST"]));
         assert!(
             arguments
-                .iter()
-                .any(|value| { value.as_ref() == r#""C:\Program Files\AltTabio\AltTabio.exe""# })
+                .windows(2)
+                .any(|pair| pair == ["/XML", task_file.to_str().unwrap_or_default()])
         );
+    }
+
+    #[test]
+    #[ignore = "requires administrator privileges; registers and deletes a temporary task"]
+    fn registered_autostart_task_has_no_time_limit() -> Result<(), String> {
+        struct RegisteredTask(String);
+        impl Drop for RegisteredTask {
+            fn drop(&mut self) {
+                match run(&["/Delete", "/TN", &self.0, "/F"]) {
+                    Ok(output) if output.status.success() => {}
+                    Ok(output) => {
+                        eprintln!("Could not remove test task: {}", output_details(&output));
+                    }
+                    Err(error) => eprintln!("Could not remove test task: {error}"),
+                }
+            }
+        }
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let task_file = AutostartTaskFile::create(&executable)?;
+        let task_name = format!("AltTabio-Autostart-Regression-{}", std::process::id());
+        let mut arguments = create_arguments(&task_file.path);
+        arguments[2] = task_name.clone().into();
+        let output = run_owned(arguments)?;
+        if !output.status.success() {
+            return Err(output_details(&output));
+        }
+        let _task = RegisteredTask(task_name.clone());
+        let output = run(&["/Query", "/TN", &task_name, "/XML"])?;
+        if !output.status.success() {
+            return Err(output_details(&output));
+        }
+        let xml = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
+        let settings = element_contents(&xml, "Settings")
+            .ok_or_else(|| "Registered task has no Settings".to_owned())?;
+        assert_eq!(
+            element_contents(settings, "ExecutionTimeLimit"),
+            Some("PT0S")
+        );
+        assert!(task_targets_executable(&xml, &executable)?);
+        assert_eq!(element_contents(&xml, "RunLevel"), Some("HighestAvailable"));
+        assert_eq!(
+            element_contents(&xml, "LogonType"),
+            Some("InteractiveToken")
+        );
+        assert!(
+            element_contents(&xml, "LogonTrigger").is_some() || xml.contains("<LogonTrigger />")
+        );
+        Ok(())
     }
 
     #[test]
