@@ -244,7 +244,8 @@ impl SettingsController {
     }
 
     /// Re-reads what the system says, since permissions and login items change outside the
-    /// app, and shows a permission row only while it is missing and needed.
+    /// app, and shows a permission row only while it is missing and needed. Screen Recording
+    /// waits for Accessibility, so a start without either asks for one thing at a time.
     fn refresh_status(&self) {
         let enabled = autostart::is_enabled();
         self.ivars().settings.borrow_mut().general.autostart = enabled;
@@ -260,7 +261,7 @@ impl SettingsController {
             (&self.ivars().accessibility, !status.accessibility),
             (
                 &self.ivars().screen_recording,
-                previews && !status.screen_recording,
+                previews && status.accessibility && !status.screen_recording,
             ),
         ] {
             if let Some(row) = row.borrow().as_ref()
@@ -348,6 +349,11 @@ impl SettingsWindow {
             controller,
             mtm,
         }
+    }
+
+    /// Shows the permission rows for what the system reports now.
+    pub fn refresh(&self) {
+        self.controller.refresh_status();
     }
 
     pub fn show(&self, settings: &Settings) {

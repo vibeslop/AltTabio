@@ -561,6 +561,10 @@ impl App {
                  Settings > Privacy & Security > Accessibility; the switcher starts working as \
                  soon as the access is granted."
             );
+            // AltTabio has no Dock icon, so a dismissed prompt would leave nothing on screen
+            // while ⌘ Tab still opens the system switcher. The settings window's Accessibility
+            // row stays up instead, until the grant arrives.
+            self.show_settings();
         }
         // Screen Recording is asked for after the first switch instead, once the preview area
         // has shown what it is for; see `hide_overlay`.
@@ -646,10 +650,16 @@ impl App {
         if self.event_tap.is_some() || !permissions::accessibility_trusted(false) {
             return;
         }
-        if self.install_event_tap()
-            && let Some(timer) = self.tap_retry_timer.take()
-        {
+        if !self.install_event_tap() {
+            return;
+        }
+        if let Some(timer) = self.tap_retry_timer.take() {
             timer.invalidate();
+        }
+        // The Accessibility row leaves the settings window as the grant arrives, which tells
+        // the user it worked without bringing the window forward again.
+        if let Some(window) = &self.settings_window {
+            window.refresh();
         }
     }
 
