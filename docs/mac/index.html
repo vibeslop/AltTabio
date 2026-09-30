@@ -106,7 +106,7 @@
       "@id": "https://vibeslop.github.io/AltTabio/mac/#faq-schema",
       "mainEntity": [
         {"@type": "Question", "name": "Which Macs does AltTabio run on?", "acceptedAnswer": {"@type": "Answer", "text": "Any Mac with macOS 26 or later. The download is a universal app for Apple silicon and Intel."}},
-        {"@type": "Question", "name": "Why does AltTabio need Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, and close windows. Screen Recording is only needed once you turn on window previews. Without it the list still works, and the preview area shows a hint instead."}},
+        {"@type": "Question", "name": "Why does AltTabio need Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, and close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works, and the preview area shows a hint instead."}},
         {"@type": "Question", "name": "Do I have to grant the permissions again after an update?", "acceptedAnswer": {"@type": "Answer", "text": "No. macOS ties the permissions to the certificate an app is signed with, and every AltTabio release is signed with the same one."}},
         {"@type": "Question", "name": "Why is AltTabio installed with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. The script checks the signature before it installs anything."}},
         {"@type": "Question", "name": "How do I get the system Cmd+Tab back?", "acceptedAnswer": {"@type": "Answer", "text": "Turn off Replace Cmd+Tab in the AltTabio settings, or quit AltTabio from its menu bar icon."}},
@@ -283,8 +283,8 @@
         <p>Both live in System Settings, under Privacy &amp; Security.</p>
       </div>
       <div class="cards">
-        <div><h3>Accessibility</h3><p>Lets AltTabio see Cmd+Tab before macOS does, and raise, minimize, and close windows. AltTabio asks for it on first launch and picks up the grant while it runs.</p></div>
-        <div><h3>Screen Recording, only for previews</h3><p>Needed once you turn on <strong>Show window previews</strong>, and not before. Without it the list still works. After granting it, quit and start AltTabio again so the capture sees the change.</p></div>
+        <div><h3>Accessibility</h3><p>Lets AltTabio see Cmd+Tab before macOS does, and raise, minimize, and close windows. AltTabio asks for it on first launch, keeps its settings window open until you allow it, and picks up the grant while it runs.</p></div>
+        <div><h3>Screen Recording, only for previews</h3><p>AltTabio asks for it after your first Cmd+Tab, and not at all with <strong>Show window previews</strong> off. Without it the list still works. Once you allow it, macOS offers to quit and reopen AltTabio so the capture sees the change.</p></div>
         <div><h3>Kept across updates</h3><p>macOS ties both grants to the certificate an app is signed with. Every AltTabio release carries the same one, so an update never asks again.</p></div>
         <div id="remote"><h3>Remote desktops and VMs</h3><p>Apps such as Windows App, Parallels, and VMware take Cmd+Tab for their guest. AltTabio moves back in front of them whenever the front app changes. The one exception is secure keyboard input, which macOS reserves for one app while a password field holds it.</p></div>
       </div>
@@ -370,7 +370,7 @@
         </details>
         <details>
           <summary>Why does it need Accessibility and Screen Recording?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, and close windows. Screen Recording is only needed once you turn on window previews. Without it the list still works, and the preview area shows a hint instead.</p></div>
+          <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, and close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works, and the preview area shows a hint instead.</p></div>
         </details>
         <details>
           <summary>Do I have to grant the permissions again after an update?<span class="plus" aria-hidden="true"></span></summary>

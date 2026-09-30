@@ -84,7 +84,7 @@ Paste this line into Terminal:
 curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. Run the same line again to update. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and for **Screen Recording** only once window previews are turned on. Every release is signed with the same certificate, so the permissions carry over to updates.
+The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. Run the same line again to update. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
 
 AltTabio is not notarized by Apple, so a copy downloaded in a browser has to be allowed with **Open Anyway** in System Settings, Privacy & Security. The install script avoids that.
 

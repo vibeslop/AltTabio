@@ -43,7 +43,7 @@ AltTabio needs macOS 26 or later. Paste this line into Terminal:
 curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The script downloads the newest release that has a macOS build, checks its signature, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for its two [permissions](#permissions) and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
+The script downloads the newest release that has a macOS build, checks its signature, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for Accessibility, the first of its two [permissions](#permissions), and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
 
 AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. To install by hand anyway:
 
@@ -115,9 +115,9 @@ The macOS build lists every window of the selected app, which is what people mis
 AltTabio asks for permissions in **System Settings > Privacy & Security**:
 
 - **Accessibility** to see Cmd+Tab before macOS does and to raise, minimize, and close windows.
-- **Screen Recording**, only once **Show window previews** is on, to draw the preview. Without it the list still works; the preview area shows a hint instead.
+- **Screen Recording** to draw the preview, asked for after the first Cmd+Tab while **Show window previews** is on. Without it the list still works; the preview area shows a hint instead.
 
-Both can be opened from the settings window (menu bar icon > Settings). AltTabio picks up an Accessibility grant while it runs; after granting Screen Recording, quit and start it again so ScreenCaptureKit sees the change. When AltTabio is started from a terminal, macOS applies the terminal's grants to it.
+Both can be opened from the settings window (menu bar icon > Settings), which opens by itself while Accessibility is missing. AltTabio picks up an Accessibility grant while it runs. ScreenCaptureKit sees a Screen Recording grant only after a restart; choose **Quit & Reopen** when macOS offers it. When AltTabio is started from a terminal, macOS applies the terminal's grants to it.
 
 ### Remote desktop and VM clients
 

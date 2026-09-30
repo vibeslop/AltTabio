@@ -421,6 +421,9 @@ pub struct App {
     // Counts switcher sessions, so a capture that ends after its session is dropped.
     session: u64,
     tap_retry_timer: Option<Retained<NSTimer>>,
+    // Whether this run asked for Screen Recording. macOS shows its prompt only once anyway;
+    // this keeps every later switch from asking again.
+    screen_recording_asked: bool,
     close_button: CloseButton,
     // The tile or row a click started on; the switch happens when it ends there too.
     pressed: Option<Hit>,
@@ -522,6 +525,7 @@ impl App {
             preview_in_flight: None,
             session: 0,
             tap_retry_timer: None,
+            screen_recording_asked: false,
             close_button: CloseButton::default(),
             pressed: None,
             pointer_origin: None,
@@ -557,9 +561,15 @@ impl App {
                  Settings > Privacy & Security > Accessibility; the switcher starts working as \
                  soon as the access is granted."
             );
+            // AltTabio has no Dock icon, so a dismissed prompt would leave nothing on screen
+            // while ⌘ Tab still opens the system switcher. The settings window's Accessibility
+            // row stays up instead, until the grant arrives.
+            self.show_settings();
         }
-        if self.settings.appearance.preview {
-            self.ask_for_screen_recording();
+        // Screen Recording is asked for after the first switch instead, once the preview area
+        // has shown what it is for; see `hide_overlay`.
+        if self.settings.appearance.preview && permissions::screen_recording_granted() {
+            self.preview.refresh_content();
         }
         if !self.install_event_tap() {
             self.start_tap_retry_timer();
@@ -640,10 +650,16 @@ impl App {
         if self.event_tap.is_some() || !permissions::accessibility_trusted(false) {
             return;
         }
-        if self.install_event_tap()
-            && let Some(timer) = self.tap_retry_timer.take()
-        {
+        if !self.install_event_tap() {
+            return;
+        }
+        if let Some(timer) = self.tap_retry_timer.take() {
             timer.invalidate();
+        }
+        // The Accessibility row leaves the settings window as the grant arrives, which tells
+        // the user it worked without bringing the window forward again.
+        if let Some(window) = &self.settings_window {
+            window.refresh();
         }
     }
 
@@ -986,6 +1002,10 @@ impl App {
     }
 
     fn hide_overlay(&mut self) {
+        let showed_preview = matches!(self.panel, Panel::Shown)
+            && self
+                .shown
+                .is_some_and(|shown| shown.layout.preview_size().is_some());
         self.switcher.hide();
         if let Panel::Waiting(timer) = std::mem::replace(&mut self.panel, Panel::Hidden) {
             timer.invalidate();
@@ -997,6 +1017,17 @@ impl App {
         self.reset_pointer();
         self.shown = None;
         self.reset_previews();
+        if showed_preview
+            && !self.screen_recording_asked
+            && !permissions::screen_recording_granted()
+        {
+            // The system prompt takes focus, so it waits until the panel is gone and the
+            // switch is done.
+            self.screen_recording_asked = true;
+            run_later(|| {
+                let _ = with_app(App::ask_for_screen_recording);
+            });
+        }
         if self.preview_mode {
             self.shutdown();
             NSApplication::sharedApplication(self.mtm).terminate(None);
@@ -1549,11 +1580,14 @@ impl App {
     }
 
     /// Previews are the only thing that needs Screen Recording, so the system prompt comes with
-    /// them: on a start with previews on, and when they are turned on.
+    /// them: after the first switch that showed the preview area, and when they are turned on.
     fn ask_for_screen_recording(&mut self) {
         if permissions::screen_recording_granted() {
             self.preview.refresh_content();
-        } else if !permissions::request_screen_recording() {
+            return;
+        }
+        self.screen_recording_asked = true;
+        if !permissions::request_screen_recording() {
             eprintln!("Screen Recording is not granted; previews stay blank until it is allowed.");
         }
     }
