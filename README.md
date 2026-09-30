@@ -64,7 +64,7 @@ AltTabio is a native Rust application. The switcher logic, settings, layout, and
 
 On Windows it builds directly on Windows APIs: low-level keyboard and mouse hooks, a hand-written Win32 overlay, Direct2D/DirectWrite rendering, and DWM previews of the selected window or its full desktop. Window enumeration and management, the tray icon, settings UI, scheduled-task autostart, portable settings, and single-instance enforcement are also implemented natively. The build produces one `AltTabio.exe` with its icon, version information, per-monitor DPI manifest, and administrator requirement embedded.
 
-On macOS it builds on AppKit through the `objc2` bindings: a CGEventTap for Cmd+Tab, Accessibility for window lists and control, a non-activating panel over `NSGlassEffectView`, ScreenCaptureKit for live previews, a menu bar item, an AppKit settings window, and `SMAppService` for launch at login.
+On macOS it builds on AppKit through the `objc2` bindings: a CGEventTap for Cmd+Tab, Accessibility for window lists and control, a non-activating panel over `NSGlassEffectView`, ScreenCaptureKit screenshots for previews, a menu bar item, an AppKit settings window, and `SMAppService` for launch at login.
 
 ## Controls
 
