@@ -117,7 +117,7 @@
         {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics and never connects to the internet. The source code is public, so anyone can check."}},
         {"@type": "Question", "name": "Will AltTabio slow down my computer?", "acceptedAnswer": {"@type": "Answer", "text": "No. It is a small native program written in Rust. It waits for the shortcut and does nothing else in the background."}},
         {"@type": "Question", "name": "Why does Windows ask for administrator permission?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. Those are the only reasons."}},
-        {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and only once you turn previews on. Without it the list still works."}},
+        {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works."}},
         {"@type": "Question", "name": "Why install AltTabio on a Mac with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The install script downloads with curl, checks the signature, and puts the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates."}},
         {"@type": "Question", "name": "How do I get the built-in switcher back?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, right-click the AltTabio tray icon and choose Exit. On a Mac, quit AltTabio from its menu bar icon, or turn off Replace Cmd+Tab in its settings. On Windows you can also replace only Alt+Tab or only Win+Tab."}},
         {"@type": "Question", "name": "How do I uninstall AltTabio?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, turn off start with Windows if you enabled it, exit from the tray icon, and delete the folder. On a Mac, turn off Launch at login, quit AltTabio, delete AltTabio.app, and remove its settings folder and permissions."}},
@@ -357,7 +357,7 @@
         </details>
         <details>
           <summary>Why does the Mac version ask for Accessibility and Screen Recording?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and only once you turn previews on. Without it the list still works.</p></div>
+          <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works.</p></div>
         </details>
         <details>
           <summary>Why install on a Mac with a Terminal command?<span class="plus" aria-hidden="true"></span></summary>

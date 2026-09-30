@@ -153,10 +153,8 @@ main() {
     fi
     printf 'Installed AltTabio %s in %s. It runs from the menu bar.\n\n' "$version" "$target"
     printf '%s\n' \
-        "AltTabio now asks for two permissions, allowed in System Settings > Privacy & Security:" \
-        "  Accessibility, so AltTabio can take over Cmd+Tab and raise windows." \
-        "  Screen Recording, for the live preview. After allowing it, quit AltTabio from" \
-        "  its menu bar icon and open it again."
+        "AltTabio now asks for Accessibility, so it can take over Cmd+Tab and raise windows." \
+        "After your first Cmd+Tab it asks for Screen Recording, which window previews need."
 }
 
 main
