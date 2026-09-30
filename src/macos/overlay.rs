@@ -725,6 +725,9 @@ impl Overlay {
 
     pub fn hide(&self) {
         self.panel.orderOut(None);
+        // The last frame holds the preview capture and the app icons; the next session draws its
+        // own, so nothing needs them while the panel is hidden.
+        *self.view.ivars().model.borrow_mut() = None;
     }
 
     #[must_use]
