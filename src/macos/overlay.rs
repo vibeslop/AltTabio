@@ -240,10 +240,13 @@ impl Layout {
         }
     }
 
-    /// The preview well's size, for sizing the captures that fill it.
+    /// The size a capture fills inside the preview well, for sizing the captures.
     #[must_use]
     pub fn preview_size(&self) -> Option<(f64, f64)> {
-        self.preview_rect().map(|area| (area.width, area.height))
+        self.preview_rect().map(|well| {
+            let area = image_area(well);
+            (area.width, area.height)
+        })
     }
 
     fn preview_rect(&self) -> Option<Rect> {
@@ -295,6 +298,16 @@ impl Layout {
             return Some(Hit::CloseButton(row));
         }
         Some(Hit::Row(row))
+    }
+}
+
+/// Where a capture goes inside the preview well.
+fn image_area(well: Rect) -> Rect {
+    Rect {
+        left: well.left + PREVIEW_INSET,
+        top: well.top + PREVIEW_INSET,
+        width: (well.width - PREVIEW_INSET * 2.0).max(0.0),
+        height: (well.height - PREVIEW_INSET * 2.0).max(0.0),
     }
 }
 
@@ -1172,13 +1185,7 @@ fn draw_close_button(state: CloseButtonVisualState, button: Rect, colors: &Color
 fn draw_preview(preview: &PreviewModel, area: Rect, fonts: &Fonts, colors: &Colors) {
     fill_rounded(area, PLATE_RADIUS, &colors.well);
     if let Some(image) = &preview.image {
-        let inner = Rect {
-            left: area.left + PREVIEW_INSET,
-            top: area.top + PREVIEW_INSET,
-            width: (area.width - PREVIEW_INSET * 2.0).max(0.0),
-            height: (area.height - PREVIEW_INSET * 2.0).max(0.0),
-        };
-        if let Some(rect) = fitted(image.size(), inner) {
+        if let Some(rect) = fitted(image.size(), image_area(area)) {
             let radius = PLATE_RADIUS - PREVIEW_INSET;
             NSGraphicsContext::saveGraphicsState_class();
             NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect.ns(), radius, radius)
@@ -1250,6 +1257,17 @@ mod tests {
             Some((list.right() + PREVIEW_GAP, list.top, list.height))
         );
         assert!(Layout::new(2, 1, false, SCREEN).preview_rect().is_none());
+    }
+
+    #[test]
+    fn captures_are_sized_to_the_area_inside_the_well() {
+        let layout = Layout::new(2, 1, true, SCREEN);
+        let well = layout.preview_rect().map(|well| (well.width, well.height));
+
+        assert_eq!(
+            layout.preview_size(),
+            well.map(|(width, height)| (width - PREVIEW_INSET * 2.0, height - PREVIEW_INSET * 2.0))
+        );
     }
 
     fn frame(title: &str) -> FrameModel {
