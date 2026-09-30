@@ -61,7 +61,9 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
-use window_list::{EnumerationOptions, Listing, WindowRecord, WindowlessApp, merge_order};
+use window_list::{
+    EnumerationOptions, Listing, Unresponsive, WindowRecord, WindowlessApp, merge_order,
+};
 
 // Each kept capture holds about a megabyte and a half.
 const PREVIEWS_KEPT: usize = 8;
@@ -221,10 +223,13 @@ fn show_fatal_error(mtm: MainThreadMarker, message: &str) {
 }
 
 fn print_window_list() {
-    let listing = window_list::enumerate(EnumerationOptions {
-        current_pid: current_pid(),
-        display_bounds: None,
-    });
+    let listing = window_list::enumerate(
+        EnumerationOptions {
+            current_pid: current_pid(),
+            display_bounds: None,
+        },
+        &mut Unresponsive::default(),
+    );
     println!(
         "{:>8}  {:>6}  {:<5} {:<24} TITLE",
         "ID", "PID", "STATE", "APP"
@@ -264,10 +269,13 @@ fn activate_from_command_line(argument: Option<&OsString>) {
         eprintln!("Usage: AltTabio --activate <window id from --list>");
         return;
     };
-    let records = window_list::enumerate(EnumerationOptions {
-        current_pid: current_pid(),
-        display_bounds: None,
-    })
+    let records = window_list::enumerate(
+        EnumerationOptions {
+            current_pid: current_pid(),
+            display_bounds: None,
+        },
+        &mut Unresponsive::default(),
+    )
     .windows;
     let Some(record) = records.iter().find(|record| record.window_id == window_id) else {
         eprintln!("Window {window_id} was not found");
@@ -297,6 +305,7 @@ impl RefreshWorker {
         std::thread::Builder::new()
             .name("alttabio-window-list".to_owned())
             .spawn(move || {
+                let mut unresponsive = Unresponsive::default();
                 while let Ok(mut options) = receiver.recv() {
                     // Coalesce bursts of notifications into one enumeration.
                     while let Ok(latest) = receiver.try_recv() {
@@ -304,7 +313,9 @@ impl RefreshWorker {
                     }
                     // AppKit drains no pool on a thread it didn't start, so without this
                     // every autoreleased runningApplications snapshot lives forever.
-                    let listing = objc2::rc::autoreleasepool(|_| window_list::enumerate(options));
+                    let listing = objc2::rc::autoreleasepool(|_| {
+                        window_list::enumerate(options, &mut unresponsive)
+                    });
                     post_to_app(move |app| app.refresh_completed(listing));
                 }
             })

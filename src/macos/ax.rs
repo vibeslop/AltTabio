@@ -37,6 +37,10 @@ impl AxElement {
     }
 
     fn copy(&self, attribute: &str) -> Option<CFRetained<CFType>> {
+        self.try_copy(attribute).ok()
+    }
+
+    fn try_copy(&self, attribute: &str) -> Result<CFRetained<CFType>, AXError> {
         let name = CFString::from_str(attribute);
         let mut value: *const CFType = std::ptr::null();
         let error = unsafe {
@@ -46,10 +50,10 @@ impl AxElement {
                 .copy_attribute_value(&name, NonNull::from(&mut value))
         };
         if error != AXError::Success {
-            return None;
+            return Err(error);
         }
-        let pointer = NonNull::new(value.cast_mut())?;
-        Some(unsafe {
+        let pointer = NonNull::new(value.cast_mut()).ok_or(AXError::NoValue)?;
+        Ok(unsafe {
             // SAFETY: a successful copy hands over one owned reference.
             CFRetained::from_raw(pointer)
         })
@@ -79,16 +83,14 @@ impl AxElement {
             .map(Self)
     }
 
-    #[must_use]
-    pub fn elements(&self, attribute: &str) -> Vec<Self> {
-        let Some(array) = self
-            .copy(attribute)
-            .and_then(|value| value.downcast::<CFArray>().ok())
-        else {
-            return Vec::new();
-        };
+    /// The elements an array attribute holds, or why the app gave none.
+    pub fn elements(&self, attribute: &str) -> Result<Vec<Self>, AXError> {
+        let array = self
+            .try_copy(attribute)?
+            .downcast::<CFArray>()
+            .map_err(|_| AXError::IllegalArgument)?;
         let count = usize::try_from(array.count()).unwrap_or_default();
-        (0..count)
+        Ok((0..count)
             .filter_map(|index| {
                 let raw = unsafe {
                     // SAFETY: `index` is below the count reported by the same array.
@@ -104,7 +106,7 @@ impl AxElement {
                     .downcast_ref::<AXUIElement>()
                     .map(|element| Self(element.retain()))
             })
-            .collect()
+            .collect())
     }
 
     pub fn set_boolean(&self, attribute: &str, value: bool) -> bool {
