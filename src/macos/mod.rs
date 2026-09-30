@@ -50,7 +50,7 @@ use overlay::{
     CloseButtonVisualState, FrameModel, Hit, Layout, Overlay, PreviewModel, Row, Tile, ViewEvent,
     WindowState, more_note, scroll_into_view,
 };
-use preview::{CaptureRequest, PreviewResult, PreviewSource};
+use preview::{Capture, CaptureRequest, PreviewResult, PreviewSource};
 use settings_window::{SettingsEvent, SettingsWindow};
 use status_item::{MenuAction, StatusItem};
 use std::cell::RefCell;
@@ -63,7 +63,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 use window_list::{EnumerationOptions, Listing, WindowRecord, WindowlessApp, merge_order};
 
-const PREVIEW_INTERVAL_SECONDS: f64 = 0.15;
+// Each kept capture holds about a megabyte and a half.
+const PREVIEWS_KEPT: usize = 8;
 // The panel waits this long after ⌘ Tab. A quick press and release switches before it passes,
 // so flipping between two windows never flashes the panel, as with the system switcher.
 const REVEAL_SECONDS: f64 = 0.12;
@@ -375,11 +376,14 @@ pub struct App {
     shown: Option<Shown>,
     panel: Panel,
     preview: PreviewSource,
-    preview_image: Option<Retained<NSImage>>,
-    preview_message: Option<&'static str>,
-    preview_window: Option<u32>,
-    preview_in_flight: bool,
-    preview_timer: Option<Retained<NSTimer>>,
+    // This session's captures by window, the newest last, so returning to a window shows it
+    // without capturing it again.
+    previews: Vec<(u32, Preview)>,
+    // The window being captured. One capture runs at a time; when it ends, the next one takes
+    // whatever is selected by then.
+    preview_in_flight: Option<u32>,
+    // Counts switcher sessions, so a capture that ends after its session is dropped.
+    session: u64,
     refresh_timer: Option<Retained<NSTimer>>,
     tap_retry_timer: Option<Retained<NSTimer>>,
     close_button: CloseButton,
@@ -397,6 +401,11 @@ pub struct App {
     // The front app named in the last secure-keyboard-input report, so the log says it once per
     // app rather than on every activation.
     secure_input_holder: Option<String>,
+}
+
+enum Preview {
+    Image(Retained<NSImage>),
+    Unavailable(&'static str),
 }
 
 /// Whether the panel is on screen. After ⌘ Tab the session is open while the panel waits for its
@@ -473,11 +482,9 @@ impl App {
             shown: None,
             panel: Panel::Hidden,
             preview: PreviewSource::default(),
-            preview_image: None,
-            preview_message: None,
-            preview_window: None,
-            preview_in_flight: false,
-            preview_timer: None,
+            previews: Vec::new(),
+            preview_in_flight: None,
+            session: 0,
             refresh_timer: None,
             tap_retry_timer: None,
             close_button: CloseButton::default(),
@@ -898,9 +905,8 @@ impl App {
         self.tile_start = 0;
         self.row_start = 0;
         self.shown = None;
-        self.preview_image = None;
-        self.preview_window = None;
-        self.preview_message = None;
+        self.reset_previews();
+        self.preview.start_session();
         self.hotkey.set_overlay_active(true);
         self.request_refresh();
         // Only the keyboard gesture waits; a list opened from the menu bar shows at once.
@@ -923,10 +929,6 @@ impl App {
         }
         self.panel = Panel::Shown;
         self.pointer_origin = Some(NSEvent::mouseLocation());
-        if self.settings.appearance.preview {
-            self.preview.refresh_content();
-        }
-        self.start_preview_timer();
         self.redraw();
         self.request_preview_capture();
     }
@@ -942,11 +944,7 @@ impl App {
         self.hotkey.set_overlay_active(false);
         self.reset_pointer();
         self.shown = None;
-        self.preview_image = None;
-        self.preview_window = None;
-        if let Some(timer) = self.preview_timer.take() {
-            timer.invalidate();
-        }
+        self.reset_previews();
         if self.preview_mode {
             self.shutdown();
             NSApplication::sharedApplication(self.mtm).terminate(None);
@@ -1156,82 +1154,100 @@ impl App {
         (rows, selected_row, empty_note, more_note)
     }
 
-    /// The selected window's latest capture, or why there is none.
-    fn preview_model(&self) -> PreviewModel {
-        let window = self
-            .switcher
+    fn selected_window_id(&self) -> Option<u32> {
+        self.switcher
             .selected_window()
-            .and_then(|handle| u32::try_from(handle).ok());
-        let image = self
-            .preview_image
-            .clone()
-            .filter(|_| window.is_some() && self.preview_window == window);
-        let message = if window.is_none() || image.is_some() {
-            None
-        } else if !permissions::screen_recording_granted() {
-            Some("Allow Screen Recording in System Settings to see previews".to_owned())
-        } else {
-            self.preview_message.map(str::to_owned)
-        };
-        PreviewModel { image, message }
+            .and_then(|handle| u32::try_from(handle).ok())
     }
 
-    fn start_preview_timer(&mut self) {
-        if self.preview_timer.is_some() || !self.settings.appearance.preview {
-            return;
+    fn kept_preview(&self, window_id: u32) -> Option<&Preview> {
+        self.previews
+            .iter()
+            .find(|(id, _)| *id == window_id)
+            .map(|(_, preview)| preview)
+    }
+
+    fn keep_preview(&mut self, window_id: u32, preview: Preview) {
+        self.previews.retain(|(id, _)| *id != window_id);
+        if self.previews.len() >= PREVIEWS_KEPT {
+            self.previews.remove(0);
         }
-        let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-            let _ = with_app(App::request_preview_capture);
-        });
-        self.preview_timer = Some(unsafe {
-            // SAFETY: scheduled from the main thread onto the main run loop.
-            NSTimer::scheduledTimerWithTimeInterval_repeats_block(
-                PREVIEW_INTERVAL_SECONDS,
-                true,
-                &block,
-            )
-        });
+        self.previews.push((window_id, preview));
     }
 
+    /// Forgets the session's captures; one still running belongs to the session that is over.
+    fn reset_previews(&mut self) {
+        self.session = self.session.wrapping_add(1);
+        self.previews.clear();
+        self.preview_in_flight = None;
+    }
+
+    /// The selected window's capture, or why there is none.
+    fn preview_model(&self) -> PreviewModel {
+        let window = self.selected_window_id();
+        match window.and_then(|id| self.kept_preview(id)) {
+            Some(Preview::Image(image)) => PreviewModel {
+                image: Some(image.clone()),
+                message: None,
+            },
+            Some(Preview::Unavailable(message)) => PreviewModel {
+                image: None,
+                message: Some((*message).to_owned()),
+            },
+            None => PreviewModel {
+                image: None,
+                message: (window.is_some() && !permissions::screen_recording_granted()).then(
+                    || "Allow Screen Recording in System Settings to see previews".to_owned(),
+                ),
+            },
+        }
+    }
+
+    /// Captures the selected window unless this session has it already.
     fn request_preview_capture(&mut self) {
-        if !self.switcher.is_active() || !self.settings.appearance.preview || self.preview_in_flight
+        if self.preview_in_flight.is_some()
+            || !self.switcher.is_active()
+            || !self.settings.appearance.preview
         {
             return;
         }
         let Some(overlay) = self.overlay.clone() else {
             return;
         };
-        let Some(window_id) = self
-            .switcher
-            .selected_window()
-            .and_then(|handle| u32::try_from(handle).ok())
-        else {
+        let Some(window_id) = self.selected_window_id() else {
             return;
         };
+        if self.kept_preview(window_id).is_some() {
+            return;
+        }
         let Some((width, height)) = self.shown.and_then(|shown| shown.layout.preview_size()) else {
             return;
         };
         if !permissions::screen_recording_granted() {
             return;
         }
-        if !self.preview.has_content() {
-            self.preview.refresh_content();
-            return;
-        }
         let scale = overlay.backing_scale();
+        let window_size = self
+            .records
+            .iter()
+            .find(|record| record.window_id == window_id && record.is_on_screen)
+            .map(|record| (record.bounds[2], record.bounds[3]))
+            .filter(|(width, height)| *width > 0.0 && *height > 0.0);
         let request = CaptureRequest {
             window_id,
             pixel_width: pixel_length(width, scale),
             pixel_height: pixel_length(height, scale),
+            window_size,
+            session: self.session,
         };
         match self.preview.capture(&request) {
-            Ok(()) => self.preview_in_flight = true,
-            Err(message) => {
-                if self.preview_window != Some(window_id) {
-                    self.preview_image = None;
-                    self.preview_window = Some(window_id);
-                }
-                self.preview_message = Some(message);
+            Capture::Started => self.preview_in_flight = Some(window_id),
+            Capture::Waiting => {}
+            Capture::NotListed => {
+                self.keep_preview(
+                    window_id,
+                    Preview::Unavailable("This window cannot be captured"),
+                );
                 self.redraw();
             }
         }
@@ -1242,36 +1258,37 @@ impl App {
         content: MainThreadValue<Option<Retained<SCShareableContent>>>,
     ) {
         self.preview.set_content(content.0);
-        if self.switcher.is_active() {
-            self.request_preview_capture();
-        }
-    }
-
-    pub fn preview_captured(&mut self, window_id: u32, result: MainThreadValue<PreviewResult>) {
-        self.preview_in_flight = false;
-        let selected = self
-            .switcher
-            .selected_window()
-            .and_then(|handle| u32::try_from(handle).ok());
-        if !self.switcher.is_active() || selected != Some(window_id) {
+        if !self.settings.appearance.preview {
+            self.preview.clear();
             return;
         }
-        match result.0 {
-            PreviewResult::Image(image) => {
-                let ns_image =
-                    NSImage::initWithCGImage_size(NSImage::alloc(), &image, NSSize::ZERO);
-                self.preview_image = Some(ns_image);
-                self.preview_message = None;
-            }
-            PreviewResult::Unavailable(message) => {
-                if self.preview_window != Some(window_id) {
-                    self.preview_image = None;
-                }
-                self.preview_message = Some(message);
-            }
+        self.request_preview_capture();
+    }
+
+    pub fn preview_captured(
+        &mut self,
+        session: u64,
+        window_id: u32,
+        result: MainThreadValue<PreviewResult>,
+    ) {
+        if session != self.session {
+            return;
         }
-        self.preview_window = Some(window_id);
-        self.redraw();
+        self.preview_in_flight = None;
+        let preview = match result.0 {
+            PreviewResult::Image(image) => Preview::Image(NSImage::initWithCGImage_size(
+                NSImage::alloc(),
+                &image,
+                NSSize::ZERO,
+            )),
+            PreviewResult::Unavailable(message) => Preview::Unavailable(message),
+        };
+        self.keep_preview(window_id, preview);
+        if self.selected_window_id() == Some(window_id) {
+            self.redraw();
+        } else {
+            self.request_preview_capture();
+        }
     }
 
     fn handle_view_event(&mut self, event: ViewEvent) {
@@ -1460,12 +1477,15 @@ impl App {
         if previews_turned_on {
             self.ask_for_screen_recording();
         }
+        if !self.settings.appearance.preview {
+            self.preview.clear();
+            self.previews.clear();
+        }
         if self.switcher.is_active() {
             if let Some(overlay) = &self.overlay {
                 let theme = self.resolved_theme();
                 overlay.set_theme(theme, SwitcherTokens::new(theme));
             }
-            self.start_preview_timer();
             self.redraw();
             self.request_preview_capture();
         }
@@ -1514,9 +1534,6 @@ impl App {
     fn shutdown(&mut self) {
         self.event_tap = None;
         self.cancel_dwell();
-        if let Some(timer) = self.preview_timer.take() {
-            timer.invalidate();
-        }
         if let Some(timer) = self.refresh_timer.take() {
             timer.invalidate();
         }
