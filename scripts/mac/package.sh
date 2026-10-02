@@ -25,6 +25,10 @@ scripts/mac/build-app.sh --universal
 
 app=target/mac/AltTabio.app
 codesign --verify --deep --strict "$app"
+codesign -dvv "$app" 2>&1 | grep -q 'flags=.*runtime' || {
+    print -u2 -- "$app lacks hardened runtime protection"
+    exit 1
+}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

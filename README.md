@@ -26,8 +26,15 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 ### Windows
 
 1. Download the latest Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases).
-2. Extract it to a permanent folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
-3. Run `AltTabio.exe` and accept the Windows administrator prompt.
+2. Before extracting or accepting an administrator prompt, verify the zip with [GitHub CLI](https://cli.github.com/) (replace `<version>` with the downloaded version):
+
+   ```powershell
+   gh attestation verify "AltTabio-<version>-windows-x64.zip" --repo vibeslop/AltTabio --signer-workflow vibeslop/AltTabio/.github/workflows/release.yml --source-ref refs/heads/main
+   ```
+
+   Continue only if verification succeeds. Older releases without signed provenance cannot pass this check; build reviewed source instead.
+3. Extract it to a permanent folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
+4. Run `AltTabio.exe` and accept the Windows administrator prompt.
 
 AltTabio is distributed as one self-contained executable with no separate runtime installation.
 
@@ -43,13 +50,20 @@ AltTabio needs macOS 26 or later. Paste this line into Terminal:
 curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The script downloads the newest release that has a macOS build, checks its signature, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for Accessibility, the first of its two [permissions](#permissions), and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
+The script downloads the newest release that has a macOS build, checks its signature against the pinned release certificate, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for Accessibility, the first of its two [permissions](#permissions), and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
 
 AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. To install by hand anyway:
 
 1. Download `AltTabio-<version>-macos.zip` from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases) and unzip it.
-2. Move `AltTabio.app` to Applications and open it. When macOS says it could not verify the app, choose **Done**.
-3. Open **System Settings > Privacy & Security**, click **Open Anyway** next to the message about AltTabio, and confirm.
+2. With the unzipped app in Downloads, verify the release signer in Terminal before opening it:
+
+   ```sh
+   codesign --verify --deep --strict -R='=certificate leaf = H"617A82407E9767025EDE4A62A9B990ADEA21F53B" and identifier "com.vibeslop.AltTabio"' "$HOME/Downloads/AltTabio.app"
+   ```
+
+   Continue only if the command succeeds.
+3. Move `AltTabio.app` to Applications and open it. When macOS says it could not verify the app, choose **Done**.
+4. Open **System Settings > Privacy & Security**, click **Open Anyway** next to the message about AltTabio, and confirm.
 
 To uninstall, turn off **Launch at login** in the settings, quit AltTabio from its menu bar icon, delete `AltTabio.app`, and remove its settings and permissions:
 
@@ -145,7 +159,7 @@ The debug helpers `--list` and `--activate <window id>` work from a plain `cargo
 
 ### Releasing on macOS
 
-Every release carries the same release certificate, so users keep their permissions across updates. Its SHA-1 hash is pinned in `scripts/mac/release-certificate.sha1`, and its key lives in the secrets of the repository's `release` environment, which only `v*` tags can use. A maintainer creates it once with `scripts/mac/make-signing-cert.sh --release`, commits the pin, and stores the backup the script writes, with its password, in the private [vibeslop/release-signing](https://github.com/vibeslop/release-signing) repository, encrypted to the maintainers' SSH keys. Whoever holds the key can sign an app that macOS treats as AltTabio, and a new certificate would make every user grant both permissions again.
+Every release carries the same release certificate, so users keep their permissions across updates. Its SHA-1 hash is pinned in `scripts/mac/release-certificate.sha1`, and its key lives in the secrets of the repository's `release` environment, which must accept only `main` and require maintainer approval without administrator bypass. The existing encrypted backup and its password are stored in the private [vibeslop/release-signing](https://github.com/vibeslop/release-signing) repository, encrypted to the maintainers' SSH keys. Whoever holds the key can sign an app that macOS treats as AltTabio, and a new certificate would make every user grant both permissions again.
 
 The [Release](#releasing) workflow signs the macOS archive with it. `scripts/mac/package.sh` builds and signs the same archive by hand on a Mac that imported the certificate with `scripts/mac/make-signing-cert.sh --import <backup.p12>`, and refuses a bundle signed with any other certificate.
 
@@ -174,9 +188,15 @@ target\release\AltTabio.exe
 
 ## Releasing
 
-Set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and push the tag `v<version>` once that commit is on `main`. The Release workflow then builds `AltTabio-<version>-windows-x64.zip` on a Windows runner and `AltTabio-<version>-macos.zip`, a universal bundle for Apple silicon and Intel Macs signed with the [release certificate](#releasing-on-macos), and attaches both to the tag's release, creating a draft release when there is none. Check the draft and publish it; the macOS install script picks the release up once it is published.
+Set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and push the tag `v<version>` once that commit is on `main`. **Release build** tests and packages both platforms without signing secrets. The default-branch **Release** workflow checks that the tag still names the build commit, that the commit is on `main`, and that each downloaded archive has the authorized digest. After environment approval it signs the universal macOS bundle with the existing certificate, attests both archives, and attaches them to a draft release. It never replaces an existing release asset. Check the draft and publish it.
 
-Running the workflow by hand with a tag builds that tag's Windows archive alone. Re-running the tag's own run rebuilds both.
+Before the first release through this workflow, update the GitHub `release` environment:
+
+- Apply [the environment policy](.github/release-environment.json), which requires the current maintainer's approval and disables administrator bypass. The existing secrets stay in place.
+- Replace the `v*` tag deployment policy with one branch policy named `main`. This blocks old tag-controlled signing workflows too.
+- Merge these workflow changes before making the next version tag. Until both the workflow and environment policy are active, signing deliberately fails closed.
+
+The macOS key is imported only after the artifact checks. The signer runs fixed commands from the default-branch workflow, then deletes its temporary keychain before the attestation action. No tag-controlled scripts run with the publisher key.
 
 ## License
 
