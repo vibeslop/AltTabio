@@ -1,12 +1,10 @@
 use std::ffi::OsString;
-use std::io::Write;
 use std::mem::size_of;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
-use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
 use windows::Win32::Security::{
     ACL, AccessCheck, DACL_SECURITY_INFORMATION, DuplicateToken, GENERIC_MAPPING,
     GROUP_SECURITY_INFORMATION, GetTokenInformation, OWNER_SECURITY_INFORMATION, PRIVILEGE_SET,
@@ -14,15 +12,24 @@ use windows::Win32::Security::{
     TokenElevation,
 };
 use windows::Win32::Storage::FileSystem::{
-    DELETE, FILE_ADD_FILE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
+    CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+    FILE_DELETE_CHILD, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA, FileAttributeTagInfo,
+    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL,
+    VOLUME_NAME_DOS, WRITE_DAC, WRITE_OWNER,
 };
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows::Win32::System::TaskScheduler::{
+    ITaskService, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN, TaskScheduler,
+};
 use windows::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
-use windows::core::{BOOL, PCWSTR};
+use windows::core::{BOOL, BSTR, PCWSTR};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -66,18 +73,16 @@ pub fn status() -> Result<AutostartStatus, String> {
 }
 
 pub fn set_enabled(enabled: bool) -> Result<(), String> {
-    let output = if enabled {
+    if enabled {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
-        validate_autostart_target(&executable)?;
-        let task_file = AutostartTaskFile::create(&executable)?;
-        run_owned(create_arguments(&task_file.path))?
-    } else {
-        if !status()?.task_exists {
-            return Ok(());
-        }
-        run(&["/Delete", "/TN", "AltTabio", "/F"])?
-    };
+        let target = validate_autostart_target(&executable)?;
+        return register_task("AltTabio", &target.executable);
+    }
+    if !status()?.task_exists {
+        return Ok(());
+    }
+    let output = run(&["/Delete", "/TN", "AltTabio", "/F"])?;
     if output.status.success() {
         Ok(())
     } else {
@@ -88,9 +93,95 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     }
 }
 
-fn validate_autostart_target(executable: &Path) -> Result<(), String> {
+struct TrustedTarget {
+    executable: PathBuf,
+    // No component can be renamed while the in-memory definition is registered.
+    _handles: Vec<OwnedHandle>,
+}
+
+fn validate_autostart_target(executable: &Path) -> Result<TrustedTarget, String> {
     let token = shell_impersonation_token()?;
-    validate_autostart_target_with(executable, |path| executable_is_replaceable(path, token.0))
+    if !executable.is_absolute() {
+        return Err("The autostart executable path must be absolute".to_owned());
+    }
+    let mut handles = Vec::new();
+    let mut components = executable.ancestors().collect::<Vec<_>>();
+    components.reverse();
+    for path in components {
+        // A bare drive prefix is not a filesystem object; its root is opened next.
+        if path.parent().is_none() && !path.has_root() {
+            continue;
+        }
+        let handle = open_path_component(path, path == executable)?;
+        validate_autostart_target_with(path, |_| {
+            handle_is_replaceable(handle.0, token.0, path == executable)
+        })?;
+        handles.push(handle);
+    }
+    let handle = handles
+        .last()
+        .ok_or_else(|| "No autostart path components were opened".to_owned())?;
+    let mut buffer = vec![0_u16; 32768];
+    let length = unsafe {
+        // SAFETY: the validated file handle stays live and the output buffer is writable.
+        GetFinalPathNameByHandleW(handle.0, &mut buffer, VOLUME_NAME_DOS)
+    } as usize;
+    if length == 0 || length >= buffer.len() {
+        return Err("Could not resolve the validated autostart executable".to_owned());
+    }
+    let resolved = PathBuf::from(OsString::from_wide(&buffer[..length]));
+    if !paths_match(&resolved, executable) {
+        return Err("The autostart path changed while its permissions were checked".to_owned());
+    }
+    Ok(TrustedTarget {
+        executable: resolved,
+        _handles: handles,
+    })
+}
+
+fn open_path_component(path: &Path, file: bool) -> Result<OwnedHandle, String> {
+    let name = path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        // SAFETY: name is terminated; this guard owns the handle. No delete sharing keeps
+        // the component in place, and OPEN_REPARSE_POINT prevents following a final link.
+        CreateFileW(
+            PCWSTR(name.as_ptr()),
+            READ_CONTROL.0 | FILE_READ_ATTRIBUTES.0,
+            if file {
+                FILE_SHARE_READ
+            } else {
+                FILE_SHARE_READ | FILE_SHARE_WRITE
+            },
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map(OwnedHandle)
+    .map_err(|error| format!("Could not securely open {}: {error}", path.display()))?;
+    let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
+    unsafe {
+        // SAFETY: the handle is live and attributes is writable for its exact size.
+        GetFileInformationByHandleEx(
+            handle.0,
+            FileAttributeTagInfo,
+            (&raw mut attributes).cast(),
+            u32::try_from(size_of::<FILE_ATTRIBUTE_TAG_INFO>()).unwrap_or_default(),
+        )
+    }
+    .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Err(format!(
+            "Autostart paths cannot contain reparse points: {}",
+            path.display()
+        ));
+    }
+    Ok(handle)
 }
 
 fn validate_autostart_target_with(
@@ -177,41 +268,39 @@ fn token_is_elevated(token: HANDLE) -> Result<bool, String> {
     Ok(elevation.TokenIsElevated != 0)
 }
 
-fn executable_is_replaceable(executable: &Path, token: HANDLE) -> Result<bool, String> {
-    let parent = executable
-        .parent()
-        .ok_or_else(|| "The AltTabio executable has no parent folder".to_owned())?;
-    let file_write = token_has_access(executable, token, FILE_WRITE_DATA.0)?
-        || token_has_access(executable, token, WRITE_DAC.0)?
-        || token_has_access(executable, token, WRITE_OWNER.0)?;
-    let file_delete = token_has_access(executable, token, DELETE.0)?;
-    let parent_add = token_has_access(parent, token, FILE_ADD_FILE.0)?;
-    let parent_delete = token_has_access(parent, token, FILE_DELETE_CHILD.0)?;
-    let parent_controls_acl = token_has_access(parent, token, WRITE_DAC.0)?
-        || token_has_access(parent, token, WRITE_OWNER.0)?;
-    Ok(file_write || parent_controls_acl || (parent_add && (file_delete || parent_delete)))
+fn handle_is_replaceable(handle: HANDLE, token: HANDLE, file: bool) -> Result<bool, String> {
+    for access in [
+        WRITE_DAC.0,
+        WRITE_OWNER.0,
+        DELETE.0,
+        if file {
+            FILE_WRITE_DATA.0
+        } else {
+            FILE_DELETE_CHILD.0
+        },
+    ] {
+        if token_has_access(handle, token, access)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-fn token_has_access(path: &Path, token: HANDLE, desired_access: u32) -> Result<bool, String> {
-    let path = path
-        .as_os_str()
-        .encode_wide()
-        .chain([0])
-        .collect::<Vec<_>>();
+fn token_has_access(handle: HANDLE, token: HANDLE, desired_access: u32) -> Result<bool, String> {
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     let mut dacl = std::ptr::null_mut::<ACL>();
     unsafe {
-        // SAFETY: path is null-terminated and descriptor is writable. Windows allocates the
+        // SAFETY: handle is live and descriptor is writable. Windows allocates the
         // returned descriptor with LocalAlloc; OwnedSecurityDescriptor frees it exactly once.
-        GetNamedSecurityInfoW(
-            PCWSTR(path.as_ptr()),
+        GetSecurityInfo(
+            handle,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
             None,
             None,
             Some(&raw mut dacl),
             None,
-            &raw mut descriptor,
+            Some(&raw mut descriptor),
         )
     }
     .ok()
@@ -269,7 +358,7 @@ struct OwnedSecurityDescriptor(PSECURITY_DESCRIPTOR);
 impl Drop for OwnedSecurityDescriptor {
     fn drop(&mut self) {
         let remaining = unsafe {
-            // SAFETY: GetNamedSecurityInfoW allocated this descriptor with LocalAlloc and ownership
+            // SAFETY: GetSecurityInfo allocated this descriptor with LocalAlloc and ownership
             // remains unique until this drop.
             LocalFree(Some(HLOCAL(self.0.0)))
         };
@@ -347,60 +436,33 @@ fn autostart_task_xml(executable: &Path) -> Result<String, String> {
     ))
 }
 
-struct AutostartTaskFile {
-    path: PathBuf,
-}
-
-impl AutostartTaskFile {
-    fn create(executable: &Path) -> Result<Self, String> {
-        let xml = autostart_task_xml(executable)?;
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("Could not timestamp the autostart definition: {error}"))?
-            .as_nanos();
-        // The caller validates this directory's permissions before enabling elevated autostart.
-        // Keeping the XML beside the executable prevents an unelevated process from replacing it.
-        let path = executable.with_file_name(format!(
-            "AltTabio-autostart-{}-{timestamp}.xml",
-            std::process::id()
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| format!("Could not create the autostart definition: {error}"))?;
-        let task_file = Self { path };
-        // schtasks reads task definitions as UTF-16, including the byte-order mark.
-        let bytes = [0xff, 0xfe]
-            .into_iter()
-            .chain(xml.encode_utf16().flat_map(u16::to_le_bytes))
-            .collect::<Vec<_>>();
-        let write_result = file
-            .write_all(&bytes)
-            .map_err(|error| format!("Could not write the autostart definition: {error}"));
-        drop(file);
-        write_result?;
-        Ok(task_file)
+fn register_task(name: &str, executable: &Path) -> Result<(), String> {
+    let xml = autostart_task_xml(executable)?;
+    unsafe {
+        // SAFETY: the caller initialized COM; every BSTR/variant remains live during
+        // synchronous calls. Task Scheduler copies the XML without a filesystem handoff.
+        let service: ITaskService = CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| error.to_string())?;
+        let empty = VARIANT::default();
+        service
+            .Connect(&empty, &empty, &empty, &empty)
+            .map_err(|error| error.to_string())?;
+        let folder = service
+            .GetFolder(&BSTR::from(r"\"))
+            .map_err(|error| error.to_string())?;
+        folder
+            .RegisterTask(
+                &BSTR::from(name),
+                &BSTR::from(xml),
+                TASK_CREATE_OR_UPDATE.0,
+                &empty,
+                &empty,
+                TASK_LOGON_INTERACTIVE_TOKEN,
+                &empty,
+            )
+            .map_err(|error| format!("Could not register autostart: {error}"))?;
     }
-}
-
-impl Drop for AutostartTaskFile {
-    fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.path) {
-            eprintln!("Could not remove the temporary autostart definition: {error}");
-        }
-    }
-}
-
-fn create_arguments(task_file: &Path) -> Vec<OsString> {
-    vec![
-        "/Create".into(),
-        "/TN".into(),
-        "AltTabio".into(),
-        "/XML".into(),
-        task_file.as_os_str().to_owned(),
-        "/F".into(),
-    ]
+    Ok(())
 }
 
 fn run(arguments: &[&str]) -> Result<Output, String> {
@@ -491,7 +553,6 @@ mod tests {
                 "AltTabio".into(),
                 "/F".into(),
             ],
-            create_arguments(Path::new(r"C:\Program Files\AltTabio\AltTabio.exe")),
         ] {
             let command = scheduler_command(arguments.clone())?;
             assert!(Path::new(command.get_program()).is_absolute());
@@ -518,24 +579,17 @@ mod tests {
     }
 
     #[test]
-    fn create_arguments_import_the_task_definition() {
-        let task_file = Path::new(r"C:\Program Files\AltTabio\task.xml");
-        let arguments = create_arguments(task_file);
-        let arguments = arguments
-            .iter()
-            .map(|value| value.to_string_lossy())
-            .collect::<Vec<_>>();
-
-        assert!(
-            arguments
-                .windows(2)
-                .any(|pair| pair == ["/XML", task_file.to_str().unwrap_or_default()])
-        );
-    }
-
-    #[test]
     #[ignore = "requires administrator privileges; registers and deletes a temporary task"]
     fn registered_autostart_task_has_no_time_limit() -> Result<(), String> {
+        struct Apartment;
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                // SAFETY: the test initializes COM once on this same thread.
+                unsafe {
+                    windows::Win32::System::Com::CoUninitialize();
+                }
+            }
+        }
         struct RegisteredTask(String);
         impl Drop for RegisteredTask {
             fn drop(&mut self) {
@@ -549,14 +603,18 @@ mod tests {
             }
         }
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        let task_file = AutostartTaskFile::create(&executable)?;
         let task_name = format!("AltTabio-Autostart-Regression-{}", std::process::id());
-        let mut arguments = create_arguments(&task_file.path);
-        arguments[2] = task_name.clone().into();
-        let output = run_owned(arguments)?;
-        if !output.status.success() {
-            return Err(output_details(&output));
+        // SAFETY: this test owns and balances COM initialization on its thread.
+        unsafe {
+            windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            )
+            .ok()
         }
+        .map_err(|error| error.to_string())?;
+        let _apartment = Apartment;
+        register_task(&task_name, &executable)?;
         let _task = RegisteredTask(task_name.clone());
         let output = run(&["/Query", "/TN", &task_name, "/XML"])?;
         if !output.status.success() {

@@ -29,7 +29,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CallNextHookEx, DispatchMessageW, EVENT_SYSTEM_DESKTOPSWITCH,
     GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, KillTimer,
-    LLKHF_ALTDOWN, LLKHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
+    LLKHF_ALTDOWN, LLKHF_INJECTED, LLKHF_LOWER_IL_INJECTED, LLMHF_INJECTED,
+    LLMHF_LOWER_IL_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
     WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
@@ -767,6 +768,13 @@ fn commit_keyboard_delivery(wparam: WPARAM, lparam: LPARAM) {
         (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
     };
     if let Some(data) = data {
+        // Our replay updates delivery bookkeeping only. Foreign synthetic input must not
+        // change the physical-key state used to authorize elevated switcher commands.
+        if (data.flags.0 & (LLKHF_INJECTED.0 | LLKHF_LOWER_IL_INJECTED.0) != 0)
+            && !is_own_replayed_input(data.dwExtraInfo)
+        {
+            return;
+        }
         let _committed = process_with_context(|context| {
             context
                 .keyboard_state
@@ -797,7 +805,9 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         // to a KBDLLHOOKSTRUCT for the callback duration.
         (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
     }?;
-    if is_own_replayed_input(data.dwExtraInfo) {
+    if is_own_replayed_input(data.dwExtraInfo)
+        || (data.flags.0 & (LLKHF_INJECTED.0 | LLKHF_LOWER_IL_INJECTED.0) != 0)
+    {
         return None;
     }
     let key = decode_virtual_key(data.vkCode);
@@ -853,7 +863,9 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
         // an MSLLHOOKSTRUCT for the callback duration.
         (lparam.0 as *const MSLLHOOKSTRUCT).as_ref()
     }?;
-    if is_own_replayed_input(data.dwExtraInfo) {
+    if is_own_replayed_input(data.dwExtraInfo)
+        || data.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0
+    {
         return None;
     }
     let event = match u32::try_from(wparam.0).ok()? {
@@ -1621,6 +1633,46 @@ mod tests {
             keyboard_state: KeyboardState::default(),
             recovering: false,
         }
+    }
+
+    #[test]
+    fn synthetic_input_cannot_mutate_or_command_the_switcher() {
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
+        for flags in [LLKHF_INJECTED, LLKHF_LOWER_IL_INJECTED] {
+            for key in [VK_LMENU, VK_TAB, VK_F8, VK_CAPITAL] {
+                let data = KBDLLHOOKSTRUCT {
+                    vkCode: u32::from(key.0),
+                    flags,
+                    ..KBDLLHOOKSTRUCT::default()
+                };
+                for message in [WM_KEYDOWN, WM_KEYUP] {
+                    let wparam = WPARAM(message as usize);
+                    let lparam = LPARAM((&raw const data) as isize);
+                    assert_eq!(process_keyboard_message(wparam, lparam), None);
+                    commit_keyboard_delivery(wparam, lparam);
+                }
+            }
+        }
+        for flags in [LLMHF_INJECTED, LLMHF_LOWER_IL_INJECTED] {
+            let data = MSLLHOOKSTRUCT {
+                flags,
+                ..MSLLHOOKSTRUCT::default()
+            };
+            for message in [WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL] {
+                assert_eq!(
+                    process_mouse_message(
+                        WPARAM(message as usize),
+                        LPARAM((&raw const data) as isize)
+                    ),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            process_with_context(|context| context.keyboard_state.keys),
+            Some(KeyboardState::default().keys)
+        );
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
     }
 
     #[test]
