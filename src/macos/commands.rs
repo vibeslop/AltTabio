@@ -51,7 +51,7 @@ pub fn activate(record: &WindowRecord) -> Result<(), String> {
 pub fn activate_app(app: &AppRef<'_>) -> Result<(), String> {
     let running = running_application(app)?;
     if running.isHidden() && !running.unhide() {
-        eprintln!("Could not unhide {}", TerminalText(&app.name));
+        eprintln!("Could not unhide {}", TerminalText(app.name));
     }
     bring_forward(&running, app.name)
 }

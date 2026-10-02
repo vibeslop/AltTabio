@@ -317,6 +317,7 @@ fn current_pid() -> i32 {
 }
 
 /// Accessibility work for the window list thread.
+#[derive(Clone, Copy)]
 enum Job {
     List(EnumerationOptions),
     /// Follow this app's windows, replacing the app followed before.

@@ -24,7 +24,7 @@ pub fn bounded_cf_string(value: &CFString) -> String {
         value.characters(
             CFRange {
                 location: 0,
-                length: length as isize,
+                length: length.cast_signed(),
             },
             buffer.as_mut_ptr(),
         );

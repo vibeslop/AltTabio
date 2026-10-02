@@ -113,33 +113,7 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
     let apps = regular_applications(options.current_pid);
     let on_screen = on_screen_windows();
     let mut records = Vec::new();
-    let mut ax_windows = Vec::new();
-    let now = Instant::now();
-    unresponsive
-        .0
-        .retain(|pid, _| apps.iter().any(|app| app.pid == *pid));
-    for app in &apps {
-        if ax_windows.len() >= MAX_WINDOWS {
-            break;
-        }
-        // An app left out keeps its on-screen windows, as one that answers nothing does.
-        if unresponsive.skips(app, now) {
-            continue;
-        }
-        let windows = accessibility_windows(app.pid);
-        unresponsive.note(
-            app.pid,
-            !matches!(windows, Err(AXError::CannotComplete)),
-            now,
-        );
-        for window in windows
-            .unwrap_or_default()
-            .into_iter()
-            .take(MAX_WINDOWS - ax_windows.len())
-        {
-            ax_windows.push((app.pid, window));
-        }
-    }
+    let mut ax_windows = collect_accessibility_windows(&apps, unresponsive);
 
     let mut counts: HashMap<i32, usize> = HashMap::new();
     for cg_window in &on_screen {
@@ -231,6 +205,41 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
         windows: records,
         windowless,
     }
+}
+
+fn collect_accessibility_windows(
+    apps: &[AppInfo],
+    unresponsive: &mut Unresponsive,
+) -> Vec<(i32, AxWindow)> {
+    let mut ax_windows = Vec::new();
+    let now = Instant::now();
+    unresponsive
+        .0
+        .retain(|pid, _| apps.iter().any(|app| app.pid == *pid));
+    for app in apps {
+        if ax_windows.len() >= MAX_WINDOWS {
+            break;
+        }
+        // An app left out keeps its on-screen windows, as one that answers nothing does.
+        if unresponsive.skips(app, now) {
+            continue;
+        }
+        let windows = accessibility_windows(app.pid);
+        unresponsive.note(
+            app.pid,
+            !matches!(windows, Err(AXError::CannotComplete)),
+            now,
+        );
+        for window in windows
+            .unwrap_or_default()
+            .into_iter()
+            .take(MAX_WINDOWS - ax_windows.len())
+        {
+            ax_windows.push((app.pid, window));
+        }
+    }
+
+    ax_windows
 }
 
 /// Whether `pid` produced at least one Accessibility window: either one still waiting in
