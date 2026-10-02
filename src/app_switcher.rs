@@ -9,7 +9,9 @@
 //! would do nothing; stepping back onto it lands on its next window instead.
 
 use crate::input::WindowCommand;
+use crate::metadata::{MAX_WINDOWS, MAX_WINDOWS_PER_APP, bounded_text};
 use crate::switcher::ProcessIdentity;
+use std::collections::{HashMap, HashSet};
 
 /// One window as the adapter lists it, most recently used first.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +28,7 @@ pub struct WindowEntry {
 #[derive(Debug, Default)]
 pub struct WindowHistory {
     windows: Vec<isize>,
+    ranks: HashMap<isize, usize>,
 }
 
 impl WindowHistory {
@@ -33,23 +36,30 @@ impl WindowHistory {
     /// history starts from `listed` as given, front to back, the best guess at the order of use
     /// from before recording began.
     pub fn note(&mut self, focused: Option<isize>, listed: &[isize]) {
+        let listed = &listed[..listed.len().min(MAX_WINDOWS)];
+        let membership: HashSet<_> = listed.iter().copied().collect();
         if self.windows.is_empty() {
             listed.clone_into(&mut self.windows);
         }
-        self.windows.retain(|window| listed.contains(window));
+        self.windows.retain(|window| membership.contains(window));
         if let Some(focused) = focused {
             self.windows.retain(|window| *window != focused);
             self.windows.insert(0, focused);
         }
+        self.windows.truncate(MAX_WINDOWS);
+        self.ranks = self
+            .windows
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(rank, id)| (id, rank))
+            .collect();
     }
 
     /// How recently `window` had focus, 0 being now; windows never seen rank last.
     #[must_use]
     pub fn rank(&self, window: isize) -> usize {
-        self.windows
-            .iter()
-            .position(|known| *known == window)
-            .unwrap_or(usize::MAX)
+        self.ranks.get(&window).copied().unwrap_or(usize::MAX)
     }
 }
 
@@ -73,32 +83,43 @@ pub fn group_by_app(
     windowless: &[(ProcessIdentity, String)],
 ) -> Vec<AppEntry> {
     let mut apps: Vec<AppEntry> = Vec::new();
-    for window in windows {
-        match apps.iter_mut().find(|app| app.process == window.process) {
-            Some(app) => app.windows.push(window.handle),
-            None => apps.push(AppEntry {
+    let mut indices = HashMap::new();
+    for window in windows.iter().take(MAX_WINDOWS) {
+        if let Some(index) = indices.get(&window.process).copied() {
+            let app: &mut AppEntry = &mut apps[index];
+            if app.windows.len() < MAX_WINDOWS_PER_APP {
+                app.windows.push(window.handle);
+            }
+        } else {
+            indices.insert(window.process, apps.len());
+            apps.push(AppEntry {
                 process: window.process,
-                name: window.app_name.clone(),
+                name: bounded_text(&window.app_name),
                 windows: vec![window.handle],
-            }),
+            });
         }
     }
-    for (process, name) in windowless {
-        if !apps.iter().any(|app| app.process == *process) {
+    for (process, name) in windowless.iter().take(MAX_WINDOWS) {
+        if apps.len() >= MAX_WINDOWS {
+            break;
+        }
+        if !indices.contains_key(process) {
+            indices.insert(*process, apps.len());
             apps.push(AppEntry {
                 process: *process,
-                name: name.clone(),
+                name: bounded_text(name),
                 windows: Vec::new(),
             });
         }
     }
     // A stable sort keeps that order among the apps `recent_apps` does not name.
-    apps.sort_by_key(|app| {
-        recent_apps
-            .iter()
-            .position(|id| *id == app.process.id)
-            .unwrap_or(usize::MAX)
-    });
+    let ranks: HashMap<_, _> = recent_apps
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, id)| (id, rank))
+        .collect();
+    apps.sort_by_key(|app| ranks.get(&app.process.id).copied().unwrap_or(usize::MAX));
     apps
 }
 
@@ -425,6 +446,28 @@ const fn command_target(command: WindowCommand, target: Target) -> Option<Target
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_disjoint_histories_and_per_app_lists_are_bounded() {
+        let mut history = WindowHistory::default();
+        let listed: Vec<_> = (1..100_000).collect();
+        history.note(Some(1), &listed);
+        assert_eq!(history.windows.len(), MAX_WINDOWS);
+        let other: Vec<_> = (100_000..200_000).collect();
+        history.note(Some(100_000), &other);
+        assert_eq!(history.rank(1), usize::MAX);
+        assert_eq!(history.rank(100_000), 0);
+        let windows: Vec<_> = (1..100_000)
+            .map(|handle| WindowEntry {
+                handle,
+                process: ProcessIdentity::new(7, 1),
+                app_name: "App".to_owned(),
+            })
+            .collect();
+        let apps = group_by_app(&windows, &[7], &[]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].windows.len(), MAX_WINDOWS_PER_APP);
+    }
 
     fn process(id: u32) -> ProcessIdentity {
         ProcessIdentity::new(id, u64::from(id) * 10)

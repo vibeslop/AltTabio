@@ -1,12 +1,14 @@
 use alttabio::settings::{Settings, SettingsDocument};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMPORARY_FILE: AtomicU64 = AtomicU64::new(0);
+const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
+const MAX_SETTINGS_LINES: usize = 512;
 
 pub struct SettingsStore {
     path: PathBuf,
@@ -26,7 +28,7 @@ impl SettingsStore {
 
     /// Loads the file at `path`, with `defaults` for whatever it does not set.
     pub fn load_from(path: PathBuf, defaults: &Settings) -> Result<(Self, Settings), String> {
-        let contents = match std::fs::read_to_string(&path) {
+        let contents = match read_settings(&path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => {
@@ -85,6 +87,22 @@ impl SettingsStore {
     }
 }
 
+fn read_settings(path: &Path) -> io::Result<String> {
+    let mut contents = String::new();
+    File::open(path)?
+        .take(MAX_SETTINGS_BYTES + 1)
+        .read_to_string(&mut contents)?;
+    if contents.len() as u64 > MAX_SETTINGS_BYTES
+        || contents.lines().take(MAX_SETTINGS_LINES + 1).count() > MAX_SETTINGS_LINES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Settings exceed the 64 KiB or 512 line limit",
+        ));
+    }
+    Ok(contents)
+}
+
 fn create_temporary_sibling(path: &Path) -> io::Result<(PathBuf, File)> {
     let name = path.file_name().ok_or_else(|| {
         io::Error::new(
@@ -122,6 +140,20 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn oversized_and_excessive_entry_files_are_rejected() -> io::Result<()> {
+        let directory = TestDirectory::new()?;
+        let path = directory.0.join("AltTabio.ini");
+        for contents in [
+            "x".repeat(65 * 1024),
+            "key=value\n".repeat(MAX_SETTINGS_LINES + 1),
+        ] {
+            std::fs::write(&path, contents)?;
+            assert!(SettingsStore::load_from(path.clone(), &Settings::default()).is_err());
+        }
+        Ok(())
+    }
 
     struct TestDirectory(PathBuf);
 

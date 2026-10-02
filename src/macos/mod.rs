@@ -23,6 +23,7 @@ use alttabio::app_switcher::{
     Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, WindowHistory, group_by_app,
 };
 use alttabio::input::WindowCommand;
+use alttabio::metadata::TerminalText;
 use alttabio::settings::Settings;
 use alttabio::switcher::ProcessIdentity;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
@@ -44,7 +45,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSArray, NSNotification, NSNotificationName, NSObjectProtocol, NSOperationQueue, NSPoint,
-    NSSize, NSString, NSTimer, NSURL,
+    NSSearchPathDirectory, NSSearchPathDomainMask, NSSearchPathForDirectoriesInDomains, NSSize,
+    NSString, NSTimer, NSURL,
 };
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{
@@ -55,12 +57,12 @@ use preview::{Capture, CaptureRequest, PreviewResult, PreviewSource};
 use settings_window::{SettingsEvent, SettingsWindow};
 use status_item::{MenuAction, StatusItem};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use window_list::{
     AX_TIMEOUT_SECONDS, EnumerationOptions, Listing, Unresponsive, WindowRecord, WindowlessApp,
@@ -169,7 +171,13 @@ pub fn run(arguments: &[OsString]) {
         eprintln!("AltTabio is already running");
         return;
     }
-    let path = settings_path();
+    let path = match settings_path() {
+        Ok(path) => path,
+        Err(error) => {
+            show_fatal_error(mtm, &error);
+            return;
+        }
+    };
     let first_start = !path.exists();
     let (store, settings) = match SettingsStore::load_from(path, &Settings::macos_default()) {
         Ok(loaded) => loaded,
@@ -194,25 +202,33 @@ pub fn run(arguments: &[OsString]) {
     ns_app.run();
 }
 
-fn settings_path() -> PathBuf {
+fn settings_path() -> Result<PathBuf, String> {
     if let Ok(executable) = std::env::current_exe() {
         let adjacent = executable.with_file_name("AltTabio.ini");
         if adjacent.exists() {
-            return adjacent;
+            return Ok(adjacent);
         }
     }
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    let directory = home
-        .join("Library")
-        .join("Application Support")
+    let directories = NSSearchPathForDirectoriesInDomains(
+        NSSearchPathDirectory::ApplicationSupportDirectory,
+        NSSearchPathDomainMask::UserDomainMask,
+        true,
+    );
+    let directory = directories
+        .firstObject()
+        .map(|path| PathBuf::from(path.to_string()))
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            "macOS could not resolve this account's Application Support directory".to_owned()
+        })?
         .join("AltTabio");
-    if let Err(error) = std::fs::create_dir_all(&directory) {
-        eprintln!(
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        format!(
             "Could not create the settings directory {}: {error}",
             directory.display()
-        );
-    }
-    directory.join("AltTabio.ini")
+        )
+    })?;
+    Ok(directory.join("AltTabio.ini"))
 }
 
 fn show_fatal_error(mtm: MainThreadMarker, message: &str) {
@@ -247,8 +263,8 @@ fn print_window_list() {
             record.window_id,
             record.pid,
             state,
-            truncate(&record.app_name, 24),
-            record.title
+            TerminalText(&truncate(&record.app_name, 24)),
+            TerminalText(&record.title)
         );
     }
     for app in listing.windowless {
@@ -257,7 +273,7 @@ fn print_window_list() {
             "-",
             app.pid,
             "none",
-            truncate(&app.name, 24)
+            TerminalText(&truncate(&app.name, 24))
         );
     }
 }
@@ -283,8 +299,12 @@ fn activate_from_command_line(argument: Option<&OsString>) {
         return;
     };
     match commands::activate(record) {
-        Ok(()) => println!("Activated {} ({})", record.title, record.app_name),
-        Err(error) => eprintln!("{error}"),
+        Ok(()) => println!(
+            "Activated {} ({})",
+            TerminalText(&record.title),
+            TerminalText(&record.app_name)
+        ),
+        Err(error) => eprintln!("{}", TerminalText(&error)),
     }
 }
 
@@ -305,27 +325,32 @@ enum Job {
 
 /// The thread that asks apps over Accessibility, so an app that is slow to answer never stalls
 /// the main thread.
+#[derive(Default)]
+struct PendingJobs {
+    list: Option<EnumerationOptions>,
+    watch: Option<i32>,
+}
+
 struct RefreshWorker {
-    sender: mpsc::Sender<Job>,
+    sender: mpsc::SyncSender<()>,
+    pending: Arc<Mutex<PendingJobs>>,
 }
 
 impl RefreshWorker {
     fn spawn() -> Self {
-        let (sender, receiver) = mpsc::channel::<Job>();
+        let (sender, receiver) = mpsc::sync_channel::<()>(1);
+        let pending = Arc::new(Mutex::new(PendingJobs::default()));
+        let worker_pending = Arc::clone(&pending);
         std::thread::Builder::new()
             .name("alttabio-window-list".to_owned())
             .spawn(move || {
                 let mut unresponsive = Unresponsive::default();
-                while let Ok(job) = receiver.recv() {
-                    // Coalesce bursts of notifications: the latest job of each kind counts.
-                    let mut list = None;
-                    let mut watch = None;
-                    for job in std::iter::once(job).chain(receiver.try_iter()) {
-                        match job {
-                            Job::List(options) => list = Some(options),
-                            Job::Watch(pid) => watch = Some(pid),
-                        }
-                    }
+                while receiver.recv().is_ok() {
+                    let Ok(mut pending) = worker_pending.lock() else {
+                        return;
+                    };
+                    let PendingJobs { list, watch } = std::mem::take(&mut *pending);
+                    drop(pending);
                     // AppKit drains no pool on a thread it didn't start, so without this
                     // every autoreleased runningApplications snapshot lives forever.
                     objc2::rc::autoreleasepool(|_| {
@@ -344,15 +369,28 @@ impl RefreshWorker {
                 |error| {
                     eprintln!("Could not start the window list thread: {error}");
                     Self {
-                        sender: mpsc::channel().0,
+                        sender: mpsc::sync_channel(1).0,
+                        pending: Arc::clone(&pending),
                     }
                 },
-                |_handle| Self { sender },
+                |_handle| Self {
+                    sender,
+                    pending: Arc::clone(&pending),
+                },
             )
     }
 
     fn request(&self, job: Job) {
-        if self.sender.send(job).is_err() {
+        let Ok(mut pending) = self.pending.lock() else {
+            eprintln!("The window list request state is unavailable");
+            return;
+        };
+        match job {
+            Job::List(options) => pending.list = Some(options),
+            Job::Watch(pid) => pending.watch = Some(pid),
+        }
+        drop(pending);
+        if let Err(mpsc::TrySendError::Disconnected(())) = self.sender.try_send(()) {
             eprintln!("The window list thread is gone; the switcher keeps its last list");
         }
     }
@@ -613,7 +651,10 @@ impl App {
             .and_then(|app| app.localizedName())
             .map_or_else(|| "another app".to_owned(), |name| name.to_string());
         if tracing() {
-            eprintln!("event tap reinserted at the head; front app: {front}");
+            eprintln!(
+                "event tap reinserted at the head; front app: {}",
+                TerminalText(&front)
+            );
         }
         if !permissions::secure_input_enabled() {
             self.secure_input_holder = None;
@@ -621,8 +662,9 @@ impl App {
         }
         if self.secure_input_holder.as_deref() != Some(&front) {
             eprintln!(
-                "Secure keyboard input is on while {front} is in front; macOS hides every key, \
-                 including ⌘ Tab, from AltTabio until it ends."
+                "Secure keyboard input is on while {} is in front; macOS hides every key, \
+                 including ⌘ Tab, from AltTabio until it ends.",
+                TerminalText(&front)
             );
             self.secure_input_holder = Some(front);
         }
@@ -640,7 +682,7 @@ impl App {
                 true
             }
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!("{}", TerminalText(&error));
                 false
             }
         }
@@ -792,7 +834,7 @@ impl App {
             .iter()
             .map(|record| record.pid)
             .chain(listing.windowless.iter().map(|app| app.pid))
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         for pid in &pids {
             if !self.icons.contains_key(pid)
                 && let Some(icon) = application_icon(*pid)
@@ -862,9 +904,14 @@ impl App {
         order.sort_by_key(|id| {
             isize::try_from(*id).map_or(usize::MAX, |handle| self.window_history.rank(handle))
         });
+        let records: HashMap<_, _> = self
+            .records
+            .iter()
+            .map(|record| (record.window_id, record))
+            .collect();
         let windows = order
             .iter()
-            .filter_map(|id| self.records.iter().find(|record| record.window_id == *id))
+            .filter_map(|id| records.get(id))
             .map(|record| WindowEntry {
                 handle: isize::try_from(record.window_id).unwrap_or_default(),
                 process: record_process(record),
@@ -1060,7 +1107,7 @@ impl App {
             }),
         };
         if let Err(error) = result {
-            eprintln!("{error}");
+            eprintln!("{}", TerminalText(&error));
         }
         self.hide_overlay();
     }
@@ -1080,7 +1127,7 @@ impl App {
             ),
         };
         if let Err(error) = result {
-            eprintln!("{error}");
+            eprintln!("{}", TerminalText(&error));
             return;
         }
         // The switcher stays open and keeps its selection; the refreshes show the window or
@@ -1610,7 +1657,7 @@ impl App {
         if self.settings.general.autostart
             && let Err(error) = autostart::set_enabled(true)
         {
-            eprintln!("{error}");
+            eprintln!("{}", TerminalText(&error));
         }
         self.settings.general.autostart = autostart::is_enabled();
         self.save_settings();
@@ -1618,7 +1665,7 @@ impl App {
 
     fn save_settings(&mut self) {
         if let Err(error) = self.store.save(&self.settings) {
-            eprintln!("{error}");
+            eprintln!("{}", TerminalText(&error));
         }
     }
 

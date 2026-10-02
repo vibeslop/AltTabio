@@ -10,7 +10,8 @@ use crate::shell_menu;
 use crate::single_instance::SingleInstance;
 use crate::startup;
 use crate::task_icon::TaskIcons;
-use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows, window_class_name};
+use crate::task_query::{EnumeratedTasks, window_class_name};
+use crate::task_snapshot::{SnapshotWorker, WM_TASK_SNAPSHOT};
 use crate::tray::{TrayAction, TrayIcon, WM_TRAY_CALLBACK};
 use crate::win_events::{
     self, LISTED_REFRESH_RETRY_DELAY_MS, LISTED_REFRESH_RETRY_TIMER_ID, WM_FOREGROUND_CHECK,
@@ -76,6 +77,12 @@ const WM_SHOW_ABOUT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5;
 const WM_MOUSE_LEAVE: u32 = 0x02A3;
 const CLOSE_REFRESH_TIMER_ID: usize = 1;
 const SHELL_DISMISS_TIMER_ID: usize = 3;
+
+struct PendingOpen {
+    selection_delta: Option<i32>,
+    origin: Option<WPARAM>,
+    actions: Vec<(InputAction, bool)>,
+}
 
 struct PendingShellDismissal {
     window: HWND,
@@ -293,6 +300,11 @@ struct App {
     pending_shell: Option<PendingShellDismissal>,
     session: SwitcherSession,
     task_icons: TaskIcons,
+    snapshots: Option<SnapshotWorker>,
+    snapshot_generation: u64,
+    snapshot_pending: bool,
+    pending_open: Option<PendingOpen>,
+    input_origin: Option<WPARAM>,
     renderer: Renderer,
     resolved_theme: ResolvedTheme,
     preview: Option<DwmPreview>,
@@ -431,6 +443,11 @@ impl App {
             pending_shell: None,
             session,
             task_icons: TaskIcons::default(),
+            snapshots: None,
+            snapshot_generation: 0,
+            snapshot_pending: false,
+            pending_open: None,
+            input_origin: None,
             renderer: Renderer::new(resolved_theme)?,
             resolved_theme,
             preview: None,
@@ -454,6 +471,7 @@ impl App {
 
     fn initialize(&mut self, hwnd: HWND, install_hooks: bool) -> std::result::Result<(), String> {
         self.hwnd = hwnd;
+        self.snapshots = Some(SnapshotWorker::spawn(hwnd)?);
         self.recreate_preview();
         if install_hooks {
             let instance = module_instance().map_err(|error| {
@@ -585,6 +603,7 @@ impl App {
                         .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
+                    self.input_origin = Some(wparam);
                     if message == crate::hook::WM_HOOK_HOTKEY_ACTION
                         && matches!(action, InputAction::Switch(_))
                     {
@@ -620,7 +639,12 @@ impl App {
                     } else {
                         self.handle_hook_input(action, wparam);
                     }
+                    self.input_origin = None;
                 }
+                Some(LRESULT(0))
+            }
+            WM_TASK_SNAPSHOT => {
+                self.snapshot_ready();
                 Some(LRESULT(0))
             }
             WM_TRAY_CALLBACK => {
@@ -908,6 +932,14 @@ impl App {
     }
 
     fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
+        if let Some(pending) = &mut self.pending_open {
+            if action == InputAction::DismissOverlay || pending.actions.len() >= 64 {
+                self.hide_overlay_with_reset(reset_hook);
+            } else {
+                pending.actions.push((action, reset_hook));
+            }
+            return;
+        }
         match self.session.handle_input(action) {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
@@ -1181,15 +1213,75 @@ impl App {
     }
 
     fn refresh_switcher_tasks(&mut self) {
-        let timer = match enumerate_switchable_windows(&self.settings) {
+        if self.snapshot_pending {
+            return;
+        }
+        self.request_snapshot();
+    }
+
+    fn request_snapshot(&mut self) {
+        self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
+        let result = self
+            .snapshots
+            .as_ref()
+            .ok_or_else(|| "The window snapshot worker is unavailable".to_owned())
+            .and_then(|worker| worker.request(self.snapshot_generation, &self.settings));
+        match result {
+            Ok(()) => self.snapshot_pending = true,
+            Err(error) => {
+                eprintln!("{error}");
+                self.hide_overlay();
+            }
+        }
+    }
+
+    fn snapshot_ready(&mut self) {
+        let Some((generation, result)) = self.snapshots.as_ref().and_then(SnapshotWorker::take)
+        else {
+            return;
+        };
+        if generation != self.snapshot_generation {
+            return;
+        }
+        self.snapshot_pending = false;
+        let opening = self.pending_open.take();
+        if opening
+            .as_ref()
+            .and_then(|pending| pending.origin)
+            .is_some_and(|origin| {
+                !self
+                    .hooks
+                    .as_ref()
+                    .is_some_and(|hooks| hooks.action_is_current(origin))
+            })
+        {
+            self.hide_overlay();
+            return;
+        }
+        let timer = match result {
             Ok(EnumeratedTasks { tasks, icons }) => {
+                self.task_icons = icons;
+                if let Some(pending) = opening {
+                    self.session.open(tasks, pending.selection_delta);
+                    self.present_overlay();
+                    for (action, reset_hook) in pending.actions {
+                        self.apply_input_action_with_reset(action, reset_hook);
+                    }
+                    return;
+                }
+                if !self.session.is_visible() {
+                    return;
+                }
                 let timer = self.task_refresh.complete_enumeration(Ok(&tasks));
                 self.session.refresh_tasks(tasks);
-                self.task_icons = icons;
                 timer
             }
             Err(error) => {
                 eprintln!("Could not refresh windows: {error}");
+                if opening.is_some() {
+                    self.hide_overlay();
+                    return;
+                }
                 self.task_refresh.complete_enumeration(Err(()))
             }
         };
@@ -1416,17 +1508,15 @@ impl App {
     }
 
     fn show_overlay(&mut self, selection_delta: Option<i32>) {
-        match enumerate_switchable_windows(&self.settings) {
-            Ok(EnumeratedTasks { tasks, icons }) => {
-                self.session.open(tasks, selection_delta);
-                self.task_icons = icons;
-            }
-            Err(error) => {
-                eprintln!("Could not enumerate windows: {error}");
-                self.hide_overlay();
-                return;
-            }
-        }
+        self.pending_open = Some(PendingOpen {
+            selection_delta,
+            origin: self.input_origin,
+            actions: Vec::new(),
+        });
+        self.request_snapshot();
+    }
+
+    fn present_overlay(&mut self) {
         if !self.session.is_visible() {
             self.hide_overlay();
             return;
@@ -1472,6 +1562,9 @@ impl App {
     }
 
     fn hide_overlay_with_reset(&mut self, reset_hook: bool) {
+        self.pending_open = None;
+        self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
+        self.snapshot_pending = false;
         self.stop_shell_dismissal();
         self.task_refresh.clear_notices();
         self.session.hide();

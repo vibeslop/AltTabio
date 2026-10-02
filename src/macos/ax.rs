@@ -1,15 +1,36 @@
 //! Narrow Accessibility (`AXUIElement`) wrappers used for window enumeration and control, and
 //! the observer that follows the front app's windows.
 
-use super::post_to_app;
+use super::with_app;
+use alttabio::metadata::{MAX_METADATA_CHARS, MAX_WINDOWS_PER_APP};
+use dispatch2::DispatchQueue;
 use objc2_application_services::{AXError, AXObserver, AXUIElement};
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFRetained, CFRunLoop, CFRunLoopSource, CFString, CFType, Type,
+    CFArray, CFBoolean, CFRange, CFRetained, CFRunLoop, CFRunLoopSource, CFString, CFType, Type,
     kCFRunLoopCommonModes,
 };
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+pub fn bounded_cf_string(value: &CFString) -> String {
+    let length = usize::try_from(value.length())
+        .unwrap_or_default()
+        .min(MAX_METADATA_CHARS);
+    let mut buffer = [0u16; MAX_METADATA_CHARS];
+    // SAFETY: the range is within this live string and the buffer holds that many UTF-16 units.
+    unsafe {
+        value.characters(
+            CFRange {
+                location: 0,
+                length: length as isize,
+            },
+            buffer.as_mut_ptr(),
+        );
+    }
+    String::from_utf16_lossy(&buffer[..length])
+}
 
 #[derive(Clone)]
 pub struct AxElement(CFRetained<AXUIElement>);
@@ -71,7 +92,7 @@ impl AxElement {
         self.copy(attribute)?
             .downcast::<CFString>()
             .ok()
-            .map(|value| value.to_string())
+            .map(|value| bounded_cf_string(&value))
     }
 
     #[must_use]
@@ -96,7 +117,9 @@ impl AxElement {
             .try_copy(attribute)?
             .downcast::<CFArray>()
             .map_err(|_| AXError::IllegalArgument)?;
-        let count = usize::try_from(array.count()).unwrap_or_default();
+        let count = usize::try_from(array.count())
+            .unwrap_or_default()
+            .min(MAX_WINDOWS_PER_APP);
         Ok((0..count)
             .filter_map(|index| {
                 let raw = unsafe {
@@ -278,6 +301,49 @@ unsafe extern "C-unwind" fn observer_callback(
     };
     // Nothing may unwind into Accessibility; a lost change shows up in the next refresh.
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        post_to_app(move |app| app.front_window_changed(change));
+        if record_change(&PENDING_CHANGES, change) {
+            DispatchQueue::main().exec_async(|| {
+                // Clear the queued flag even if a nested run loop still holds the app borrow.
+                // A dropped notification must not prevent all subsequent notifications.
+                let pending = PENDING_CHANGES.swap(0, Ordering::AcqRel);
+                let _ = with_app(|app| {
+                    if pending & 1 != 0 {
+                        app.front_window_changed(WindowChange::Focused);
+                    }
+                    if pending & 2 != 0 {
+                        app.front_window_changed(WindowChange::Opened);
+                    }
+                });
+            });
+        }
     }));
+}
+
+// One outstanding main-queue closure for the observer, with both event kinds retained.
+static PENDING_CHANGES: AtomicU8 = AtomicU8::new(0);
+const QUEUED: u8 = 128;
+
+fn record_change(pending: &AtomicU8, change: WindowChange) -> bool {
+    let bit = match change {
+        WindowChange::Focused => 1,
+        WindowChange::Opened => 2,
+    };
+    pending.fetch_or(QUEUED | bit, Ordering::AcqRel) & QUEUED == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_bursts_post_once_and_keep_both_changes() {
+        let pending = AtomicU8::new(0);
+        assert!(record_change(&pending, WindowChange::Focused));
+        for _ in 0..100_000 {
+            assert!(!record_change(&pending, WindowChange::Opened));
+            assert!(!record_change(&pending, WindowChange::Focused));
+        }
+        assert_eq!(pending.swap(0, Ordering::AcqRel), QUEUED | 3);
+        assert!(record_change(&pending, WindowChange::Opened));
+    }
 }
