@@ -7,6 +7,7 @@
 //! everything else so the switcher can reach windows the system switcher hides.
 
 use super::ax::AxElement;
+use alttabio::metadata::{MAX_METADATA_CHARS, MAX_WINDOWS, MAX_WINDOWS_PER_APP, bounded_text};
 use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType, Type};
@@ -14,7 +15,7 @@ use objc2_core_graphics::{
     CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowAlpha, kCGWindowBounds,
     kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
@@ -112,28 +113,16 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
     let apps = regular_applications(options.current_pid);
     let on_screen = on_screen_windows();
     let mut records = Vec::new();
-    let mut ax_windows = Vec::new();
-    let now = Instant::now();
-    unresponsive
-        .0
-        .retain(|pid, _| apps.iter().any(|app| app.pid == *pid));
-    for app in &apps {
-        // An app left out keeps its on-screen windows, as one that answers nothing does.
-        if unresponsive.skips(app, now) {
+    let mut ax_windows = collect_accessibility_windows(&apps, unresponsive);
+
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for cg_window in &on_screen {
+        if records.len() >= MAX_WINDOWS {
+            break;
+        }
+        if *counts.get(&cg_window.pid).unwrap_or(&0) >= MAX_WINDOWS_PER_APP {
             continue;
         }
-        let windows = accessibility_windows(app.pid);
-        unresponsive.note(
-            app.pid,
-            !matches!(windows, Err(AXError::CannotComplete)),
-            now,
-        );
-        for window in windows.unwrap_or_default() {
-            ax_windows.push((app.pid, window));
-        }
-    }
-
-    for cg_window in &on_screen {
         let Some(app) = apps.iter().find(|app| app.pid == cg_window.pid) else {
             continue;
         };
@@ -155,6 +144,7 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
             .filter(|title| !title.is_empty())
             .or_else(|| (!cg_window.name.is_empty()).then(|| cg_window.name.clone()))
             .unwrap_or_else(|| app.name.clone());
+        *counts.entry(app.pid).or_default() += 1;
         records.push(WindowRecord {
             window_id: cg_window.id,
             pid: app.pid,
@@ -170,6 +160,12 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
     }
 
     for (pid, window) in ax_windows {
+        if records.len() >= MAX_WINDOWS {
+            break;
+        }
+        if *counts.get(&pid).unwrap_or(&0) >= MAX_WINDOWS_PER_APP {
+            continue;
+        }
         let Some(app) = apps.iter().find(|app| app.pid == pid) else {
             continue;
         };
@@ -178,6 +174,7 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
             // recognise them in the list.
             continue;
         }
+        *counts.entry(pid).or_default() += 1;
         records.push(WindowRecord {
             window_id: window.id,
             pid,
@@ -210,6 +207,41 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
     }
 }
 
+fn collect_accessibility_windows(
+    apps: &[AppInfo],
+    unresponsive: &mut Unresponsive,
+) -> Vec<(i32, AxWindow)> {
+    let mut ax_windows = Vec::new();
+    let now = Instant::now();
+    unresponsive
+        .0
+        .retain(|pid, _| apps.iter().any(|app| app.pid == *pid));
+    for app in apps {
+        if ax_windows.len() >= MAX_WINDOWS {
+            break;
+        }
+        // An app left out keeps its on-screen windows, as one that answers nothing does.
+        if unresponsive.skips(app, now) {
+            continue;
+        }
+        let windows = accessibility_windows(app.pid);
+        unresponsive.note(
+            app.pid,
+            !matches!(windows, Err(AXError::CannotComplete)),
+            now,
+        );
+        for window in windows
+            .unwrap_or_default()
+            .into_iter()
+            .take(MAX_WINDOWS - ax_windows.len())
+        {
+            ax_windows.push((app.pid, window));
+        }
+    }
+
+    ax_windows
+}
+
 /// Whether `pid` produced at least one Accessibility window: either one still waiting in
 /// `ax_windows` or one already matched into `records`.
 fn app_answers_accessibility(
@@ -226,14 +258,27 @@ fn app_answers_accessibility(
 /// Front-to-back order for visible windows, then the previously known order for the rest.
 #[must_use]
 pub fn merge_order(previous: &[u32], on_screen: &[u32], others: &[u32]) -> Vec<u32> {
-    let mut order = on_screen.to_vec();
-    for id in previous {
-        if others.contains(id) && !order.contains(id) {
+    let mut order = on_screen
+        .iter()
+        .copied()
+        .take(MAX_WINDOWS)
+        .collect::<Vec<_>>();
+    let others = &others[..others.len().min(MAX_WINDOWS)];
+    let available: HashSet<_> = others.iter().copied().collect();
+    let mut included: HashSet<_> = order.iter().copied().collect();
+    for id in previous.iter().take(MAX_WINDOWS) {
+        if order.len() >= MAX_WINDOWS {
+            break;
+        }
+        if available.contains(id) && included.insert(*id) {
             order.push(*id);
         }
     }
     for id in others {
-        if !order.contains(id) {
+        if order.len() >= MAX_WINDOWS {
+            break;
+        }
+        if included.insert(*id) {
             order.push(*id);
         }
     }
@@ -269,11 +314,15 @@ fn regular_applications(current_pid: i32) -> Vec<AppInfo> {
                 && app.processIdentifier() != current_pid
                 && !app.isTerminated()
         })
+        .take(MAX_WINDOWS)
         .map(|app| AppInfo {
             pid: app.processIdentifier(),
             name: app
                 .localizedName()
-                .map(|name| name.to_string())
+                .map(|name| {
+                    name.substringToIndex(name.length().min(MAX_METADATA_CHARS))
+                        .to_string()
+                })
                 .unwrap_or_default(),
             hidden: app.isHidden(),
             active: app.isActive(),
@@ -301,7 +350,7 @@ fn on_screen_windows() -> Vec<CgWindow> {
     ) else {
         return Vec::new();
     };
-    let count = usize::try_from(list.count()).unwrap_or_default();
+    let count = usize::try_from(list.count()).unwrap_or_default().min(4096);
     (0..count)
         .filter_map(|index| {
             let raw = unsafe {
@@ -337,7 +386,7 @@ fn on_screen_windows() -> Vec<CgWindow> {
                 id: u32::try_from(id).ok()?,
                 pid: i32::try_from(pid).ok()?,
                 name: dictionary_value::<CFString>(dictionary, name_key)
-                    .map(|name| name.to_string())
+                    .map(|name| super::ax::bounded_cf_string(&name))
                     .unwrap_or_default(),
                 bounds: [
                     bounds_component(&bounds, "X"),
@@ -347,6 +396,7 @@ fn on_screen_windows() -> Vec<CgWindow> {
                 ],
             })
         })
+        .take(MAX_WINDOWS)
         .collect()
 }
 
@@ -363,7 +413,7 @@ fn accessibility_windows(pid: i32) -> Result<Vec<AxWindow>, AXError> {
             }
             Some(AxWindow {
                 id: element.window_id()?,
-                title: element.string("AXTitle").unwrap_or_default(),
+                title: bounded_text(&element.string("AXTitle").unwrap_or_default()),
                 minimized: element.boolean("AXMinimized").unwrap_or(false),
                 element,
             })

@@ -324,7 +324,7 @@
             <span class="sr-only copy-status" aria-live="polite"></span>
           </div>
           <ol class="steps">
-            <li><span>The script downloads the newest release, checks its signature, puts <code class="inline">AltTabio.app</code> in <code class="inline">/Applications</code> (or in <code class="inline">~/Applications</code> when your account can't write there), and opens it.</span></li>
+            <li><span>The script downloads the newest release, checks its pinned release signature, puts <code class="inline">AltTabio.app</code> in <code class="inline">/Applications</code> (or in <code class="inline">~/Applications</code> when your account can't write there), and opens it.</span></li>
             <li><span>Allow <strong>Accessibility</strong> when AltTabio asks, then press Cmd+Tab.</span></li>
             <li><span>To update, run the same line again. If an update fails partway, the installed copy stays as it was.</span></li>
           </ol>
@@ -334,9 +334,11 @@
           <h3>Download the app</h3>
           <ol class="steps">
             <li><span>Download <code class="inline">AltTabio-&lt;version&gt;-macos.zip</code> from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a> and unzip it.</span></li>
+            <li><span>With the unzipped app in Downloads, run the verification command below in Terminal. Continue only if it succeeds.</span></li>
             <li><span>Move <code class="inline">AltTabio.app</code> to Applications and open it. When macOS says it could not verify the app, choose <strong>Done</strong>.</span></li>
             <li><span>Open <strong>System Settings, Privacy &amp; Security</strong>, click <strong>Open Anyway</strong> next to the message about AltTabio, and confirm.</span></li>
           </ol>
+          <div class="cmd"><code>codesign --verify --deep --strict -R=&#x27;=certificate leaf = H&quot;617A82407E9767025EDE4A62A9B990ADEA21F53B&quot; and identifier &quot;com.vibeslop.AltTabio&quot;&#x27; &quot;$HOME/Downloads/AltTabio.app&quot;</code></div>
           <p class="note" style="margin-top:0">macOS asks because AltTabio is not notarized by Apple, which takes a paid developer account. The Terminal line avoids the question.</p>
         </div>
       </div>

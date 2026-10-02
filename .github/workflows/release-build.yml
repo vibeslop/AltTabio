@@ -1,0 +1,107 @@
+name: Release build
+
+# Tags build without the publisher key. The default-branch Release workflow authorizes
+# the immutable source and artifact digests before it signs or publishes anything.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: source
+        run: |
+          tag=$GITHUB_REF_NAME
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p;/^version = /q' Cargo.toml)
+          [[ "$tag" == "v$version" ]] || exit 1
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: source
+    runs-on: windows-latest
+    outputs:
+      digest: ${{ steps.package.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - run: cargo fmt -- --check
+      - run: cargo clippy --quiet --locked --all-targets -- -D warnings
+      - run: cargo test --quiet --locked
+      - run: cargo build --release --quiet --locked
+      - id: package
+        env:
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          $archive = "AltTabio-$env:VERSION-windows-x64.zip"
+          Compress-Archive -Path target\release\AltTabio.exe, LICENSE, THIRD_PARTY_LICENSES.md -DestinationPath $archive
+          "digest=$((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-release
+          path: AltTabio-*-windows-x64.zip
+          if-no-files-found: error
+
+  macos:
+    needs: source
+    runs-on: macos-latest
+    outputs:
+      digest: ${{ steps.package.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - run: cargo fmt -- --check
+      - run: cargo clippy --quiet --locked --all-targets -- -D warnings
+      - run: cargo test --quiet --locked
+      - run: scripts/mac/build-app.sh --universal
+      - id: package
+        run: |
+          codesign --verify --deep --strict target/mac/AltTabio.app
+          codesign -dvv target/mac/AltTabio.app 2>&1 | grep -q 'flags=.*runtime'
+          ditto -c -k --keepParent target/mac/AltTabio.app macos-unsigned.zip
+          echo "digest=$(shasum -a 256 macos-unsigned.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-release
+          path: macos-unsigned.zip
+          if-no-files-found: error
+
+  metadata:
+    needs: [source, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TAG: ${{ needs.source.outputs.tag }}
+          VERSION: ${{ needs.source.outputs.version }}
+          SHA: ${{ needs.source.outputs.sha }}
+          WINDOWS_DIGEST: ${{ needs.windows.outputs.digest }}
+          MACOS_DIGEST: ${{ needs.macos.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          with open('release.json', 'w') as output:
+              json.dump({key.lower(): os.environ[key] for key in
+                  ('TAG', 'VERSION', 'SHA', 'WINDOWS_DIGEST', 'MACOS_DIGEST')}, output)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-metadata
+          path: release.json
+          if-no-files-found: error
