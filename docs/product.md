@@ -9,7 +9,7 @@ AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11**
 - **Source:** https://github.com/vibeslop/AltTabio
 - **License:** MIT
 - **Price:** $0. No trial, no ads, no account, no paid tier.
-- **Version:** 1.1.0
+- **Version:** 1.2.0
 - **Platforms:** 64-bit Windows 10 and 11; macOS 26 or later on Apple silicon and Intel
 - **Language:** Native Rust. Win32, Direct2D, DirectWrite, and DWM on Windows; AppKit and ScreenCaptureKit on macOS.
 - **Network:** None on Windows. The Mac app asks GitHub for its release list once a day to update itself, unless Update automatically is turned off. No analytics on either platform.

@@ -20,7 +20,7 @@ AltTabio is a free, open-source Alt+Tab replacement for 64-bit Windows that list
 - Windows page: https://vibeslop.github.io/AltTabio/windows/
 - Mac page: https://vibeslop.github.io/AltTabio/mac/
 - Download: https://github.com/vibeslop/AltTabio/releases/latest
-- Current version: 1.1.0 (see GitHub Releases for the latest)
+- Current version: 1.2.0 (see GitHub Releases for the latest)
 
 ## Why it exists
 
