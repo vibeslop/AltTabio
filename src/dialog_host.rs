@@ -132,6 +132,28 @@ enum LoopExit {
     Quit(i32),
 }
 
+/// A failed `ModalDialog::run`.
+pub(crate) struct RunError {
+    pub(crate) error: Error,
+    /// The window failed to close after `WM_QUIT` ended the loop, as the application exits.
+    pub(crate) exiting: bool,
+}
+
+impl From<Error> for RunError {
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            exiting: false,
+        }
+    }
+}
+
+impl From<RunError> for Error {
+    fn from(failure: RunError) -> Self {
+        failure.error
+    }
+}
+
 impl<S: DialogWindow> ModalDialog<S> {
     /// Creates the hidden dialog window around `state`.
     pub(crate) fn create(
@@ -202,10 +224,10 @@ impl<S: DialogWindow> ModalDialog<S> {
 
     /// Runs the nested message loop until the dialog closes and returns its final state, or
     /// `None` when `WM_QUIT` ended the loop.
-    pub(crate) fn run(mut self, keyboard: Keyboard) -> Result<Option<S>> {
+    pub(crate) fn run(mut self, keyboard: Keyboard) -> std::result::Result<Option<S>, RunError> {
         let exit = pump_messages(self.window(), &self.host()?.done, keyboard)?;
         match exit {
-            LoopExit::Closed => self.release().map(Some),
+            LoopExit::Closed => Ok(Some(self.release()?)),
             LoopExit::Quit(exit_code) => {
                 let released = self.release();
                 unsafe {
@@ -213,7 +235,10 @@ impl<S: DialogWindow> ModalDialog<S> {
                     // consumed it, so the application loop still needs it to exit.
                     PostQuitMessage(exit_code);
                 }
-                released.map(|_state| None)
+                released.map(|_state| None).map_err(|error| RunError {
+                    error,
+                    exiting: true,
+                })
             }
         }
     }

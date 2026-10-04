@@ -189,9 +189,16 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
     }
     dialog.show_in_front();
 
-    let Some(state) = dialog
-        .run(Keyboard::WindowProcedure)
-        .map_err(|error| error.to_string())?
+    let Some(state) = dialog.run(Keyboard::WindowProcedure).map_err(|failure| {
+        if failure.exiting {
+            format!(
+                "Could not close About while AltTabio was exiting: {}",
+                failure.error
+            )
+        } else {
+            failure.error.to_string()
+        }
+    })?
     else {
         return Ok(());
     };
