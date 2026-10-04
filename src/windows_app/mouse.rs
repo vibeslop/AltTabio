@@ -44,7 +44,20 @@ impl App {
                 // SAFETY: `cursor` is writable for the call.
                 GetCursorPos(&raw mut cursor)
             };
-            if current.is_err() || self.mouse_origin == Some(cursor) {
+            // Every move reads the cursor until hover selection arms, so a failure that lasts
+            // would log on each one. Logging the first failure of a run is enough.
+            match current {
+                Ok(()) => self.cursor_read_failures.succeed(),
+                Err(error) => {
+                    if self.cursor_read_failures.fail() {
+                        eprintln!(
+                            "Could not read the cursor position to arm hover selection: {error}"
+                        );
+                    }
+                    return;
+                }
+            }
+            if self.mouse_origin == Some(cursor) {
                 return;
             }
             self.mouse_selection_armed = true;
