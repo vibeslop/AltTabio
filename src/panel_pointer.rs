@@ -479,9 +479,9 @@ mod tests {
         // The pressed window closed and the next one took its row, or the pressed window closed
         // and nothing is selected. Released on the button, the window that took the row lights
         // up, since the pointer is on its button now.
-        for (selected_at_release, after) in [
-            (Some(11), CloseButtonVisualState::Hovered),
-            (None, CloseButtonVisualState::Normal),
+        for (selected_at_release, after, redraw) in [
+            (Some(11), CloseButtonVisualState::Hovered, true),
+            (None, CloseButtonVisualState::Normal, false),
         ] {
             let _ = pointer.pressed(Some(Hit::CloseButton(0)), &frame, Some(0), Some(10));
             assert_eq!(
@@ -494,10 +494,11 @@ mod tests {
                 CloseButtonVisualState::Normal
             );
             assert_eq!(
-                pointer
-                    .released(Some(Hit::CloseButton(0)), selected_at_release)
-                    .action,
-                None
+                pointer.released(Some(Hit::CloseButton(0)), selected_at_release),
+                Response {
+                    redraw,
+                    ..Response::default()
+                }
             );
             assert_eq!(pointer.close_state(selected_at_release), after);
         }
@@ -562,6 +563,25 @@ mod tests {
                 .redraw
         );
         assert_eq!(pointer.close_state(next), CloseButtonVisualState::Hovered);
+    }
+
+    #[test]
+    fn the_selection_back_on_the_hovered_button_lights_it_again() {
+        let mut pointer = Pointer::default();
+        let _ = pointer.moved(
+            Some(Hit::CloseButton(0)),
+            AWAY,
+            &shown(0, 0, Some(0)),
+            Some(0),
+            WINDOW,
+        );
+
+        // ↓ moves the button a row away from the resting pointer, and ↑ brings it back.
+        let next = Some(11);
+        pointer.relocated(Some(Hit::Row(0)), next);
+        assert_eq!(pointer.close_state(next), CloseButtonVisualState::Normal);
+        pointer.relocated(Some(Hit::CloseButton(0)), WINDOW);
+        assert_eq!(pointer.close_state(WINDOW), CloseButtonVisualState::Hovered);
     }
 
     #[test]
