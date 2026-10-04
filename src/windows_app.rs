@@ -31,7 +31,9 @@ use alttabio::overlay_window::{
 };
 use alttabio::passthrough::{PassthroughPolicy, is_remote_desktop_client, window_fills_monitor};
 use alttabio::settings::Settings;
-use alttabio::settings_change::{hook_settings, switcher_session_settings};
+use alttabio::settings_change::{
+    AutostartState, SettingsChange, SettingsEffects, hook_settings, switcher_session_settings,
+};
 use alttabio::switcher::{Switcher, SwitcherEffect, SwitcherSession, WindowCommandRequest};
 use alttabio::task_refresh::{
     ContextMenuCommandOutcome, RefreshDecision, RetryTimer, TaskListRefresh,
@@ -353,6 +355,21 @@ impl AppHost {
             return;
         };
         app.finish_task_context_menu(command);
+    }
+}
+
+impl SettingsEffects for App {
+    fn set_autostart(&mut self, enabled: bool) -> std::result::Result<(), String> {
+        startup::set_enabled(enabled)
+    }
+
+    fn save(&mut self, settings: &Settings) -> std::result::Result<(), String> {
+        self.settings_store.save(settings)
+    }
+
+    fn restart_hooks(&mut self, settings: HookSettings) -> std::result::Result<(), String> {
+        self.hooks = None;
+        self.start_input_hooks(settings)
     }
 }
 
@@ -689,56 +706,21 @@ impl App {
 
     fn apply_settings(&mut self, settings: Settings, previous_autostart: startup::AutostartStatus) {
         let previous_settings = self.settings.clone();
-        let icon_changed = settings.appearance.icon != previous_settings.appearance.icon;
-        let old_hook_settings = hook_settings(&previous_settings);
-        let new_hook_settings = hook_settings(&settings);
-        let autostart_changed = settings.general.autostart != previous_autostart.enabled
-            || (!settings.general.autostart && previous_autostart.task_exists);
-        if autostart_changed && let Err(error) = startup::set_enabled(settings.general.autostart) {
-            self.show_error(&error);
-            return;
-        }
-        if let Err(error) = self.settings_store.save(&settings) {
-            let rollback_error = autostart_changed
-                .then(|| startup::set_enabled(previous_autostart.enabled).err())
-                .flatten();
-            let message = rollback_error.map_or(error.clone(), |rollback_error| {
-                format!("{error}\n\nAutostart rollback also failed: {rollback_error}")
-            });
+        let change = SettingsChange {
+            previous: &previous_settings,
+            next: &settings,
+            autostart: AutostartState {
+                enabled: previous_autostart.enabled,
+                task_exists: previous_autostart.task_exists,
+            },
+            hooks_running: self.hooks.is_some(),
+        };
+        if let Err(message) = change.apply(self) {
             self.show_error(&message);
             return;
         }
 
-        if old_hook_settings != new_hook_settings || self.hooks.is_none() {
-            self.hooks = None;
-            match self.start_input_hooks(new_hook_settings) {
-                Ok(()) => {}
-                Err(error) => {
-                    let hooks_rollback = self.start_input_hooks(old_hook_settings);
-                    let settings_rollback = self.settings_store.save(&previous_settings);
-                    let autostart_rollback = autostart_changed
-                        .then(|| startup::set_enabled(previous_autostart.enabled))
-                        .transpose();
-                    let mut message =
-                        format!("The new input-hook settings could not be activated. {error}");
-                    if let Err(rollback_error) = hooks_rollback {
-                        message.push_str("\n\nThe previous input hooks could not be restored. ");
-                        message.push_str(&rollback_error);
-                    }
-                    if let Err(rollback_error) = settings_rollback {
-                        message.push_str("\n\nSettings rollback also failed: ");
-                        message.push_str(&rollback_error);
-                    }
-                    if let Err(rollback_error) = autostart_rollback {
-                        message.push_str("\n\nAutostart rollback also failed: ");
-                        message.push_str(&rollback_error);
-                    }
-                    self.show_error(&message);
-                    return;
-                }
-            }
-        }
-
+        let icon_changed = settings.appearance.icon != previous_settings.appearance.icon;
         self.settings = settings;
         self.session
             .update_settings(switcher_session_settings(&self.settings));
