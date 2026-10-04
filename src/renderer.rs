@@ -1,5 +1,8 @@
 use alttabio::close_button::CloseButtonVisualState;
-use alttabio::overlay_layout::{for_compact_list, layout_dpi, layout_scale};
+use alttabio::overlay_layout::{
+    LogicalRect, close_glyph_geometry, for_compact_list, layout_dpi, layout_scale,
+    task_text_vertical_layout, window_frame_geometry,
+};
 use alttabio::settings::AppearanceSettings;
 use alttabio::switcher::Switcher;
 use alttabio::theme::{ResolvedTheme, Rgb8};
@@ -138,18 +141,6 @@ impl From<&AppearanceSettings> for RenderOptions {
             large_icons: settings.large_icons,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct WindowFrameGeometry {
-    rounded_rect: D2D1_ROUNDED_RECT,
-    stroke_width: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct CloseGlyphGeometry {
-    bounds: D2D_RECT_F,
-    stroke_width: f32,
 }
 
 impl Renderer {
@@ -524,8 +515,9 @@ fn draw_switcher(
 
         if options.visible_borders {
             let window_frame = window_frame_geometry(size.width, size.height, scale);
+            let frame_rect = rounded_rect(window_frame.rect, window_frame.radius);
             target.DrawRoundedRectangle(
-                &raw const window_frame.rounded_rect,
+                &raw const frame_rect,
                 &resources.window_border_brush,
                 window_frame.stroke_width,
                 None,
@@ -573,7 +565,7 @@ fn draw_switcher(
             let visible_index = visible_position.saturating_sub(1);
             let row = visible_index - start;
             let top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-            let bounds = D2D_RECT_F {
+            let bounds = LogicalRect {
                 left: layout.outer_padding,
                 top,
                 right: list_width,
@@ -581,17 +573,13 @@ fn draw_switcher(
             };
             if selected_handle == Some(task.window_handle) {
                 target.FillRoundedRectangle(
-                    &D2D1_ROUNDED_RECT {
-                        rect: bounds,
-                        radiusX: layout.selection_radius,
-                        radiusY: layout.selection_radius,
-                    },
+                    &rounded_rect(bounds, layout.selection_radius),
                     &resources.selected_brush,
                 );
             }
 
             let close_bounds = (selected_handle == Some(task.window_handle))
-                .then(|| close_button_bounds(bounds, layout));
+                .then(|| layout.close_button_bounds(bounds));
 
             let number = visible_position
                 .to_string()
@@ -669,11 +657,7 @@ fn draw_switcher(
                 };
                 if let Some(background) = background {
                     target.FillRoundedRectangle(
-                        &D2D1_ROUNDED_RECT {
-                            rect: close_bounds,
-                            radiusX: layout.selection_radius - 1.0,
-                            radiusY: layout.selection_radius - 1.0,
-                        },
+                        &rounded_rect(close_bounds, layout.selection_radius - 1.0),
                         background,
                     );
                 }
@@ -695,41 +679,6 @@ fn draw_switcher(
         }
 
         target.EndDraw(None, None)
-    }
-}
-
-fn close_button_bounds(
-    row_bounds: D2D_RECT_F,
-    layout: alttabio::overlay_layout::OverlayLayout,
-) -> D2D_RECT_F {
-    let top = row_bounds.top + ((layout.row_height - layout.close_button_size) / 2.0);
-    D2D_RECT_F {
-        left: row_bounds.right - layout.close_button_inset - layout.close_button_size,
-        top,
-        right: row_bounds.right - layout.close_button_inset,
-        bottom: top + layout.close_button_size,
-    }
-}
-
-fn close_glyph_geometry(
-    hit_target: D2D_RECT_F,
-    compact_list: bool,
-    scale: f32,
-) -> CloseGlyphGeometry {
-    let scale = scale.max(1.0);
-    let nominal_extent = if compact_list { 8.0 } else { 10.0 };
-    let extent = (nominal_extent * scale).round() / scale;
-    let center_x = f32::midpoint(hit_target.left, hit_target.right);
-    let center_y = f32::midpoint(hit_target.top, hit_target.bottom);
-    let half_extent = extent / 2.0;
-    CloseGlyphGeometry {
-        bounds: D2D_RECT_F {
-            left: center_x - half_extent,
-            top: center_y - half_extent,
-            right: center_x + half_extent,
-            bottom: center_y + half_extent,
-        },
-        stroke_width: 1.5,
     }
 }
 
@@ -765,19 +714,14 @@ fn hit_test_task_list_at_scale(
     switcher.pin_visible_range(visible_rows);
 
     let row_top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-    let row_bounds = D2D_RECT_F {
+    let row_bounds = LogicalRect {
         left: layout.outer_padding,
         top: row_top,
         right: list_width,
         bottom: row_top + layout.row_height,
     };
     let selected_position = switcher.selected_visible_index().map(|index| index + 1);
-    let close_bounds = close_button_bounds(row_bounds, layout);
-    if selected_position == Some(position)
-        && x >= close_bounds.left
-        && x < close_bounds.right
-        && y >= close_bounds.top
-        && y < close_bounds.bottom
+    if selected_position == Some(position) && layout.close_button_bounds(row_bounds).contains(x, y)
     {
         Some(TaskListHit::CloseButton(position))
     } else {
@@ -829,56 +773,20 @@ fn hit_test_task_list_pixels(
     )
 }
 
-fn window_frame_geometry(width: f32, height: f32, scale: f32) -> WindowFrameGeometry {
-    let pixel = 1.0 / scale;
-    WindowFrameGeometry {
-        rounded_rect: D2D1_ROUNDED_RECT {
-            rect: D2D_RECT_F {
-                left: pixel,
-                top: pixel,
-                right: (width - pixel).max(pixel),
-                bottom: (height - pixel).max(pixel),
-            },
-            radiusX: 10.0,
-            radiusY: 10.0,
-        },
-        stroke_width: 2.0 / scale,
+const fn d2d_rect(rect: LogicalRect) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct TaskTextVerticalLayout {
-    title_top: f32,
-    title_bottom: f32,
-    app_name: Option<(f32, f32)>,
-}
-
-fn task_text_vertical_layout(
-    row_top: f32,
-    row_bottom: f32,
-    show_app_names: bool,
-    compact_list: bool,
-) -> TaskTextVerticalLayout {
-    if show_app_names {
-        if compact_list {
-            TaskTextVerticalLayout {
-                title_top: row_top + 1.0,
-                title_bottom: row_top + 26.0,
-                app_name: Some((row_top + 22.0, row_bottom - 1.0)),
-            }
-        } else {
-            TaskTextVerticalLayout {
-                title_top: row_top + 3.0,
-                title_bottom: row_top + 35.0,
-                app_name: Some((row_top + 31.0, row_bottom - 2.0)),
-            }
-        }
-    } else {
-        TaskTextVerticalLayout {
-            title_top: row_top,
-            title_bottom: row_bottom,
-            app_name: None,
-        }
+const fn rounded_rect(rect: LogicalRect, radius: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT {
+        rect: d2d_rect(rect),
+        radiusX: radius,
+        radiusY: radius,
     }
 }
 
@@ -967,46 +875,6 @@ mod tests {
     }
 
     #[test]
-    fn title_uses_the_full_row_when_app_names_are_hidden() {
-        let layout = task_text_vertical_layout(20.0, 78.0, false, false);
-
-        assert_close(layout.title_top, 20.0);
-        assert_close(layout.title_bottom, 78.0);
-        assert_eq!(layout.app_name, None);
-    }
-
-    #[test]
-    fn title_moves_up_when_app_names_are_shown() {
-        let layout = task_text_vertical_layout(20.0, 78.0, true, false);
-
-        assert_close(layout.title_top, 23.0);
-        assert_close(layout.title_bottom, 55.0);
-        assert!(layout.app_name.is_some());
-        let (app_name_top, app_name_bottom) = layout.app_name.unwrap_or_default();
-        assert_close(app_name_top, 51.0);
-        assert_close(app_name_bottom, 76.0);
-    }
-
-    #[test]
-    fn compact_app_names_fit_the_shorter_row() {
-        let layout = task_text_vertical_layout(18.0, 62.0, true, true);
-
-        assert_close(layout.title_top, 19.0);
-        assert_close(layout.title_bottom, 44.0);
-        assert_eq!(layout.app_name, Some((40.0, 61.0)));
-    }
-
-    #[test]
-    fn window_border_aligns_to_two_physical_pixels_at_fractional_dpi() {
-        let scale = 1.5;
-        let frame = window_frame_geometry(1_600.0, 900.0, scale);
-
-        assert_close(frame.rounded_rect.rect.left * scale, 1.0);
-        assert_close(frame.rounded_rect.rect.top * scale, 1.0);
-        assert_close(frame.stroke_width * scale, 2.0);
-    }
-
-    #[test]
     fn windows_desktop_color_preserves_colorref_channel_order() {
         let background = color_from_colorref(0x00_2F_2C_2D);
 
@@ -1014,88 +882,6 @@ mod tests {
         assert_close(background.g, 44.0 / 255.0);
         assert_close(background.b, 47.0 / 255.0);
         assert_close(background.a, 1.0);
-    }
-
-    #[test]
-    fn close_button_is_inset_and_centered_in_each_selected_row_style() {
-        let roomy = for_compact_list(false);
-        let roomy_bounds = close_button_bounds(
-            D2D_RECT_F {
-                left: 20.0,
-                top: 20.0,
-                right: 414.0,
-                bottom: 78.0,
-            },
-            roomy,
-        );
-        assert_eq!(
-            roomy_bounds,
-            D2D_RECT_F {
-                left: 376.0,
-                top: 34.0,
-                right: 406.0,
-                bottom: 64.0,
-            }
-        );
-
-        let compact = for_compact_list(true);
-        let compact_bounds = close_button_bounds(
-            D2D_RECT_F {
-                left: 18.0,
-                top: 18.0,
-                right: 260.0,
-                bottom: 62.0,
-            },
-            compact,
-        );
-        assert_eq!(
-            compact_bounds,
-            D2D_RECT_F {
-                left: 228.0,
-                top: 28.0,
-                right: 252.0,
-                bottom: 52.0,
-            }
-        );
-    }
-
-    #[test]
-    fn close_glyph_is_smaller_and_centered_inside_each_hit_target() {
-        for (compact, scale, expected_hit_extent, expected_dip_extent, expected_physical_extent) in [
-            (false, 1.0, 30.0, 10.0, 10.0),
-            (false, 1.25, 30.0, 10.4, 13.0),
-            (false, 1.5, 30.0, 10.0, 15.0),
-            (true, 1.0, 24.0, 8.0, 8.0),
-            (true, 1.25, 24.0, 8.0, 10.0),
-            (true, 1.5, 24.0, 8.0, 12.0),
-        ] {
-            let layout = for_compact_list(compact);
-            let row_bounds = D2D_RECT_F {
-                left: layout.outer_padding,
-                top: layout.outer_padding,
-                right: layout.list_width(900.0, scale),
-                bottom: layout.outer_padding + layout.row_height,
-            };
-            let hit_target = close_button_bounds(row_bounds, layout);
-            let glyph = close_glyph_geometry(hit_target, compact, scale);
-
-            let glyph_center_x = f32::midpoint(glyph.bounds.left, glyph.bounds.right);
-            let glyph_center_y = f32::midpoint(glyph.bounds.top, glyph.bounds.bottom);
-            let glyph_extent = glyph.bounds.right - glyph.bounds.left;
-            let hit_extent = hit_target.right - hit_target.left;
-            let hit_center_x = f32::midpoint(hit_target.left, hit_target.right);
-            let hit_center_y = f32::midpoint(hit_target.top, hit_target.bottom);
-            assert_near(glyph_center_x, hit_center_x);
-            assert_near(glyph_center_y, hit_center_y);
-            assert_near(glyph_center_x * scale, hit_center_x * scale);
-            assert_near(glyph_center_y * scale, hit_center_y * scale);
-            assert_near(hit_extent, expected_hit_extent);
-            assert_near(hit_extent * scale, expected_hit_extent * scale);
-            assert_near(glyph_extent, expected_dip_extent);
-            assert_near(glyph_extent * scale, expected_physical_extent);
-            assert!(glyph_extent < hit_extent);
-            assert!(glyph_extent < hit_target.bottom - hit_target.top);
-        }
     }
 
     #[test]
@@ -1218,13 +1004,13 @@ mod tests {
         assert_near(scale, 1.75);
 
         let layout = for_compact_list(false);
-        let row_bounds = D2D_RECT_F {
+        let row_bounds = LogicalRect {
             left: layout.outer_padding,
             top: layout.list_top(),
             right: layout.list_width(900.0, scale),
             bottom: layout.list_top() + layout.row_height,
         };
-        let hit_target = close_button_bounds(row_bounds, layout);
+        let hit_target = layout.close_button_bounds(row_bounds);
         let glyph = close_glyph_geometry(hit_target, false, scale);
         let center_x = f32::midpoint(hit_target.left, hit_target.right);
         let center_y = f32::midpoint(hit_target.top, hit_target.bottom);
@@ -1402,15 +1188,12 @@ mod tests {
         }
 
         let row_top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-        let close_bounds = close_button_bounds(
-            D2D_RECT_F {
-                left: layout.outer_padding,
-                top: row_top,
-                right: list_width,
-                bottom: row_top + layout.row_height,
-            },
-            layout,
-        );
+        let close_bounds = layout.close_button_bounds(LogicalRect {
+            left: layout.outer_padding,
+            top: row_top,
+            right: list_width,
+            bottom: row_top + layout.row_height,
+        });
         if switcher.selected_visible_index().map(|index| index + 1) == Some(position)
             && x >= close_bounds.left
             && x < close_bounds.right

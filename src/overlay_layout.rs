@@ -16,6 +16,25 @@ pub fn layout_scale(window_dpi: u32) -> f32 {
     f32::from(layout_dpi(window_dpi)) / f32::from(BASE_DPI)
 }
 
+/// A rectangle in logical pixels. It is `f32` with right and bottom edges, like the `D2D_RECT_F`
+/// the Windows renderer draws it as, so every edge has the bits Direct2D would have computed.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LogicalRect {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl LogicalRect {
+    /// Whether the point is inside, counting the left and top edges but not the right and
+    /// bottom ones.
+    #[must_use]
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverlayLayout {
     pub outer_padding: f32,
@@ -75,6 +94,17 @@ impl OverlayLayout {
         (row < self.visible_row_count(client_height) && row_offset % stride < self.row_height)
             .then_some(row)
     }
+
+    #[must_use]
+    pub fn close_button_bounds(self, row_bounds: LogicalRect) -> LogicalRect {
+        let top = row_bounds.top + ((self.row_height - self.close_button_size) / 2.0);
+        LogicalRect {
+            left: row_bounds.right - self.close_button_inset - self.close_button_size,
+            top,
+            right: row_bounds.right - self.close_button_inset,
+            bottom: top + self.close_button_size,
+        }
+    }
 }
 
 #[must_use]
@@ -112,6 +142,94 @@ pub const fn for_compact_list(compact: bool) -> OverlayLayout {
             close_button_size: 30.0,
             close_button_inset: 8.0,
             close_button_gap: 8.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CloseGlyphGeometry {
+    pub bounds: LogicalRect,
+    pub stroke_width: f32,
+}
+
+#[must_use]
+pub fn close_glyph_geometry(
+    hit_target: LogicalRect,
+    compact_list: bool,
+    scale: f32,
+) -> CloseGlyphGeometry {
+    let scale = scale.max(1.0);
+    let nominal_extent = if compact_list { 8.0 } else { 10.0 };
+    let extent = (nominal_extent * scale).round() / scale;
+    let center_x = f32::midpoint(hit_target.left, hit_target.right);
+    let center_y = f32::midpoint(hit_target.top, hit_target.bottom);
+    let half_extent = extent / 2.0;
+    CloseGlyphGeometry {
+        bounds: LogicalRect {
+            left: center_x - half_extent,
+            top: center_y - half_extent,
+            right: center_x + half_extent,
+            bottom: center_y + half_extent,
+        },
+        stroke_width: 1.5,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowFrameGeometry {
+    pub rect: LogicalRect,
+    pub radius: f32,
+    pub stroke_width: f32,
+}
+
+#[must_use]
+pub fn window_frame_geometry(width: f32, height: f32, scale: f32) -> WindowFrameGeometry {
+    let pixel = 1.0 / scale;
+    WindowFrameGeometry {
+        rect: LogicalRect {
+            left: pixel,
+            top: pixel,
+            right: (width - pixel).max(pixel),
+            bottom: (height - pixel).max(pixel),
+        },
+        radius: 10.0,
+        stroke_width: 2.0 / scale,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TaskTextVerticalLayout {
+    pub title_top: f32,
+    pub title_bottom: f32,
+    pub app_name: Option<(f32, f32)>,
+}
+
+#[must_use]
+pub fn task_text_vertical_layout(
+    row_top: f32,
+    row_bottom: f32,
+    show_app_names: bool,
+    compact_list: bool,
+) -> TaskTextVerticalLayout {
+    if show_app_names {
+        if compact_list {
+            TaskTextVerticalLayout {
+                title_top: row_top + 1.0,
+                title_bottom: row_top + 26.0,
+                app_name: Some((row_top + 22.0, row_bottom - 1.0)),
+            }
+        } else {
+            TaskTextVerticalLayout {
+                title_top: row_top + 3.0,
+                title_bottom: row_top + 35.0,
+                app_name: Some((row_top + 31.0, row_bottom - 2.0)),
+            }
+        }
+    } else {
+        TaskTextVerticalLayout {
+            title_top: row_top,
+            title_bottom: row_bottom,
+            app_name: None,
         }
     }
 }
@@ -198,5 +316,129 @@ mod tests {
         assert!(((layout.row_height + layout.row_gap) * scale - 80.5).abs() < 0.01);
         assert!((layout.large_icon_size * scale - 49.0).abs() < 0.01);
         assert!(((list_right + layout.outer_padding) * scale - 679.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn title_uses_the_full_row_when_app_names_are_hidden() {
+        let layout = task_text_vertical_layout(20.0, 78.0, false, false);
+
+        assert_close(layout.title_top, 20.0);
+        assert_close(layout.title_bottom, 78.0);
+        assert_eq!(layout.app_name, None);
+    }
+
+    #[test]
+    fn title_moves_up_when_app_names_are_shown() {
+        let layout = task_text_vertical_layout(20.0, 78.0, true, false);
+
+        assert_close(layout.title_top, 23.0);
+        assert_close(layout.title_bottom, 55.0);
+        assert!(layout.app_name.is_some());
+        let (app_name_top, app_name_bottom) = layout.app_name.unwrap_or_default();
+        assert_close(app_name_top, 51.0);
+        assert_close(app_name_bottom, 76.0);
+    }
+
+    #[test]
+    fn compact_app_names_fit_the_shorter_row() {
+        let layout = task_text_vertical_layout(18.0, 62.0, true, true);
+
+        assert_close(layout.title_top, 19.0);
+        assert_close(layout.title_bottom, 44.0);
+        assert_eq!(layout.app_name, Some((40.0, 61.0)));
+    }
+
+    #[test]
+    fn window_border_aligns_to_two_physical_pixels_at_fractional_dpi() {
+        let scale = 1.5;
+        let frame = window_frame_geometry(1_600.0, 900.0, scale);
+
+        assert_close(frame.rect.left * scale, 1.0);
+        assert_close(frame.rect.top * scale, 1.0);
+        assert_close(frame.stroke_width * scale, 2.0);
+    }
+
+    #[test]
+    fn close_button_is_inset_and_centered_in_each_selected_row_style() {
+        let roomy = for_compact_list(false);
+        let roomy_bounds = roomy.close_button_bounds(LogicalRect {
+            left: 20.0,
+            top: 20.0,
+            right: 414.0,
+            bottom: 78.0,
+        });
+        assert_eq!(
+            roomy_bounds,
+            LogicalRect {
+                left: 376.0,
+                top: 34.0,
+                right: 406.0,
+                bottom: 64.0,
+            }
+        );
+
+        let compact = for_compact_list(true);
+        let compact_bounds = compact.close_button_bounds(LogicalRect {
+            left: 18.0,
+            top: 18.0,
+            right: 260.0,
+            bottom: 62.0,
+        });
+        assert_eq!(
+            compact_bounds,
+            LogicalRect {
+                left: 228.0,
+                top: 28.0,
+                right: 252.0,
+                bottom: 52.0,
+            }
+        );
+    }
+
+    #[test]
+    fn close_glyph_is_smaller_and_centered_inside_each_hit_target() {
+        for (compact, scale, expected_hit_extent, expected_dip_extent, expected_physical_extent) in [
+            (false, 1.0, 30.0, 10.0, 10.0),
+            (false, 1.25, 30.0, 10.4, 13.0),
+            (false, 1.5, 30.0, 10.0, 15.0),
+            (true, 1.0, 24.0, 8.0, 8.0),
+            (true, 1.25, 24.0, 8.0, 10.0),
+            (true, 1.5, 24.0, 8.0, 12.0),
+        ] {
+            let layout = for_compact_list(compact);
+            let row_bounds = LogicalRect {
+                left: layout.outer_padding,
+                top: layout.outer_padding,
+                right: layout.list_width(900.0, scale),
+                bottom: layout.outer_padding + layout.row_height,
+            };
+            let hit_target = layout.close_button_bounds(row_bounds);
+            let glyph = close_glyph_geometry(hit_target, compact, scale);
+
+            let glyph_center_x = f32::midpoint(glyph.bounds.left, glyph.bounds.right);
+            let glyph_center_y = f32::midpoint(glyph.bounds.top, glyph.bounds.bottom);
+            let glyph_extent = glyph.bounds.right - glyph.bounds.left;
+            let hit_extent = hit_target.right - hit_target.left;
+            let hit_center_x = f32::midpoint(hit_target.left, hit_target.right);
+            let hit_center_y = f32::midpoint(hit_target.top, hit_target.bottom);
+            assert_near(glyph_center_x, hit_center_x);
+            assert_near(glyph_center_y, hit_center_y);
+            assert_near(glyph_center_x * scale, hit_center_x * scale);
+            assert_near(glyph_center_y * scale, hit_center_y * scale);
+            assert_near(hit_extent, expected_hit_extent);
+            assert_near(hit_extent * scale, expected_hit_extent * scale);
+            assert_near(glyph_extent, expected_dip_extent);
+            assert_near(glyph_extent * scale, expected_physical_extent);
+            assert!(glyph_extent < hit_extent);
+            assert!(glyph_extent < hit_target.bottom - hit_target.top);
+        }
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < f32::EPSILON);
+    }
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < 0.001);
     }
 }
