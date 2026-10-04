@@ -140,13 +140,19 @@ fn paint_control_message(hwnd: HWND, state: &DialogState) -> LRESULT {
         // SAFETY: hwnd is live during WM_PAINT and paint is a writable PAINTSTRUCT.
         BeginPaint(hwnd, &raw mut paint)
     };
-    if dc == HDC::default() {
+    // Only a successful BeginPaint validates the update region, so after a failure WM_PAINT
+    // keeps arriving until a call succeeds. Logging the first failure of a run is enough.
+    let begin_failed = dc == HDC::default();
+    if begin_failed && !state.begin_paint_failing.get() {
         eprintln!("Could not begin painting a settings control");
-    } else {
-        paint_settings_control(hwnd, dc, state);
     }
+    state.begin_paint_failing.set(begin_failed);
+    if begin_failed {
+        return LRESULT(0);
+    }
+    paint_settings_control(hwnd, dc, state);
     unsafe {
-        // SAFETY: paint was initialized by BeginPaint for this hwnd.
+        // SAFETY: paint was filled by the successful BeginPaint above for this hwnd.
         // EndPaint is documented to always return nonzero, so there is no failure to handle.
         let _always_nonzero = EndPaint(hwnd, &raw const paint);
     }
