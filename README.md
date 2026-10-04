@@ -43,7 +43,7 @@ AltTabio needs macOS 26 or later. Paste this line into Terminal:
 curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The script downloads the newest release that has a macOS build, checks its signature, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for Accessibility, the first of its two [permissions](#permissions), and runs from the menu bar. Run the same line again to update; the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
+The script downloads the newest release that has a macOS build, checks its signature, puts `AltTabio.app` in `/Applications` (or in `~/Applications` when your account cannot write to `/Applications`), and starts it. AltTabio then asks for Accessibility, the first of its two [permissions](#permissions), and runs from the menu bar. From then on it [updates itself](#updates). Running the same line again updates it too, and the permissions carry over because every release is signed with the same certificate. An update that fails partway leaves the installed copy as it was.
 
 AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. To install by hand anyway:
 
@@ -119,6 +119,12 @@ AltTabio asks for permissions in **System Settings > Privacy & Security**:
 
 Both can be opened from the settings window (menu bar icon > Settings), which opens by itself while Accessibility is missing. AltTabio picks up an Accessibility grant while it runs. ScreenCaptureKit sees a Screen Recording grant only after a restart; choose **Quit & Reopen** when macOS offers it. When AltTabio is started from a terminal, macOS applies the terminal's grants to it.
 
+### Updates
+
+Once a day AltTabio asks the GitHub API for its list of releases. When a newer release has a macOS build, AltTabio downloads it, checks that it is signed with the [release certificate](#releasing-on-macos), and puts it in place of the installed copy, as the install script does. It quits and reopens once the keyboard and mouse have been idle for five minutes, so the switcher never vanishes while you use it; until then the menu bar menu offers **Relaunch to Update**.
+
+**Check for Updates…** in the menu bar menu asks GitHub right away and offers the update. Turning off **Update automatically** in the settings stops the daily check, the only time AltTabio goes online without being asked. A copy signed with any other certificate, such as one built from source, never replaces itself, since the release would lose its permissions. Neither does a copy in a folder your account cannot change; run the install command as an administrator to update that one.
+
 ### Remote desktop and VM clients
 
 Apps such as Microsoft's Windows App, Parallels, or VMware take Cmd+Tab for their guest with a keyboard tap of their own. AltTabio puts its tap back in front of theirs every time the front app changes, so Cmd+Tab keeps opening the switcher inside those apps. The one thing no tap can get past is **secure keyboard input**: while a password field, a terminal with Secure Keyboard Entry, or a remote desktop client holds it, macOS delivers keys only to that app. AltTabio names the app in its log when that happens (`ALTTABIO_TRACE=1` shows every tap reinsertion too); the switcher works again as soon as the app releases it.
@@ -139,7 +145,7 @@ The bundle is written to `target/mac/AltTabio.app`; copy it to `/Applications` t
 
 `ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action to the terminal.
 
-Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there. The file uses the same keys as the Windows build; `ReplaceAltTab` maps to Cmd+Tab and `ReplaceWinTab` to Option+Tab.
+Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there. The file uses the same keys as the Windows build; `ReplaceAltTab` maps to Cmd+Tab and `ReplaceWinTab` to Option+Tab, and only macOS reads `AutoUpdate`.
 
 The debug helpers `--list` and `--activate <window id>` work from a plain `cargo run` as well.
 
