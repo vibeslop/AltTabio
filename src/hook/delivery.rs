@@ -72,8 +72,13 @@ fn post_context_actions(
         outcome,
         |action| post(target, action),
     ) {
+        Delivery::Posted => true,
         // Keep release ownership even when a modal boundary races with this callback.
-        Delivery::Posted | Delivery::Stale => true,
+        #[allow(
+            clippy::match_same_arms,
+            reason = "the comment above applies only to a stale outcome"
+        )]
+        Delivery::Stale => true,
         Delivery::OverlayRefused => {
             context.state.reset_gestures();
             true
