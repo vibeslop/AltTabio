@@ -113,10 +113,10 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Self; 3] = [Self::General, Self::Appearance, Self::Monitor];
+    const ALL: [Self; 3] = [Self::General, Self::Appearance, Self::Monitor];
 
     #[must_use]
-    pub const fn title(self) -> &'static str {
+    const fn title(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Appearance => "Appearance",
@@ -148,10 +148,10 @@ pub enum DialogButton {
 }
 
 impl DialogButton {
-    pub const ALL: [Self; 2] = [Self::Ok, Self::Cancel];
+    const ALL: [Self; 2] = [Self::Ok, Self::Cancel];
 
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Ok => "OK",
             Self::Cancel => "Cancel",
@@ -159,7 +159,7 @@ impl DialogButton {
     }
 
     #[must_use]
-    pub const fn control_id(self) -> usize {
+    const fn control_id(self) -> usize {
         match self {
             Self::Ok => OK_ID,
             Self::Cancel => CANCEL_ID,
@@ -186,17 +186,17 @@ macro_rules! setting_options {
             pub const ALL: [Self; OPTION_COUNT] = [$( Self::$name, )+];
 
             #[must_use]
-            pub const fn label(self) -> &'static str {
+            const fn label(self) -> &'static str {
                 match self { $( Self::$name => $label, )+ }
             }
 
             #[must_use]
-            pub const fn group(self) -> Group {
+            const fn group(self) -> Group {
                 match self { $( Self::$name => Group::$group, )+ }
             }
 
             #[must_use]
-            pub const fn rect(self, layout: &SettingsLayout) -> Rect {
+            const fn rect(self, layout: &SettingsLayout) -> Rect {
                 let row = match self { $( Self::$name => $row, )+ };
                 match self.group() {
                     Group::General => layout.general_options[row],
@@ -215,7 +215,7 @@ macro_rules! setting_options {
             }
 
             #[must_use]
-            pub const fn control_id(self) -> usize { OPTION_ID_BASE + self as usize }
+            const fn control_id(self) -> usize { OPTION_ID_BASE + self as usize }
         }
     };
 }
@@ -246,12 +246,12 @@ pub struct Choices<T: 'static> {
 }
 
 impl<T: Copy + Default + PartialEq> Choices<T> {
-    pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+    fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.values.iter().map(|value| (self.name)(*value))
     }
 
     #[must_use]
-    pub fn index_of(&self, value: T) -> usize {
+    fn index_of(&self, value: T) -> usize {
         self.values
             .iter()
             .position(|candidate| *candidate == value)
@@ -281,10 +281,10 @@ pub enum Selector {
 }
 
 impl Selector {
-    pub const ALL: [Self; 2] = [Self::Theme, Self::Icon];
+    const ALL: [Self; 2] = [Self::Theme, Self::Icon];
 
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Theme => "Theme",
             Self::Icon => "Icon",
@@ -292,7 +292,7 @@ impl Selector {
     }
 
     #[must_use]
-    pub const fn control_id(self) -> usize {
+    const fn control_id(self) -> usize {
         match self {
             Self::Theme => 200,
             Self::Icon => 201,
@@ -334,18 +334,18 @@ impl Selector {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SettingsLayout {
     pub client: Size,
-    pub general_group: Rect,
-    pub general_options: [Rect; GENERAL_OPTION_COUNT],
-    pub appearance_group: Rect,
-    pub theme_label: Rect,
-    pub theme_selector: Rect,
-    pub icon_label: Rect,
-    pub icon_selector: Rect,
-    pub appearance_options: [Rect; APPEARANCE_OPTION_COUNT],
-    pub monitor_group: Rect,
-    pub monitor_option: Rect,
-    pub ok_button: Rect,
-    pub cancel_button: Rect,
+    general_group: Rect,
+    general_options: [Rect; GENERAL_OPTION_COUNT],
+    appearance_group: Rect,
+    theme_label: Rect,
+    theme_selector: Rect,
+    icon_label: Rect,
+    icon_selector: Rect,
+    appearance_options: [Rect; APPEARANCE_OPTION_COUNT],
+    monitor_group: Rect,
+    monitor_option: Rect,
+    ok_button: Rect,
+    cancel_button: Rect,
 }
 
 impl SettingsLayout {
@@ -370,7 +370,7 @@ impl SettingsLayout {
     }
 
     #[must_use]
-    pub const fn logical() -> Self {
+    const fn logical() -> Self {
         Self {
             client: Size::new(CLIENT_WIDTH, CLIENT_HEIGHT),
             general_group: Rect::new(20, 16, 520, 250),

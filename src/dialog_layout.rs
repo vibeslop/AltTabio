@@ -86,8 +86,9 @@ impl Rect {
         self.y.saturating_add(self.height)
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub const fn contains(self, child: Self) -> bool {
+    pub(crate) const fn contains(self, child: Self) -> bool {
         child.x >= self.x
             && child.y >= self.y
             && child.right() <= self.right()
