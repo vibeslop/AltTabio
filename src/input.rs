@@ -592,12 +592,7 @@ impl HookState {
         }
         if event.transition == KeyTransition::Released && self.pending_windows_keys & mask != 0 {
             self.pending_windows_keys &= !mask;
-            self.replayed_key_events = [
-                Some(ReplayedKeyEvent::pressed(event.key)),
-                Some(ReplayedKeyEvent::released(event.key)),
-                None,
-            ];
-            return Some(HookOutcome::suppressed());
+            return Some(self.replay_tap(event.key));
         }
         if event.transition != KeyTransition::Pressed
             || !settings.replace_win_tab
@@ -625,12 +620,7 @@ impl HookState {
             }
             if self.pending_alt_keys & mask != 0 {
                 self.pending_alt_keys &= !mask;
-                self.replayed_key_events = [
-                    Some(ReplayedKeyEvent::pressed(event.key)),
-                    Some(ReplayedKeyEvent::released(event.key)),
-                    None,
-                ];
-                return Some(HookOutcome::suppressed());
+                return Some(self.replay_tap(event.key));
             }
             return None;
         }
@@ -714,27 +704,8 @@ impl HookState {
         if event.transition != KeyTransition::Pressed || self.pending_alt_keys == 0 || alt_tab {
             return None;
         }
-
-        let mut replayed_key_events = [None; 3];
-        let mut next_event = 0;
-        for alt_key in alt_keys(self.pending_alt_keys) {
-            if let Some(slot) = replayed_key_events.get_mut(next_event) {
-                *slot = Some(ReplayedKeyEvent::pressed(alt_key));
-                next_event += 1;
-            }
-        }
-        let suppress = if let Some(slot) = replayed_key_events.get_mut(next_event) {
-            *slot = Some(ReplayedKeyEvent::pressed(event.key));
-            true
-        } else {
-            false
-        };
-        self.pending_alt_keys = 0;
-        self.replayed_key_events = replayed_key_events;
-        Some(HookOutcome {
-            suppress,
-            ..HookOutcome::default()
-        })
+        let held = core::mem::take(&mut self.pending_alt_keys);
+        Some(self.replay_pending_shortcut(alt_keys(held), event.key))
     }
 
     fn process_pending_windows_shortcut(
@@ -748,21 +719,35 @@ impl HookState {
         {
             return None;
         }
+        let held = core::mem::take(&mut self.pending_windows_keys);
+        Some(self.replay_pending_shortcut(windows_keys(held), event.key))
+    }
 
-        let mut replayed_key_events = [None; 3];
-        let mut next_event = 0;
-        for windows_key in windows_keys(self.pending_windows_keys) {
-            if let Some(slot) = replayed_key_events.get_mut(next_event) {
-                *slot = Some(ReplayedKeyEvent::pressed(windows_key));
-                next_event += 1;
-            }
+    /// Replays a held-back modifier's lone tap, which the system still acts on (Start, menu bar).
+    fn replay_tap(&mut self, key: Key) -> HookOutcome {
+        self.replayed_key_events = [
+            Some(ReplayedKeyEvent::pressed(key)),
+            Some(ReplayedKeyEvent::released(key)),
+            None,
+        ];
+        HookOutcome::suppressed()
+    }
+
+    /// Replays held-back modifier presses followed by the key that turned them into a shortcut.
+    fn replay_pending_shortcut(
+        &mut self,
+        held: impl Iterator<Item = Key>,
+        key: Key,
+    ) -> HookOutcome {
+        let mut presses = held.chain([key]).map(ReplayedKeyEvent::pressed);
+        for slot in &mut self.replayed_key_events {
+            *slot = presses.next();
         }
-        if let Some(slot) = replayed_key_events.get_mut(next_event) {
-            *slot = Some(ReplayedKeyEvent::pressed(event.key));
+        // Behind three held Alt keys the key no longer fits, so it passes through unreplayed.
+        HookOutcome {
+            suppress: presses.next().is_none(),
+            ..HookOutcome::default()
         }
-        self.pending_windows_keys = 0;
-        self.replayed_key_events = replayed_key_events;
-        Some(HookOutcome::suppressed())
     }
 
     fn update_shift_state(&mut self, event: KeyEvent) {
@@ -1622,6 +1607,46 @@ mod tests {
                 settings
             ),
             HookOutcome::default()
+        );
+    }
+
+    #[test]
+    fn held_modifiers_replay_ahead_of_the_shortcut_key_while_it_fits() {
+        let settings = HookSettings::default();
+        let mut state = HookState::default();
+        for alt in [Key::LeftAlt, Key::RightAlt, Key::Alt] {
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(alt, ALT), settings)
+                    .suppress
+            );
+        }
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(Key::F4, ALT), settings),
+            HookOutcome::default()
+        );
+        assert_eq!(
+            state.take_replayed_key_events(),
+            [Key::LeftAlt, Key::RightAlt, Key::Alt].map(|key| Some(ReplayedKeyEvent::pressed(key)))
+        );
+
+        let mut state = HookState::default();
+        for windows in [Key::LeftWindows, Key::RightWindows] {
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(windows, Modifiers::default()), settings)
+                    .suppress
+            );
+        }
+        let shortcut = Key::Other(u16::from(b'R'));
+        assert_eq!(
+            state.process_key(KeyEvent::pressed(shortcut, Modifiers::default()), settings),
+            HookOutcome::suppressed()
+        );
+        assert_eq!(
+            state.take_replayed_key_events(),
+            [Key::LeftWindows, Key::RightWindows, shortcut]
+                .map(|key| Some(ReplayedKeyEvent::pressed(key)))
         );
     }
 
