@@ -163,7 +163,10 @@ mod tests {
         });
         assert_eq!(delivery, Delivery::Stale);
         assert_eq!(posted, [InputAction::RightButtonPressed]);
-        assert_eq!(flags.load() & (OVERLAY_FLAGS | INTERCEPTION_SUSPENDED), 1);
+        assert_eq!(
+            flags.load() & (OVERLAY_FLAGS | INTERCEPTION_SUSPENDED),
+            INTERCEPTION_SUSPENDED
+        );
     }
 
     #[test]
