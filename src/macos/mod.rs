@@ -131,27 +131,34 @@ pub fn post_to_app(work: impl FnOnce(&mut App) + Send + 'static) {
 /// Runs `work` on the next main run loop pass without holding any app-state borrow.
 fn run_later(work: impl FnOnce() + 'static) {
     let slot = RefCell::new(Some(Box::new(work) as Box<dyn FnOnce()>));
-    let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+    let _timer = main_loop_timer(0.0, false, move || {
         if let Some(work) = slot.borrow_mut().take() {
             work();
         }
     });
-    let _timer = unsafe {
-        // SAFETY: the timer is scheduled from the main thread onto the main run loop, so the
-        // block runs on the same thread that created its non-Send captures.
-        NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.0, false, &block)
-    };
 }
 
 /// Schedules `work` on the main run loop after `seconds`.
 fn schedule(seconds: f64, work: impl Fn(&mut App) + 'static) -> Retained<NSTimer> {
-    let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+    main_loop_timer(seconds, false, move || {
         let _ = with_app(&work);
-    });
+    })
+}
+
+/// Schedules `work` on the main run loop every `seconds` until the timer is invalidated.
+fn schedule_repeating(seconds: f64, work: impl Fn(&mut App) + 'static) -> Retained<NSTimer> {
+    main_loop_timer(seconds, true, move || {
+        let _ = with_app(&work);
+    })
+}
+
+/// A timer on the main run loop. Call it from the main thread only.
+fn main_loop_timer(seconds: f64, repeats: bool, fire: impl Fn() + 'static) -> Retained<NSTimer> {
+    let block = RcBlock::new(move |_timer: NonNull<NSTimer>| fire());
     unsafe {
-        // SAFETY: scheduled from the main thread onto the main run loop, where the block's
-        // captures were created.
-        NSTimer::scheduledTimerWithTimeInterval_repeats_block(seconds, false, &block)
+        // SAFETY: the timer is scheduled from the main thread onto the main run loop, so the
+        // block runs on the same thread that created its non-Send captures.
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(seconds, repeats, &block)
     }
 }
 
@@ -555,13 +562,7 @@ impl App {
         if self.tap_retry_timer.is_some() {
             return;
         }
-        let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-            let _ = with_app(App::retry_event_tap);
-        });
-        self.tap_retry_timer = Some(unsafe {
-            // SAFETY: scheduled from the main thread onto the main run loop.
-            NSTimer::scheduledTimerWithTimeInterval_repeats_block(TAP_RETRY_SECONDS, true, &block)
-        });
+        self.tap_retry_timer = Some(schedule_repeating(TAP_RETRY_SECONDS, App::retry_event_tap));
     }
 
     /// Records the new front app for the strip's order and follows its windows, then puts the
@@ -725,17 +726,10 @@ impl App {
 
     fn schedule_refresh_burst() {
         for delay_ms in [120_u64, 450, 1_200] {
-            let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-                let _ = with_app(App::request_refresh);
-            });
-            let _timer = unsafe {
-                // SAFETY: scheduled from the main thread onto the main run loop.
-                NSTimer::scheduledTimerWithTimeInterval_repeats_block(
-                    Duration::from_millis(delay_ms).as_secs_f64(),
-                    false,
-                    &block,
-                )
-            };
+            let _timer = schedule(
+                Duration::from_millis(delay_ms).as_secs_f64(),
+                App::request_refresh,
+            );
         }
     }
 
