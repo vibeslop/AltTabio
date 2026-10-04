@@ -168,9 +168,18 @@ impl App {
 
     pub(super) fn reset_mouse_selection(&mut self) {
         let mut cursor = POINT::default();
-        self.mouse_origin = unsafe {
+        let read = unsafe {
             // SAFETY: `cursor` is writable for the call.
-            GetCursorPos(&raw mut cursor).ok().map(|()| cursor)
+            GetCursorPos(&raw mut cursor)
+        };
+        // Without an origin, the first mouse move arms hover selection even if the cursor has
+        // not moved since the overlay opened.
+        self.mouse_origin = match read {
+            Ok(()) => Some(cursor),
+            Err(error) => {
+                eprintln!("Could not read the cursor position the overlay opened at: {error}");
+                None
+            }
         };
         self.mouse_selection_armed = false;
         self.mouse_leave_tracked = false;

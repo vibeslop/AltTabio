@@ -27,12 +27,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
-    let menu = unsafe {
+    let created = unsafe {
         // SAFETY: CreatePopupMenu has no pointer preconditions and returns a uniquely owned menu.
         CreatePopupMenu()
-    }
-    .ok()
-    .map(OwnedMenu)?;
+    };
+    let menu = match created {
+        Ok(menu) => OwnedMenu(menu),
+        Err(error) => {
+            eprintln!("Could not create the task menu: {error}");
+            return None;
+        }
+    };
     let items = [
         (1, w!("Close\tF4"), WindowCommand::Close),
         (2, w!("Minimize\tF5"), WindowCommand::Minimize),
@@ -46,15 +51,26 @@ pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
             // SAFETY: menu is live, ids are application-owned, and labels are static UTF-16.
             AppendMenuW(menu.0, MF_STRING, *id, *label)
         };
-        if added.is_err() {
+        if let Err(error) = added {
+            eprintln!("Could not add an item to the task menu: {error}");
             return None;
         }
     }
     let mut cursor = windows::Win32::Foundation::POINT::default();
+    let read = unsafe {
+        // SAFETY: cursor is writable for the call.
+        GetCursorPos(&raw mut cursor)
+    };
+    if let Err(error) = read {
+        eprintln!("Could not read the cursor position for the task menu: {error}");
+        return None;
+    }
     unsafe {
-        // SAFETY: cursor is writable and owner is the live overlay HWND.
-        GetCursorPos(&raw mut cursor).ok()?;
-        let _foreground = SetForegroundWindow(owner);
+        // SAFETY: owner is the live overlay HWND.
+        // Windows refuses the foreground while the user is interacting with another process.
+        // Without it a click outside the menu may not dismiss it, but the menu still opens, so a
+        // refusal needs no handling.
+        let _accepted = SetForegroundWindow(owner);
     }
     let selected = unsafe {
         // SAFETY: menu and owner are live and cursor contains screen coordinates. TPM_RETURNCMD
@@ -170,10 +186,19 @@ fn open_selected_process(
     open_selected_process_with(
         window,
         expected,
-        |process_id| unsafe {
-            // SAFETY: process_id comes from the immutable switcher snapshot and the caller chooses
-            // the minimum access needed for this command.
-            OpenProcess(access, false, process_id).ok().map(OwnedHandle)
+        |process_id| {
+            let opened = unsafe {
+                // SAFETY: process_id comes from the immutable switcher snapshot and the caller
+                // chooses the minimum access needed for this command.
+                OpenProcess(access, false, process_id)
+            };
+            match opened {
+                Ok(process) => Some(OwnedHandle(process)),
+                Err(error) => {
+                    eprintln!("Could not open the selected process: {error}");
+                    None
+                }
+            }
         },
         |process| process_started_at(process.0).ok(),
         process_id,
