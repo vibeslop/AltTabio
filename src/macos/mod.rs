@@ -1001,36 +1001,18 @@ impl App {
             let listed = self.listed_windows();
             self.window_history.note(Some(handle), &listed);
         }
-        let result = match target {
-            Target::Window { handle, .. } => self.record(handle).map_or_else(
-                || Err("The selected window is no longer listed".to_owned()),
-                commands::activate,
-            ),
-            Target::App(process) => commands::activate_app(&AppRef {
-                process,
-                name: &self.app_name(process),
-            }),
-        };
-        if let Err(error) = result {
+        if let Err(error) = self.act_on(target, commands::activate, commands::activate_app) {
             eprintln!("{error}");
         }
         self.hide_overlay();
     }
 
     fn execute_command(&mut self, command: WindowCommand, target: Target) {
-        let result = match target {
-            Target::Window { handle, .. } => self.record(handle).map_or_else(
-                || Err("The selected window is no longer listed".to_owned()),
-                |record| commands::execute_on_window(command, record),
-            ),
-            Target::App(process) => commands::execute_on_app(
-                command,
-                &AppRef {
-                    process,
-                    name: &self.app_name(process),
-                },
-            ),
-        };
+        let result = self.act_on(
+            target,
+            |record| commands::execute_on_window(command, record),
+            |app| commands::execute_on_app(command, app),
+        );
         if let Err(error) = result {
             eprintln!("{error}");
             return;
@@ -1039,6 +1021,25 @@ impl App {
         // app leaving the list in place.
         self.request_refresh();
         Self::schedule_refresh_burst();
+    }
+
+    /// Runs `on_window` on the target window's record, or `on_app` on the target app.
+    fn act_on(
+        &self,
+        target: Target,
+        on_window: impl FnOnce(&WindowRecord) -> Result<(), String>,
+        on_app: impl FnOnce(&AppRef<'_>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        match target {
+            Target::Window { handle, .. } => self.record(handle).map_or_else(
+                || Err("The selected window is no longer listed".to_owned()),
+                on_window,
+            ),
+            Target::App(process) => on_app(&AppRef {
+                process,
+                name: &self.app_name(process),
+            }),
+        }
     }
 
     fn resolved_theme(&self) -> ResolvedTheme {
