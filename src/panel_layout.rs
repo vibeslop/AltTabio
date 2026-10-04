@@ -152,7 +152,7 @@ impl Layout {
     }
 
     #[must_use]
-    pub fn list_rect(&self) -> Rect {
+    fn list_rect(&self) -> Rect {
         let top = self.name_top() + NAME_HEIGHT + LIST_GAP;
         let width = if self.preview {
             self.content_width() - PREVIEW_GAP - PREVIEW_WIDTH

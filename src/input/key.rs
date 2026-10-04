@@ -72,6 +72,7 @@ impl KeyEvent {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub const fn with_text(mut self, text: char) -> Self {
         self.text = Some(text);

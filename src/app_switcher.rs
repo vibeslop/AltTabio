@@ -45,7 +45,7 @@ impl WindowHistory {
 
     /// How recently `window` had focus, 0 being now; windows never seen rank last.
     #[must_use]
-    pub fn rank(&self, window: isize) -> usize {
+    pub(crate) fn rank(&self, window: isize) -> usize {
         self.windows
             .iter()
             .position(|known| *known == window)

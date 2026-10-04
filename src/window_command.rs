@@ -16,7 +16,7 @@ pub enum WindowCommand {
 
 impl WindowCommand {
     #[must_use]
-    pub const fn from_function_key(number: u8) -> Option<Self> {
+    pub(crate) const fn from_function_key(number: u8) -> Option<Self> {
         match number {
             4 => Some(Self::Close),
             5 => Some(Self::Minimize),

@@ -347,7 +347,7 @@ impl Switcher {
         self.all_tasks.is_empty()
     }
 
-    pub fn set_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
+    pub(crate) fn set_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
         self.replace_tasks(tasks);
         self.select_first();
     }
@@ -376,12 +376,12 @@ impl Switcher {
         self.set_filter("");
     }
 
-    pub fn append_filter_character(&mut self, value: char) {
+    pub(crate) fn append_filter_character(&mut self, value: char) {
         self.filter.push(value);
         self.apply_filter();
     }
 
-    pub fn backspace_filter(&mut self) {
+    pub(crate) fn backspace_filter(&mut self) {
         if self.filter.pop().is_some() {
             self.apply_filter();
         }
@@ -394,7 +394,7 @@ impl Switcher {
             .any(|task| task.window_handle == window_handle)
     }
 
-    pub fn visible_tasks(&self) -> impl Iterator<Item = &SwitchTask> {
+    pub(crate) fn visible_tasks(&self) -> impl Iterator<Item = &SwitchTask> {
         self.visible_indices
             .iter()
             .filter_map(|index| self.all_tasks.get(*index))
@@ -407,7 +407,7 @@ impl Switcher {
     }
 
     #[must_use]
-    pub fn visible_task_count(&self) -> usize {
+    pub(crate) fn visible_task_count(&self) -> usize {
         self.visible_indices.len()
     }
 
@@ -418,11 +418,11 @@ impl Switcher {
     }
 
     #[must_use]
-    pub const fn selected_visible_index(&self) -> Option<usize> {
+    pub(crate) const fn selected_visible_index(&self) -> Option<usize> {
         self.selected_visible_index
     }
 
-    pub fn select_next(&mut self, delta: i32) {
+    pub(crate) fn select_next(&mut self, delta: i32) {
         self.pinned_visible_start = None;
         let count = self.visible_indices.len();
         if count == 0 {
@@ -442,7 +442,7 @@ impl Switcher {
         });
     }
 
-    pub fn select_bounded(&mut self, delta: i32) {
+    pub(crate) fn select_bounded(&mut self, delta: i32) {
         self.pinned_visible_start = None;
         let count = self.visible_indices.len();
         if count == 0 {
@@ -476,7 +476,7 @@ impl Switcher {
         start..start.saturating_add(visible_rows).min(count)
     }
 
-    pub fn pin_visible_range(&mut self, visible_rows: usize) {
+    pub(crate) fn pin_visible_range(&mut self, visible_rows: usize) {
         self.pinned_visible_start = Some(self.visible_range(visible_rows).start);
     }
 
@@ -492,12 +492,12 @@ impl Switcher {
         true
     }
 
-    pub fn select_first(&mut self) {
+    pub(crate) fn select_first(&mut self) {
         self.pinned_visible_start = None;
         self.selected_visible_index = (!self.visible_indices.is_empty()).then_some(0);
     }
 
-    pub fn select_last(&mut self) {
+    pub(crate) fn select_last(&mut self) {
         self.pinned_visible_start = None;
         self.selected_visible_index = self.visible_indices.len().checked_sub(1);
     }
