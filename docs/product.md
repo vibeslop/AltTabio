@@ -12,7 +12,7 @@ AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11**
 - **Version:** 1.1.0
 - **Platforms:** 64-bit Windows 10 and 11; macOS 26 or later on Apple silicon and Intel
 - **Language:** Native Rust. Win32, Direct2D, DirectWrite, and DWM on Windows; AppKit and ScreenCaptureKit on macOS.
-- **Network:** None. The app does not connect to the internet and includes no analytics.
+- **Network:** None on Windows. The Mac app asks GitHub for its release list once a day to update itself, unless Update automatically is turned off. No analytics on either platform.
 
 AltTabio is an independent project. It is not affiliated with Microsoft, Apple, or Alt+Tab Terminator. Windows is a trademark of Microsoft Corporation; macOS is a trademark of Apple Inc.
 
@@ -84,7 +84,7 @@ Paste this line into Terminal:
 curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. Run the same line again to update. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
+The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. After that, AltTabio updates itself: once a day it looks for a newer release on GitHub, installs it, and reopens while the Mac is idle. **Check for Updates…** in the menu bar menu looks right away. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
 
 AltTabio is not notarized by Apple, so a copy downloaded in a browser has to be allowed with **Open Anyway** in System Settings, Privacy & Security. The install script avoids that.
 
@@ -132,7 +132,7 @@ tccutil reset All com.vibeslop.AltTabio
 
 ## Privacy
 
-AltTabio contains no telemetry, no ads, and no network code for product use. Settings stay in a local INI file. Window previews are drawn in memory and never saved or sent. Source code is public so this can be verified.
+AltTabio contains no telemetry and no ads. It goes online only for the Mac app's daily update check on GitHub, which **Update automatically** in the settings turns off. Settings stay in a local INI file. Window previews are drawn in memory and never saved or sent. Source code is public so this can be verified.
 
 ## FAQ
 

@@ -105,7 +105,8 @@
         "Type to filter windows by title or app on Windows",
         "Number keys 1 to 9 switch to a window at once",
         "Close, minimize, hide, quit, or force-quit from the switcher",
-        "No ads, no account, no telemetry, no network access"
+        "No ads, no account, no telemetry",
+        "Updates itself on macOS"
       ],
       "sameAs": ["https://github.com/vibeslop/AltTabio"]
     },
@@ -114,7 +115,7 @@
       "@id": "https://vibeslop.github.io/AltTabio/#faq-schema",
       "mainEntity": [
         {"@type": "Question", "name": "Is AltTabio really free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. AltTabio is open-source software under the MIT license. There is no trial, no ads, no account, and no paid version."}},
-        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics and never connects to the internet. The source code is public, so anyone can check."}},
+        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics. The only time it goes online is the Mac app's daily look for updates on GitHub, which you can turn off. The source code is public, so anyone can check."}},
         {"@type": "Question", "name": "Will AltTabio slow down my computer?", "acceptedAnswer": {"@type": "Answer", "text": "No. It is a small native program written in Rust. It waits for the shortcut and does nothing else in the background."}},
         {"@type": "Question", "name": "Why does Windows ask for administrator permission?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. Those are the only reasons."}},
         {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works."}},
@@ -246,8 +247,8 @@
         <ul class="features">
         <li class="feature">
           <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5a14 14 0 0 1 19 0M5.5 12a9.5 9.5 0 0 1 13 0M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="0.6"/><path d="M3 3l18 18"/></g></svg></span>
-          <h3>No network access</h3>
-          <p>It never connects to the internet, so it can't send anything anywhere.</p>
+          <h3>Nothing sent anywhere</h3>
+          <p>No analytics, no account. The Mac app only goes online once a day to look for updates, and you can turn that off.</p>
         </li>
         <li class="feature">
           <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4c-6 0-12 4-13.5 11.5L5 20M6.5 15.5H14c3.5-2 5.5-6 6-11.5"/><path d="M10 11h6"/></g></svg></span>
@@ -324,7 +325,7 @@
           <ol class="steps">
             <li><span>The script checks the download's signature, puts <code class="inline">AltTabio.app</code> in Applications, and opens it.</span></li>
             <li><span>Allow <strong>Accessibility</strong> when AltTabio asks. <strong>Screen Recording</strong> is only for previews.</span></li>
-            <li><span>Press Cmd+Tab. To update later, run the same line again.</span></li>
+            <li><span>Press Cmd+Tab. AltTabio keeps itself up to date from then on.</span></li>
           </ol>
           <a class="more-link" href="mac/#install">Other ways to install on a Mac</a>
         </div>
@@ -345,7 +346,7 @@
         </details>
         <details>
           <summary>Does it collect any data?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>No. The app has no analytics and never connects to the internet. The <a href="https://github.com/vibeslop/AltTabio">source code</a> is public, so anyone can check.</p></div>
+          <div class="ans"><p>No. The app has no analytics. The only time it goes online is the Mac app's daily look for updates on GitHub, which you can turn off. The <a href="https://github.com/vibeslop/AltTabio">source code</a> is public, so anyone can check.</p></div>
         </details>
         <details>
           <summary>Will it slow my computer down?<span class="plus" aria-hidden="true"></span></summary>

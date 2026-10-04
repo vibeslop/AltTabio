@@ -43,7 +43,7 @@ When the user holds Cmd and taps Tab, AltTabio shows a strip of running apps, mo
 - Tab, Shift+Tab, the backtick, and the left and right arrows step through apps; the up and down arrows step through the selected app's windows; 1-9 pick a window by its number
 - Releasing Cmd switches, as in the system switcher; W, M, H, and Q close, minimize, hide, or quit while Cmd is held
 - An optional live preview of the selected window, which needs the Screen Recording permission
-- Install: run `curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh` in Terminal. Run it again to update
+- Install: run `curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh` in Terminal. AltTabio then updates itself from GitHub Releases once a day; Check for Updates in the menu bar menu looks right away, and Update automatically in the settings turns the daily check off
 - Permissions: Accessibility, to take over Cmd+Tab and control windows; Screen Recording, only for previews
 - Not notarized by Apple, which takes a paid developer account, so a copy downloaded in a browser has to be opened with Open Anyway in System Settings; the install script avoids that
 
@@ -70,7 +70,7 @@ When the user holds Cmd and taps Tab, AltTabio shows a strip of running apps, mo
 
 ## Privacy and security talking points
 
-- No internet connection in the product
+- No internet connection on Windows; on macOS only a daily look at the GitHub release list for updates, which can be turned off
 - Public source code
 - Windows permission prompt is for the input hook and window management, not for data collection
 - macOS Accessibility and Screen Recording permissions are for taking over Cmd+Tab, controlling windows, and drawing previews, not for data collection

@@ -110,7 +110,7 @@
         {"@type": "Question", "name": "Do I have to grant the permissions again after an update?", "acceptedAnswer": {"@type": "Answer", "text": "No. macOS ties the permissions to the certificate an app is signed with, and every AltTabio release is signed with the same one."}},
         {"@type": "Question", "name": "Why is AltTabio installed with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. The script checks the signature before it installs anything."}},
         {"@type": "Question", "name": "How do I get the system Cmd+Tab back?", "acceptedAnswer": {"@type": "Answer", "text": "Turn off Replace Cmd+Tab in the AltTabio settings, or quit AltTabio from its menu bar icon."}},
-        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics and never connects to the internet. Previews are drawn on your Mac and never saved or sent anywhere."}}
+        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics. It goes online only to look for updates on GitHub once a day, which Update automatically in the settings turns off. Previews are drawn on your Mac and never saved or sent anywhere."}}
       ]
     }
   ]
@@ -299,7 +299,7 @@
       </div>
       <ul class="chips">
         <li>Replace ⌘ Tab</li><li>Also open with ⌥ Tab</li><li>Show window previews</li>
-        <li>Only windows on the current display</li><li>Launch at login</li><li>System, light, or dark appearance</li>
+        <li>Only windows on the current display</li><li>Launch at login</li><li>Update automatically</li><li>System, light, or dark appearance</li>
       </ul>
     </div>
   </section>
@@ -326,7 +326,7 @@
           <ol class="steps">
             <li><span>The script downloads the newest release, checks its signature, puts <code class="inline">AltTabio.app</code> in <code class="inline">/Applications</code> (or in <code class="inline">~/Applications</code> when your account can't write there), and opens it.</span></li>
             <li><span>Allow <strong>Accessibility</strong> when AltTabio asks, then press Cmd+Tab.</span></li>
-            <li><span>To update, run the same line again. If an update fails partway, the installed copy stays as it was.</span></li>
+            <li><span>AltTabio updates itself from then on, and <strong>Check for Updates…</strong> in its menu bar menu looks right away. Running the same line again updates it too. If an update fails partway, the installed copy stays as it was.</span></li>
           </ol>
         </div>
         <div class="install">
@@ -386,7 +386,7 @@
         </details>
         <details>
           <summary>Does it collect any data?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>No. The app has no analytics and never connects to the internet. Previews are drawn on your Mac and never saved or sent anywhere.</p></div>
+          <div class="ans"><p>No. The app has no analytics. It goes online only to look for updates on GitHub once a day, which Update automatically in the settings turns off. Previews are drawn on your Mac and never saved or sent anywhere.</p></div>
         </details>
       </div>
     </div>
