@@ -414,19 +414,30 @@ mod tests {
             None,
             DialogState::new(Settings::default(), BASE_DPI, instance, None),
         )?;
+        let window = dialog.window();
         let mut title = [0_u16; 64];
         let written = unsafe {
             // SAFETY: the dialog's hidden window is live and title is writable for the
             // synchronous query.
-            windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(dialog.window(), &mut title)
+            windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(window, &mut title)
         };
         let title = String::from_utf16_lossy(
             title
                 .get(..usize::try_from(written).unwrap_or_default())
                 .unwrap_or_default(),
         );
+        let destroyed = dialog.destroy().map(|_state| ());
+        let still_exists = unsafe {
+            // SAFETY: IsWindow only asks whether the handle still names a window.
+            windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(window))
+        };
 
         assert_eq!(title, "AltTabio Settings");
+        assert_eq!(destroyed, Ok(()), "destroying the Settings test window");
+        assert!(
+            !still_exists.as_bool(),
+            "the Settings test window outlived its dialog"
+        );
         Ok(())
     }
 }

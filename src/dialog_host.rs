@@ -243,6 +243,12 @@ impl<S: DialogWindow> ModalDialog<S> {
         }
     }
 
+    /// Destroys the window and returns the state, failing where dropping the dialog only logs.
+    #[cfg(test)]
+    pub(crate) fn destroy(mut self) -> Result<S> {
+        self.release()
+    }
+
     /// Frees the host once its window is gone, destroying the window first if it still exists.
     fn release(&mut self) -> Result<S> {
         let host = self
