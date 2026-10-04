@@ -21,6 +21,8 @@ pub struct GeneralSettings {
     pub release_right_button_switches: bool,
     pub right_button_wheel_switching: bool,
     pub mouse_over_selection: bool,
+    /// Only macOS updates itself; Windows keeps the key without reading it.
+    pub auto_update: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,6 +138,7 @@ impl Default for Settings {
                 release_right_button_switches: true,
                 right_button_wheel_switching: false,
                 mouse_over_selection: true,
+                auto_update: true,
             },
             appearance: AppearanceSettings {
                 icon: IconColor::Azure,
@@ -268,6 +271,7 @@ impl SettingsDocument {
                     "MouseOverSelection",
                     defaults.general.mouse_over_selection,
                 ),
+                auto_update: self.read_bool("General", "AutoUpdate", defaults.general.auto_update),
             },
             appearance: AppearanceSettings {
                 icon: self
@@ -343,6 +347,7 @@ impl SettingsDocument {
                 "MouseOverSelection={}",
                 settings.general.mouse_over_selection
             ),
+            format!("AutoUpdate={}", settings.general.auto_update),
             String::new(),
             "[Appearance]".to_owned(),
             format!("Icon={}", settings.appearance.icon.as_ini_value()),
@@ -417,7 +422,7 @@ fn same_key(left: &str, right: &str) -> bool {
 }
 
 fn is_known(entry: &Entry) -> bool {
-    const KNOWN: [(&str, &str); 21] = [
+    const KNOWN: [(&str, &str); 22] = [
         ("General", "Autostart"),
         ("General", "ReplaceAltTab"),
         ("General", "ReplaceWinTab"),
@@ -426,6 +431,7 @@ fn is_known(entry: &Entry) -> bool {
         ("General", "ReleaseRmbSwitches"),
         ("General", "RmbWheelSwitching"),
         ("General", "MouseOverSelection"),
+        ("General", "AutoUpdate"),
         ("Appearance", "Icon"),
         ("Appearance", "Theme"),
         ("Appearance", "CompactList"),
@@ -575,7 +581,8 @@ mod tests {
     fn established_user_settings_round_trip_without_changes() {
         let contents = "[General]\nAutostart=true\nReplaceAltTab=true\nReplaceWinTab=true\n\
                         TypedSearch=true\nReleaseAltSwitches=true\nReleaseRmbSwitches=true\n\
-                        RmbWheelSwitching=true\nMouseOverSelection=true\n\n[Appearance]\n\
+                        RmbWheelSwitching=true\nMouseOverSelection=true\nAutoUpdate=false\n\n\
+                        [Appearance]\n\
                         Icon=Azure\nTheme=Auto\nCompactList=true\nLargeIcons=true\nShowNumbers=true\n\
                         ShowAppNames=false\nVisibleBorders=false\nPreview=true\n\
                         FullDesktopPreview=true\n\n[Monitor]\n\
