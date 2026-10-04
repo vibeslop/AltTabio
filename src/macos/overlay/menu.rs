@@ -223,4 +223,14 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn the_menu_shows_the_keys_the_panel_answers() {
+        let keys = menu_entries(true, "Notes")
+            .into_iter()
+            .flatten()
+            .map(|(_, _, key)| key)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, ["w", "m", "h", "q", ""]);
+    }
 }
