@@ -51,8 +51,7 @@ pub const fn compositor_border_color(visible_borders: bool, theme: ResolvedTheme
     }
 }
 
-#[must_use]
-pub const fn colorref(color: Rgb8) -> u32 {
+const fn colorref(color: Rgb8) -> u32 {
     color.red as u32 | ((color.green as u32) << 8) | ((color.blue as u32) << 16)
 }
 
