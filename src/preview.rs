@@ -206,7 +206,9 @@ fn desktop_preview_layout(
     if monitor.is_invalid() {
         return None;
     }
-    let monitor_info = monitor_info(monitor).ok()?;
+    let monitor_info = monitor_info(monitor)
+        .inspect_err(|error| eprintln!("Could not read the preview source's monitor: {error}"))
+        .ok()?;
     let restored = restored_window_bounds(source, &monitor_info);
     let window = source_window_bounds(source)?;
     let layout = calculate(
@@ -270,13 +272,17 @@ fn source_window_bounds(source: HWND) -> Option<RECT> {
             u32::try_from(size_of::<RECT>()).ok()?,
         )
     };
-    if extended_frame.is_ok() && valid_rect(bounds) {
-        return Some(bounds);
+    match extended_frame {
+        Ok(()) if valid_rect(bounds) => return Some(bounds),
+        Ok(()) => {}
+        Err(error) => eprintln!("Could not read the preview source's frame bounds: {error}"),
     }
     unsafe {
         // SAFETY: bounds is writable and source is a borrowed live HWND.
-        GetWindowRect(source, &raw mut bounds).ok()?;
+        GetWindowRect(source, &raw mut bounds)
     }
+    .inspect_err(|error| eprintln!("Could not read the preview source's window bounds: {error}"))
+    .ok()?;
     valid_rect(bounds).then_some(bounds)
 }
 
@@ -294,8 +300,10 @@ fn restored_window_bounds(source: HWND, monitor: &MONITORINFO) -> Option<RECT> {
     };
     unsafe {
         // SAFETY: placement has a correct length and is writable for the synchronous call.
-        GetWindowPlacement(source, &raw mut placement).ok()?;
+        GetWindowPlacement(source, &raw mut placement)
     }
+    .inspect_err(|error| eprintln!("Could not read the preview source's placement: {error}"))
+    .ok()?;
     if !valid_rect(placement.rcNormalPosition) {
         return None;
     }
