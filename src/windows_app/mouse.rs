@@ -138,9 +138,21 @@ impl App {
             GetDpiForWindow(self.hwnd)
         };
         let mut client = RECT::default();
-        unsafe {
+        let client_result = unsafe {
             // SAFETY: `client` is writable for the call and the overlay HWND is live.
-            GetClientRect(self.hwnd, &raw mut client).ok()?;
+            GetClientRect(self.hwnd, &raw mut client)
+        };
+        // Every mouse message hit tests, so a failure that lasts would log on each move. Logging
+        // the first failure of a run is enough.
+        match client_result {
+            Ok(()) => self.hit_test_failing = false,
+            Err(error) => {
+                if !self.hit_test_failing {
+                    eprintln!("Could not read the overlay's client area for a hit test: {error}");
+                }
+                self.hit_test_failing = true;
+                return None;
+            }
         }
         hit_test_pixels(
             self.session.switcher_mut(),
