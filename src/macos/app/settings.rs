@@ -68,7 +68,7 @@ impl App {
     fn set_autostart(&mut self, enabled: bool) {
         if let Err(error) = autostart::set_enabled(enabled) {
             let mtm = self.mtm;
-            run_later(move || show_fatal_error(mtm, &error));
+            run_later(mtm, move || show_fatal_error(mtm, &error));
         }
         self.settings.general.autostart = autostart::is_enabled();
         self.save_settings();

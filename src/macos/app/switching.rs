@@ -61,7 +61,7 @@ impl App {
         // The switcher stays open and keeps its selection; the refreshes show the window or
         // app leaving the list in place.
         self.request_refresh();
-        Self::schedule_refresh_burst();
+        self.schedule_refresh_burst();
     }
 
     /// Runs `on_window` on the target window's record, or `on_app` on the target app.

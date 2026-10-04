@@ -3,6 +3,7 @@
 use super::App;
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_foundation::NSTimer;
 use std::cell::RefCell;
@@ -45,9 +46,9 @@ pub(super) fn post_to_app(work: impl FnOnce(&mut App) + Send + 'static) {
 }
 
 /// Runs `work` on the next main run loop pass without holding any app-state borrow.
-pub(super) fn run_later(work: impl FnOnce() + 'static) {
+pub(super) fn run_later(mtm: MainThreadMarker, work: impl FnOnce() + 'static) {
     let slot = RefCell::new(Some(Box::new(work) as Box<dyn FnOnce()>));
-    let _timer = main_loop_timer(0.0, false, move || {
+    let _timer = main_loop_timer(mtm, 0.0, false, move || {
         if let Some(work) = slot.borrow_mut().take() {
             work();
         }
@@ -55,28 +56,38 @@ pub(super) fn run_later(work: impl FnOnce() + 'static) {
 }
 
 /// Schedules `work` on the main run loop after `seconds`.
-pub(super) fn schedule(seconds: f64, work: impl Fn(&mut App) + 'static) -> Retained<NSTimer> {
-    main_loop_timer(seconds, false, move || {
+pub(super) fn schedule(
+    mtm: MainThreadMarker,
+    seconds: f64,
+    work: impl Fn(&mut App) + 'static,
+) -> Retained<NSTimer> {
+    main_loop_timer(mtm, seconds, false, move || {
         let _ = with_app(&work);
     })
 }
 
 /// Schedules `work` on the main run loop every `seconds` until the timer is invalidated.
 pub(super) fn schedule_repeating(
+    mtm: MainThreadMarker,
     seconds: f64,
     work: impl Fn(&mut App) + 'static,
 ) -> Retained<NSTimer> {
-    main_loop_timer(seconds, true, move || {
+    main_loop_timer(mtm, seconds, true, move || {
         let _ = with_app(&work);
     })
 }
 
-/// A timer on the main run loop. Call it from the main thread only.
-fn main_loop_timer(seconds: f64, repeats: bool, fire: impl Fn() + 'static) -> Retained<NSTimer> {
+/// A timer on the main run loop. A timer joins the run loop of the thread that schedules it, so
+/// the marker is what makes that the main one.
+fn main_loop_timer(
+    _mtm: MainThreadMarker,
+    seconds: f64,
+    repeats: bool,
+    fire: impl Fn() + 'static,
+) -> Retained<NSTimer> {
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| fire());
-    unsafe {
-        // SAFETY: the timer is scheduled from the main thread onto the main run loop, so the
-        // block runs on the same thread that created its non-Send captures.
-        NSTimer::scheduledTimerWithTimeInterval_repeats_block(seconds, repeats, &block)
-    }
+    // SAFETY: the binding asks for a sendable block, but this one never leaves the thread that
+    // made its captures: the timer fires on the run loop of the thread scheduling it, which
+    // `_mtm` proves is the main one, the only thread where `with_app` finds the app.
+    unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(seconds, repeats, &block) }
 }

@@ -45,7 +45,7 @@ impl App {
         self.request_refresh();
         // Only the keyboard gesture waits; a list opened from the menu bar shows at once.
         if step.is_some() {
-            self.panel = Panel::Waiting(schedule(REVEAL_SECONDS, App::reveal));
+            self.panel = Panel::Waiting(schedule(self.mtm, REVEAL_SECONDS, App::reveal));
         } else {
             self.reveal();
         }
@@ -91,7 +91,7 @@ impl App {
             // The system prompt takes focus, so it waits until the panel is gone and the
             // switch is done.
             self.screen_recording_asked = true;
-            run_later(|| {
+            run_later(self.mtm, || {
                 let _ = with_app(App::ask_for_screen_recording);
             });
         }

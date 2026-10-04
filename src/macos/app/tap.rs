@@ -18,7 +18,11 @@ impl App {
         if self.tap_retry_timer.is_some() {
             return;
         }
-        self.tap_retry_timer = Some(schedule_repeating(TAP_RETRY_SECONDS, App::retry_event_tap));
+        self.tap_retry_timer = Some(schedule_repeating(
+            self.mtm,
+            TAP_RETRY_SECONDS,
+            App::retry_event_tap,
+        ));
     }
 
     /// Records the new front app for the strip's order and follows its windows, then puts the

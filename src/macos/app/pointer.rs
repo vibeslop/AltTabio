@@ -64,7 +64,7 @@ impl App {
             Dwell::Cancel => self.cancel_dwell(),
             Dwell::Start(app) => {
                 self.cancel_dwell();
-                self.dwell_timer = Some(schedule(TILE_DWELL_SECONDS, move |state| {
+                self.dwell_timer = Some(schedule(self.mtm, TILE_DWELL_SECONDS, move |state| {
                     state.finish_dwell(app);
                 }));
             }
@@ -113,7 +113,7 @@ impl App {
             return;
         };
         if self.switcher.open_context_menu() {
-            run_later(move || {
+            run_later(self.mtm, move || {
                 let command = overlay.show_context_menu(x, y, window, &app_name);
                 let _ = with_app(|app| app.finish_context_menu(command));
             });

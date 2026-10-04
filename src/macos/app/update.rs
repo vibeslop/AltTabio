@@ -26,7 +26,7 @@ impl App {
         if let Some(timer) = self.update_timer.take() {
             timer.invalidate();
         }
-        self.update_timer = Some(schedule(seconds, App::update_check_due));
+        self.update_timer = Some(schedule(self.mtm, seconds, App::update_check_due));
     }
 
     pub(super) fn update_check_due(&mut self) {
@@ -87,17 +87,17 @@ impl App {
             Step::Install(update) => updater::install(update, updater::bundle_path()),
             Step::Offer(update) => {
                 let mtm = self.mtm;
-                run_later(move || {
+                run_later(mtm, move || {
                     let install = offer_update(mtm, update.version);
                     let _ = with_app(|app| app.update_offer_answered(update, install));
                 });
             }
             Step::Report(report) => {
                 let mtm = self.mtm;
-                run_later(move || show_update_report(mtm, &report));
+                run_later(mtm, move || show_update_report(mtm, &report));
             }
             // Timers wait out an open menu or alert, so the app never quits from inside one.
-            Step::Relaunch => run_later(|| {
+            Step::Relaunch => run_later(self.mtm, || {
                 let _ = with_app(App::relaunch);
             }),
         }
@@ -106,14 +106,14 @@ impl App {
             status_item.set_update_installed(installed);
         }
         if installed && self.away_timer.is_none() {
-            self.away_timer = Some(schedule(AWAY_POLL_SECONDS, App::look_for_away));
+            self.away_timer = Some(schedule(self.mtm, AWAY_POLL_SECONDS, App::look_for_away));
         }
     }
 
     fn look_for_away(&mut self) {
         self.away_timer = None;
         if updater::seconds_since_input() < AWAY_SECONDS {
-            self.away_timer = Some(schedule(AWAY_POLL_SECONDS, App::look_for_away));
+            self.away_timer = Some(schedule(self.mtm, AWAY_POLL_SECONDS, App::look_for_away));
             return;
         }
         let step = self.updater.user_away();
@@ -124,7 +124,7 @@ impl App {
     /// it is up.
     fn relaunch(&mut self) {
         if self.switcher.is_active() {
-            let _timer = schedule(RELAUNCH_RETRY_SECONDS, App::relaunch);
+            let _timer = schedule(self.mtm, RELAUNCH_RETRY_SECONDS, App::relaunch);
             return;
         }
         let open_settings = self

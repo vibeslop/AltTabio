@@ -109,9 +109,10 @@ impl App {
         }
     }
 
-    pub(super) fn schedule_refresh_burst() {
+    pub(super) fn schedule_refresh_burst(&self) {
         for delay_ms in [120_u64, 450, 1_200] {
             let _timer = schedule(
+                self.mtm,
                 Duration::from_millis(delay_ms).as_secs_f64(),
                 App::request_refresh,
             );

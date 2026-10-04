@@ -229,7 +229,7 @@ fn handle_menu_action(action: MenuAction) {
         }
         MenuAction::ShowAbout => {
             if let Some(mtm) = MainThreadMarker::new() {
-                run_later(move || show_about(mtm));
+                run_later(mtm, move || show_about(mtm));
             }
         }
         MenuAction::Update => {
