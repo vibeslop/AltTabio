@@ -3,14 +3,14 @@ use crate::app_messages::{
     WM_DESTROY_APP, WM_FOREGROUND_CHECK, WM_LISTED_WINDOW_REFRESH, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
 };
 use crate::win_events::{self, is_listed_refresh_wakeup};
+use crate::win32::set_window_user_data;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, LRESULT, SetLastError, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
-    PostQuitMessage, SetWindowLongPtrW, WM_DESTROY, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE,
-    WM_NCDESTROY, WM_RBUTTONUP,
+    PostQuitMessage, WM_DESTROY, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY,
+    WM_RBUTTONUP,
 };
-use windows::core::{Error, Result};
 
 pub(super) unsafe extern "system" fn window_proc(
     hwnd: HWND,
@@ -37,8 +37,7 @@ pub(super) unsafe extern "system" fn window_proc(
             };
             app.hwnd = hwnd;
             drop(app);
-            // SAFETY: host remains live through the message loop.
-            if let Err(error) = unsafe { set_window_user_data(hwnd, host as isize) } {
+            if let Err(error) = set_window_user_data(hwnd, host as isize) {
                 // Failing creation lets `run` free the host instead of running a window that
                 // can never reach it.
                 eprintln!("Could not attach AltTabio to its window: {error}");
@@ -77,8 +76,8 @@ pub(super) unsafe extern "system" fn window_proc(
             return Some(LRESULT(0));
         }
         if message == WM_NCDESTROY {
-            // SAFETY: clearing user data prevents later messages from observing host.
-            if let Err(error) = unsafe { set_window_user_data(hwnd, 0) } {
+            // Later messages must not reach the host, which `run` frees once the window is gone.
+            if let Err(error) = set_window_user_data(hwnd, 0) {
                 eprintln!("Could not detach AltTabio from its window: {error}");
             }
             return None;
@@ -114,31 +113,6 @@ pub(super) unsafe extern "system" fn window_proc(
     .ok()
     .flatten();
     handled.unwrap_or_else(|| default_window_proc(hwnd, message, wparam, lparam))
-}
-
-/// # Safety
-///
-/// `value` must be zero or an `AppHost` pointer that stays live until `WM_NCDESTROY` clears it,
-/// because `window_proc` dereferences any nonzero user data.
-unsafe fn set_window_user_data(hwnd: HWND, value: isize) -> Result<()> {
-    unsafe {
-        // SAFETY: SetLastError only writes this thread's last-error value.
-        SetLastError(ERROR_SUCCESS);
-    }
-    let previous = unsafe {
-        // SAFETY: hwnd is the window being handled, and the caller upholds the contract for the
-        // stored value.
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, value)
-    };
-    // Zero is also what a successful call returns when the previous value was zero, so only a
-    // last error separates failure from success.
-    if previous == 0 {
-        let error = Error::from_thread();
-        if error.code().is_err() {
-            return Err(error);
-        }
-    }
-    Ok(())
 }
 
 const fn is_modal_dialog_message(message: u32) -> bool {

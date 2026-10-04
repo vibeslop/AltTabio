@@ -1,15 +1,17 @@
 //! Win32 helpers that hold no application state: the module handle, monitors, message words,
-//! and wide strings.
+//! window user data, and wide strings.
 
 use alttabio::dialog_layout::{Point, Rect};
 use std::mem::size_of;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{
+    ERROR_SUCCESS, HINSTANCE, HWND, LPARAM, POINT, RECT, SetLastError,
+};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
     MonitorFromWindow,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, GetCursorPos, SetWindowLongPtrW};
 use windows::core::{Error, Result};
 
 pub(crate) fn module_instance() -> Result<HINSTANCE> {
@@ -100,6 +102,30 @@ pub(crate) fn point_from_lparam(lparam: LPARAM) -> Point {
         i32::from(low_word(raw).cast_signed()),
         i32::from(high_word(raw).cast_signed()),
     )
+}
+
+/// Stores `value` as `window`'s user data. A window procedure reads it back as a pointer to its
+/// state, so `value` must be zero or that state, kept alive until `WM_NCDESTROY` clears it.
+pub(crate) fn set_window_user_data(window: HWND, value: isize) -> Result<()> {
+    unsafe {
+        // SAFETY: SetLastError only writes this thread's last-error value.
+        SetLastError(ERROR_SUCCESS);
+    }
+    let previous = unsafe {
+        // SAFETY: the call takes no pointers and stores value as an integer without reading
+        // through it; a stale window handle comes back as an error. Dereferencing the value is
+        // left to the window procedure that reads it back.
+        SetWindowLongPtrW(window, GWLP_USERDATA, value)
+    };
+    // Zero is also what a successful call returns when the previous value was zero, so only a
+    // last error separates failure from success.
+    if previous == 0 {
+        let error = Error::from_thread();
+        if error.code().is_err() {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn wide(value: &str) -> Vec<u16> {

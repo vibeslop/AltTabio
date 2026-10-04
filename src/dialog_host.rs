@@ -1,6 +1,6 @@
 //! Win32 plumbing shared by the native dialogs: window classes, the modal loop, and placement.
 
-use crate::win32::{low_word, wide};
+use crate::win32::{low_word, set_window_user_data, wide};
 use alttabio::dialog_layout::{MIN_DPI, Point, Size};
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::mem::{size_of, size_of_val};
@@ -18,9 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, HICON, IDC_ARROW,
     IsDialogMessageW, LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE, WM_NCDESTROY,
-    WNDCLASSEXW,
+    SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE, WM_NCDESTROY, WNDCLASSEXW,
 };
 use windows::core::{Error, PCWSTR, Result};
 
@@ -391,7 +390,7 @@ unsafe extern "system" fn dialog_window_proc<S: DialogWindow>(
             }
             WM_NCDESTROY => {
                 host.done.set(true);
-                if let Err(error) = set_user_data(hwnd, 0) {
+                if let Err(error) = set_window_user_data(hwnd, 0) {
                     eprintln!(
                         "Could not detach {} from its closing window: {error}",
                         S::FRAME.name
@@ -440,29 +439,11 @@ fn attach_host<S: DialogWindow>(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
     };
     state.attach(hwnd);
     drop(state);
-    if let Err(error) = set_user_data(hwnd, host as isize) {
+    if let Err(error) = set_window_user_data(hwnd, host as isize) {
         eprintln!("Could not attach {} to its window: {error}", S::FRAME.name);
         return REFUSE_CREATION;
     }
     None
-}
-
-fn set_user_data(window: HWND, value: isize) -> Result<()> {
-    let previous = unsafe {
-        // SAFETY: window is live on this thread. Clearing the last error first is the documented
-        // way to tell a failure from a previous value of zero.
-        SetLastError(WIN32_ERROR(0));
-        SetWindowLongPtrW(window, GWLP_USERDATA, value)
-    };
-    if previous != 0 {
-        return Ok(());
-    }
-    let error = Error::from_thread();
-    if error.code().is_err() {
-        Err(error)
-    } else {
-        Ok(())
-    }
 }
 
 /// Asks the dialog's window procedure to destroy the window once the current message returns.
