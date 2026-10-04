@@ -7,6 +7,7 @@ use crate::win32::{self, native_rect, point_from_lparam};
 use crate::{app_icon, native_theme::DarkModeApi};
 use alttabio::about_layout::{AboutLayout, CLIENT_HEIGHT, CLIENT_WIDTH};
 use alttabio::dialog_layout::{MIN_DPI, Point, Size, hairline, scale};
+use alttabio::failure_run::FailureRun;
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
 use std::ffi::c_void;
@@ -91,6 +92,7 @@ struct DialogState {
     dpi: u32,
     close_pressed: bool,
     open_repository_requested: bool,
+    begin_paint_failures: FailureRun,
 }
 
 impl DialogState {
@@ -111,6 +113,7 @@ impl DialogState {
             dpi,
             close_pressed: false,
             open_repository_requested: false,
+            begin_paint_failures: FailureRun::default(),
         })
     }
 
@@ -324,16 +327,21 @@ fn handle_left_button_up(state: &mut DialogState, hwnd: HWND, point: Point) {
     }
 }
 
-fn paint_about(state: &DialogState) {
+fn paint_about(state: &mut DialogState) {
     let mut paint = PAINTSTRUCT::default();
     let dc = unsafe {
         // SAFETY: hwnd is live during WM_PAINT and paint is writable.
         BeginPaint(state.hwnd, &raw mut paint)
     };
+    // Only a successful BeginPaint validates the update region, so after a failure WM_PAINT
+    // keeps arriving until a call succeeds. Logging the first failure of a run is enough.
     if dc == HDC::default() {
-        eprintln!("Could not begin painting About");
+        if state.begin_paint_failures.fail() {
+            eprintln!("Could not begin painting About");
+        }
         return;
     }
+    state.begin_paint_failures.succeed();
     if let Err(error) = paint_about_content(dc, state) {
         eprintln!("Could not paint About: {error}");
     }
