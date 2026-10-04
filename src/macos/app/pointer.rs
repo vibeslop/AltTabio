@@ -22,6 +22,7 @@ impl App {
             return;
         };
         let selected_app = self.switcher.selected_app_index();
+        let selected_window = self.switcher.selected_window();
         match event {
             ViewEvent::MouseMoved(x, y) => {
                 let location = NSEvent::mouseLocation();
@@ -34,11 +35,13 @@ impl App {
                 self.apply_pointer(response);
             }
             ViewEvent::MouseDown(x, y) => {
-                let response = self.pointer.pressed(shown.hit(x, y), &shown, selected_app);
+                let response =
+                    self.pointer
+                        .pressed(shown.hit(x, y), &shown, selected_app, selected_window);
                 self.apply_pointer(response);
             }
             ViewEvent::MouseUp(x, y) => {
-                let response = self.pointer.released(shown.hit(x, y));
+                let response = self.pointer.released(shown.hit(x, y), selected_window);
                 self.apply_pointer(response);
             }
             ViewEvent::RightMouseDown(x, y) => {

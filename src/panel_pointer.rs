@@ -44,7 +44,10 @@ pub enum MenuFor {
 #[derive(Debug, Default)]
 pub struct Pointer {
     close_hovered: bool,
-    close_pressed: bool,
+    // The window whose close button the press started on. The release closes it only if it is
+    // still selected, so a dwell, a key, or a refresh that slides the next window into its row
+    // during the press cannot close a different window.
+    close_pressed: Option<isize>,
     // The tile or row a click started on; the switch happens when it ends there too.
     pressed: Option<Hit>,
     // Where the pointer was when the panel appeared. Hovering selects nothing until the pointer
@@ -63,7 +66,7 @@ impl Pointer {
 
     #[must_use]
     pub const fn close_state(&self) -> CloseButtonVisualState {
-        if self.close_pressed {
+        if self.close_pressed.is_some() {
             CloseButtonVisualState::Pressed
         } else if self.close_hovered {
             CloseButtonVisualState::Hovered
@@ -106,7 +109,9 @@ impl Pointer {
             };
         }
         match hit {
-            Some(Hit::Row(row)) if !self.close_pressed && shown.selected_row != Some(row) => {
+            Some(Hit::Row(row))
+                if self.close_pressed.is_none() && shown.selected_row != Some(row) =>
+            {
                 response.select = Some((
                     selected_app.unwrap_or_default(),
                     Some(shown.row_start + row),
@@ -126,17 +131,20 @@ impl Pointer {
         }
     }
 
+    /// A press on `hit` while the app at `selected_app` and its window `selected_window` were
+    /// selected.
     pub fn pressed(
         &mut self,
         hit: Option<Hit>,
         shown: &Shown,
         selected_app: Option<usize>,
+        selected_window: Option<isize>,
     ) -> Response {
         match hit {
             Some(Hit::CloseButton(_)) => {
-                self.close_pressed = true;
+                self.close_pressed = selected_window;
                 Response {
-                    redraw: true,
+                    redraw: self.close_pressed.is_some(),
                     ..Response::default()
                 }
             }
@@ -162,13 +170,14 @@ impl Pointer {
         }
     }
 
-    pub fn released(&mut self, hit: Option<Hit>) -> Response {
+    /// A release on `hit` while the window `selected_window` was selected.
+    pub fn released(&mut self, hit: Option<Hit>, selected_window: Option<isize>) -> Response {
         let pressed = self.pressed.take();
-        if self.close_pressed {
-            self.close_pressed = false;
+        if let Some(close_pressed) = self.close_pressed.take() {
             Response {
-                action: matches!(hit, Some(Hit::CloseButton(_)))
-                    .then_some(Action::Command(WindowCommand::Close)),
+                action: (matches!(hit, Some(Hit::CloseButton(_)))
+                    && selected_window == Some(close_pressed))
+                .then_some(Action::Command(WindowCommand::Close)),
                 redraw: true,
                 ..Response::default()
             }
@@ -226,6 +235,7 @@ mod tests {
 
     const AT_REST: (f64, f64) = (100.0, 100.0);
     const AWAY: (f64, f64) = (100.0, 100.0 + HOVER_ARM_DISTANCE);
+    const WINDOW: Option<isize> = Some(10);
 
     fn shown(tile_start: usize, row_start: usize, selected_row: Option<usize>) -> Shown {
         Shown {
@@ -360,7 +370,7 @@ mod tests {
         let frame = shown(1, 2, Some(0));
 
         assert_eq!(
-            pointer.pressed(Some(Hit::Tile(0)), &frame, Some(3)),
+            pointer.pressed(Some(Hit::Tile(0)), &frame, Some(3), WINDOW),
             Response {
                 dwell: Dwell::Cancel,
                 select: Some((1, None)),
@@ -368,19 +378,28 @@ mod tests {
             }
         );
         assert_eq!(
-            pointer.released(Some(Hit::Tile(0))).action,
+            pointer.released(Some(Hit::Tile(0)), WINDOW).action,
             Some(Action::Activate)
         );
 
         assert_eq!(
-            pointer.pressed(Some(Hit::Row(1)), &frame, Some(3)),
+            pointer.pressed(Some(Hit::Row(1)), &frame, Some(3), WINDOW),
             select(3, Some(3))
         );
-        assert_eq!(pointer.released(Some(Hit::Row(2))), Response::default());
+        assert_eq!(
+            pointer.released(Some(Hit::Row(2)), WINDOW),
+            Response::default()
+        );
         // The press is spent; a release alone switches nothing.
-        assert_eq!(pointer.released(Some(Hit::Row(1))), Response::default());
-        assert_eq!(pointer.pressed(None, &frame, Some(3)), Response::default());
-        assert_eq!(pointer.released(None), Response::default());
+        assert_eq!(
+            pointer.released(Some(Hit::Row(1)), WINDOW),
+            Response::default()
+        );
+        assert_eq!(
+            pointer.pressed(None, &frame, Some(3), WINDOW),
+            Response::default()
+        );
+        assert_eq!(pointer.released(None, WINDOW), Response::default());
     }
 
     #[test]
@@ -390,7 +409,7 @@ mod tests {
 
         assert!(
             pointer
-                .pressed(Some(Hit::CloseButton(0)), &frame, Some(0))
+                .pressed(Some(Hit::CloseButton(0)), &frame, Some(0), WINDOW)
                 .redraw
         );
         assert_eq!(pointer.close_state(), CloseButtonVisualState::Pressed);
@@ -402,7 +421,7 @@ mod tests {
             None
         );
         assert_eq!(
-            pointer.released(Some(Hit::CloseButton(0))),
+            pointer.released(Some(Hit::CloseButton(0)), WINDOW),
             Response {
                 action: Some(Action::Command(WindowCommand::Close)),
                 redraw: true,
@@ -411,13 +430,46 @@ mod tests {
         );
         assert_eq!(pointer.close_state(), CloseButtonVisualState::Normal);
 
-        let _ = pointer.pressed(Some(Hit::CloseButton(0)), &frame, Some(0));
+        let _ = pointer.pressed(Some(Hit::CloseButton(0)), &frame, Some(0), WINDOW);
         assert_eq!(
-            pointer.released(Some(Hit::Row(0))),
+            pointer.released(Some(Hit::Row(0)), WINDOW),
             Response {
                 redraw: true,
                 ..Response::default()
             }
+        );
+    }
+
+    #[test]
+    fn a_close_press_closes_nothing_once_another_window_is_selected() {
+        let mut pointer = Pointer::default();
+        let frame = shown(0, 0, Some(0));
+
+        // A dwell or a key moved the selection, the pressed window closed and the next one took
+        // its row, or the pressed window closed and nothing is selected.
+        for selected_at_release in [Some(11), None] {
+            let _ = pointer.pressed(Some(Hit::CloseButton(0)), &frame, Some(0), Some(10));
+            assert_eq!(pointer.close_state(), CloseButtonVisualState::Pressed);
+            assert_eq!(
+                pointer.released(Some(Hit::CloseButton(0)), selected_at_release),
+                Response {
+                    redraw: true,
+                    ..Response::default()
+                }
+            );
+            assert_eq!(pointer.close_state(), CloseButtonVisualState::Normal);
+        }
+    }
+
+    #[test]
+    fn a_close_press_closes_the_window_it_started_on() {
+        let mut pointer = Pointer::default();
+        let frame = shown(0, 0, Some(1));
+
+        let _ = pointer.pressed(Some(Hit::CloseButton(1)), &frame, Some(0), Some(10));
+        assert_eq!(
+            pointer.released(Some(Hit::CloseButton(1)), Some(10)).action,
+            Some(Action::Command(WindowCommand::Close))
         );
     }
 
