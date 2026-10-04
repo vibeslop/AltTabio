@@ -1,4 +1,5 @@
-//! DPI scaling and placement math shared by the native dialogs, in physical pixels.
+//! DPI scaling and placement math in physical pixels, shared by the native dialogs and the
+//! overlay window.
 
 pub const BASE_DPI: u32 = 96;
 pub const MIN_DPI: u32 = BASE_DPI / 2;

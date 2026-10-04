@@ -1,7 +1,8 @@
 use super::App;
 use crate::preview::DwmPreview;
-use crate::win32::{monitor_info, monitor_near_cursor};
-use alttabio::overlay_window::{ScreenRect, overlay_bounds, overlay_bounds_for_dpi_change};
+use crate::win32::{monitor_info, native_rect, rect_from_native, work_area_near_cursor};
+use alttabio::dialog_layout::Rect;
+use alttabio::overlay_window::overlay_bounds;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
@@ -14,11 +15,11 @@ impl App {
             (lparam.0 as *const RECT).as_ref()
         };
         if let Some(suggested) = suggested {
+            // The suggested rectangle only picks the monitor. It keeps the window's old logical
+            // size, while AltTabio sizes the overlay from its monitor, so scaling it can make the
+            // overlay fill a high-DPI screen.
             let bounds = match monitor_work_area_from_rect(*suggested) {
-                Ok(work_area) => win32_rect(overlay_bounds_for_dpi_change(
-                    screen_rect(*suggested),
-                    screen_rect(work_area),
-                )),
+                Ok(work_area) => native_rect(overlay_bounds(work_area)),
                 Err(error) => {
                     eprintln!("Could not resolve the monitor for the DPI change: {error}");
                     *suggested
@@ -101,8 +102,7 @@ impl App {
 }
 
 pub(super) fn position_on_cursor_monitor(hwnd: HWND) -> Result<()> {
-    let work_area = monitor_info(monitor_near_cursor()?)?.rcWork;
-    let bounds = win32_rect(overlay_bounds(screen_rect(work_area)));
+    let bounds = native_rect(overlay_bounds(work_area_near_cursor()?));
     unsafe {
         // SAFETY: HWND is live; the calculated dimensions are within the selected work area.
         SetWindowPos(
@@ -118,28 +118,10 @@ pub(super) fn position_on_cursor_monitor(hwnd: HWND) -> Result<()> {
     Ok(())
 }
 
-fn monitor_work_area_from_rect(rectangle: RECT) -> Result<RECT> {
+fn monitor_work_area_from_rect(rectangle: RECT) -> Result<Rect> {
     let monitor = unsafe {
         // SAFETY: rectangle is initialized and the fallback flag requests the nearest monitor.
         MonitorFromRect(&raw const rectangle, MONITOR_DEFAULTTONEAREST)
     };
-    Ok(monitor_info(monitor)?.rcWork)
-}
-
-const fn screen_rect(rect: RECT) -> ScreenRect {
-    ScreenRect {
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-    }
-}
-
-const fn win32_rect(rect: ScreenRect) -> RECT {
-    RECT {
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-    }
+    Ok(rect_from_native(monitor_info(monitor)?.rcWork))
 }
