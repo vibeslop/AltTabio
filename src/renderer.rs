@@ -18,8 +18,8 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Gdi::{COLOR_BACKGROUND, GetSysColor, HDC};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -353,8 +353,25 @@ impl Renderer {
     }
 }
 
-fn create_text_format(factory: &IDWriteFactory, size: f32) -> Result<IDWriteTextFormat> {
-    unsafe {
+fn create_text_formats(
+    factory: &IDWriteFactory,
+    title_size: f32,
+    detail_size: f32,
+    number_size: f32,
+) -> Result<TextFormats> {
+    Ok(TextFormats {
+        title: create_text_format(factory, title_size, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+        detail: create_text_format(factory, detail_size, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+        number: create_text_format(factory, number_size, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+    })
+}
+
+fn create_text_format(
+    factory: &IDWriteFactory,
+    size: f32,
+    alignment: DWRITE_TEXT_ALIGNMENT,
+) -> Result<IDWriteTextFormat> {
+    let format = unsafe {
         // SAFETY: both string arguments are static null-terminated UTF-16 strings and the returned
         // windows-rs interface owns its reference count.
         factory.CreateTextFormat(
@@ -366,51 +383,14 @@ fn create_text_format(factory: &IDWriteFactory, size: f32) -> Result<IDWriteText
             size,
             w!("en-us"),
         )
-    }
-}
-
-fn create_text_formats(
-    factory: &IDWriteFactory,
-    title_size: f32,
-    detail_size: f32,
-    number_size: f32,
-) -> Result<TextFormats> {
-    let formats = TextFormats {
-        title: create_text_format(factory, title_size)?,
-        detail: create_text_format(factory, detail_size)?,
-        number: create_text_format(factory, number_size)?,
-    };
+    }?;
     unsafe {
-        // SAFETY: all three formats are valid DirectWrite interfaces created on this thread.
-        formats
-            .title
-            .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        formats
-            .detail
-            .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        formats
-            .number
-            .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
-        formats
-            .title
-            .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-        formats
-            .detail
-            .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-        formats
-            .number
-            .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-        formats
-            .title
-            .SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-        formats
-            .detail
-            .SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-        formats
-            .number
-            .SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        // SAFETY: the format is a valid DirectWrite interface created on this thread.
+        format.SetTextAlignment(alignment)?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
     }
-    Ok(formats)
+    Ok(format)
 }
 
 fn create_brush(
