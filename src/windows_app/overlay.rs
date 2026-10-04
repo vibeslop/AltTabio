@@ -128,12 +128,10 @@ impl App {
         if !dc.is_invalid() {
             Renderer::draw_icons(self.hwnd, dc, switcher, render_options);
         }
-        let ended = unsafe {
+        unsafe {
             // SAFETY: this balances the BeginPaint call above for the same PAINTSTRUCT.
-            EndPaint(self.hwnd, &raw const paint)
-        };
-        if !ended.as_bool() {
-            eprintln!("Could not finish painting the overlay");
+            // EndPaint is documented to always return nonzero, so there is no failure to handle.
+            let _always_nonzero = EndPaint(self.hwnd, &raw const paint);
         }
     }
 
