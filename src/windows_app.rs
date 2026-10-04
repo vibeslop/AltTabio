@@ -785,15 +785,9 @@ impl App {
     }
 
     fn handle_input_action(&mut self, action: InputAction) {
-        if let Some(pending) = &mut self.pending_shell {
-            if pending.input.push(action) {
-                self.preview_shell_switch();
-            } else {
-                self.hide_overlay();
-            }
-            return;
+        if !self.defer_to_shell_dismissal(action) {
+            self.apply_input_action(action);
         }
-        self.apply_input_action(action);
     }
 
     fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
@@ -877,6 +871,19 @@ impl App {
                 SwitchResume::Input(action) => self.apply_input_action(action),
             }
         });
+    }
+
+    /// Returns whether a pending shell dismissal took `action`.
+    fn defer_to_shell_dismissal(&mut self, action: InputAction) -> bool {
+        let Some(pending) = &mut self.pending_shell else {
+            return false;
+        };
+        if pending.input.push(action) {
+            self.preview_shell_switch();
+        } else {
+            self.hide_overlay();
+        }
+        true
     }
 
     fn preview_shell_switch(&mut self) {
