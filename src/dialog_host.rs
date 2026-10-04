@@ -16,7 +16,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON,
@@ -511,15 +511,25 @@ pub(crate) fn bring_to_front(window: HWND, name: &str) {
 
 pub(crate) fn focus(window: HWND) -> Result<()> {
     let result = unsafe {
-        // SAFETY: window is a live control on this thread. Clearing the last error first tells a
-        // failure from a null previous focus.
+        // SAFETY: window is a live control on this thread. Clearing the last error first keeps
+        // an older failure out of the error reported below.
         SetLastError(WIN32_ERROR(0));
         SetFocus(Some(window))
     };
-    match result {
-        Err(error) if error.code().is_err() => Err(error),
-        _ => Ok(()),
+    // SetFocus returns the previous focus, which may be null, and the WM_KILLFOCUS and
+    // WM_SETFOCUS handlers it runs may leave a last error behind, so neither tells whether the
+    // focus moved. Where the focus ends up does.
+    let focused = unsafe {
+        // SAFETY: GetFocus only reads the calling thread's focus.
+        GetFocus()
+    };
+    if focused == window {
+        return Ok(());
     }
+    Err(match result {
+        Err(error) if error.code().is_err() => error,
+        _ => Error::new(E_FAIL, "the focus stayed on another window"),
+    })
 }
 
 /// Disables a dialog's owner while the dialog is open, which gives the dialog modality without
