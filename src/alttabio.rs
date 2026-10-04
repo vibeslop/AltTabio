@@ -19,6 +19,7 @@ pub mod passthrough;
 pub mod preview_layout;
 pub mod settings;
 pub mod settings_change;
+pub mod settings_form;
 pub mod switcher;
 pub mod task_refresh;
 pub mod theme;

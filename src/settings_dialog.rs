@@ -1,6 +1,6 @@
 use crate::dialog_host::{
     self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog, OwnerGuard, dark,
-    high_word, low_word, wide,
+    high_word, low_word, rect_from_native, wide,
 };
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
@@ -11,8 +11,12 @@ use crate::{
     app_icon,
     native_theme::{DarkModeApi, resolve_current_theme},
 };
-use alttabio::dialog_layout::{BASE_DPI, Point, Size, hairline, scale};
+use alttabio::dialog_layout::{BASE_DPI, Point, Rect, hairline, scale};
 use alttabio::settings::{IconColor, Settings, Theme};
+use alttabio::settings_form::{
+    CANCEL_ID, Group, ICON_CHOICES, OK_ID, OPTION_COUNT, Selector, SettingOption, SettingsLayout,
+    THEME_CHOICES, checkmark_points, combo_window_rect,
+};
 use alttabio::theme::ResolvedTheme;
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -46,97 +50,9 @@ const FRAME: DialogFrame = DialogFrame {
     style: WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0),
     ex_style: WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0),
 };
-const OPTION_COUNT: usize = 16;
-const GENERAL_OPTION_COUNT: usize = 8;
-const APPEARANCE_OPTION_COUNT: usize = 7;
-const OK_ID: usize = 1;
-const CANCEL_ID: usize = 2;
-const OPTION_ID_BASE: usize = 100;
-const THEME_ID: usize = 200;
-const ICON_ID: usize = 201;
-const CLIENT_WIDTH: i32 = 560;
-const CLIENT_HEIGHT: i32 = 747;
-const APPEARANCE_SELECTOR_WIDTH: i32 = 180;
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
 const BUTTON_STATE_PUSHED: usize = 0x0004;
 const SOLID_PEN: i32 = 0;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OptionGroup {
-    General,
-    Appearance,
-    Monitor,
-}
-
-// Declare each identity, field, label and placement together. Both directions of the
-// binding are generated from the same field, so reads and writes cannot drift apart.
-macro_rules! setting_options {
-    ($( $name:ident: $group:ident, $row:literal, $section:ident.$field:ident, $label:literal; )+) => {
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        enum SettingOption { $( $name, )+ }
-
-        impl SettingOption {
-            const ALL: [Self; OPTION_COUNT] = [$( Self::$name, )+];
-
-            const fn label(self) -> &'static str {
-                match self { $( Self::$name => $label, )+ }
-            }
-
-            const fn group(self) -> OptionGroup {
-                match self { $( Self::$name => OptionGroup::$group, )+ }
-            }
-
-            fn rect(self, layout: &DialogLayout) -> ControlRect {
-                let row = match self { $( Self::$name => $row, )+ };
-                match self.group() {
-                    OptionGroup::General => layout.general_options[row],
-                    OptionGroup::Appearance => layout.appearance_options[row],
-                    OptionGroup::Monitor => layout.monitor_option,
-                }
-            }
-
-            fn read(self, settings: &Settings) -> bool {
-                match self { $( Self::$name => settings.$section.$field, )+ }
-            }
-
-            fn write(self, settings: &mut Settings, value: bool) {
-                match self { $( Self::$name => settings.$section.$field = value, )+ }
-            }
-
-            const fn control_id(self) -> usize { OPTION_ID_BASE + self as usize }
-        }
-    };
-}
-
-setting_options! {
-    Autostart: General, 0, general.autostart, "Start AltTabio when I sign in";
-    ReplaceAltTab: General, 1, general.replace_alt_tab, "Replace Alt+Tab";
-    ReplaceWinTab: General, 2, general.replace_win_tab, "Replace Win+Tab";
-    TypedSearch: General, 3, general.typed_search, "Enable typing to search tasks";
-    ReleaseAltSwitches: General, 4, general.release_alt_switches, "Switch when Alt is released";
-    ReleaseRightButtonSwitches: General, 5, general.release_right_button_switches, "Activate the selected task when the right mouse button is released";
-    RightButtonWheelSwitching: General, 6, general.right_button_wheel_switching, "Use right mouse button + wheel switching";
-    MouseOverSelection: General, 7, general.mouse_over_selection, "Select tasks when the mouse moves over them";
-    CompactList: Appearance, 0, appearance.compact_list, "Use a compact task list";
-    LargeIcons: Appearance, 1, appearance.large_icons, "Use large icons";
-    ShowNumbers: Appearance, 2, appearance.show_numbers, "Show number shortcuts";
-    ShowAppNames: Appearance, 3, appearance.show_app_names, "Show app names under titles";
-    VisibleBorders: Appearance, 4, appearance.visible_borders, "Visible borders";
-    Preview: Appearance, 5, appearance.preview, "Show a live preview";
-    FullDesktopPreview: Appearance, 6, appearance.full_desktop_preview, "Show the window in its position on the desktop";
-    CurrentMonitorFilter: Monitor, 0, monitor.use_current_monitor_filter, "Only show tasks from the current monitor";
-}
-const THEME_LABELS: [&str; 3] = ["Auto", "Light", "Dark"];
-const ICON_LABELS: [&str; 8] = [
-    "Azure",
-    "Copper",
-    "Ember",
-    "Indigo",
-    "Orchid",
-    "Rosewood",
-    "Vermilion",
-    "Violet",
-];
 
 #[link(name = "uxtheme")]
 unsafe extern "system" {
@@ -214,179 +130,11 @@ struct NativeComboBoxInfo {
     list: HWND,
 }
 
-const fn theme_selector_index(theme: Theme) -> usize {
-    match theme {
-        Theme::Auto => 0,
-        Theme::Light => 1,
-        Theme::Dark => 2,
-    }
-}
-
-const fn theme_from_selector_index(index: usize) -> Theme {
-    match index {
-        1 => Theme::Light,
-        2 => Theme::Dark,
-        _ => Theme::Auto,
-    }
-}
-
-const fn icon_selector_index(icon: IconColor) -> usize {
-    match icon {
-        IconColor::Azure => 0,
-        IconColor::Copper => 1,
-        IconColor::Ember => 2,
-        IconColor::Indigo => 3,
-        IconColor::Orchid => 4,
-        IconColor::Rosewood => 5,
-        IconColor::Vermilion => 6,
-        IconColor::Violet => 7,
-    }
-}
-
-const fn icon_from_selector_index(index: usize) -> IconColor {
-    match index {
-        1 => IconColor::Copper,
-        2 => IconColor::Ember,
-        3 => IconColor::Indigo,
-        4 => IconColor::Orchid,
-        5 => IconColor::Rosewood,
-        6 => IconColor::Vermilion,
-        7 => IconColor::Violet,
-        _ => IconColor::Azure,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ControlRect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-impl ControlRect {
-    const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    const fn right(self) -> i32 {
-        self.x + self.width
-    }
-
-    const fn bottom(self) -> i32 {
-        self.y + self.height
-    }
-
-    #[cfg(test)]
-    const fn contains(self, child: Self) -> bool {
-        child.x >= self.x
-            && child.y >= self.y
-            && child.right() <= self.right()
-            && child.bottom() <= self.bottom()
-    }
-
-    fn scaled(self, dpi: u32) -> Self {
-        let x = scale(self.x, dpi);
-        let y = scale(self.y, dpi);
-        Self::new(
-            x,
-            y,
-            scale(self.right(), dpi).saturating_sub(x),
-            scale(self.bottom(), dpi).saturating_sub(y),
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DialogLayout {
-    client: Size,
-    general_group: ControlRect,
-    general_options: [ControlRect; GENERAL_OPTION_COUNT],
-    appearance_group: ControlRect,
-    theme_label: ControlRect,
-    theme_selector: ControlRect,
-    icon_label: ControlRect,
-    icon_selector: ControlRect,
-    appearance_options: [ControlRect; APPEARANCE_OPTION_COUNT],
-    monitor_group: ControlRect,
-    monitor_option: ControlRect,
-    ok_button: ControlRect,
-    cancel_button: ControlRect,
-}
-
-impl DialogLayout {
-    fn for_dpi(dpi: u32) -> Self {
-        let logical = Self::logical();
-        Self {
-            client: Size {
-                width: scale(logical.client.width, dpi),
-                height: scale(logical.client.height, dpi),
-            },
-            general_group: logical.general_group.scaled(dpi),
-            general_options: logical.general_options.map(|rect| rect.scaled(dpi)),
-            appearance_group: logical.appearance_group.scaled(dpi),
-            theme_label: logical.theme_label.scaled(dpi),
-            theme_selector: logical.theme_selector.scaled(dpi),
-            icon_label: logical.icon_label.scaled(dpi),
-            icon_selector: logical.icon_selector.scaled(dpi),
-            appearance_options: logical.appearance_options.map(|rect| rect.scaled(dpi)),
-            monitor_group: logical.monitor_group.scaled(dpi),
-            monitor_option: logical.monitor_option.scaled(dpi),
-            ok_button: logical.ok_button.scaled(dpi),
-            cancel_button: logical.cancel_button.scaled(dpi),
-        }
-    }
-
-    const fn logical() -> Self {
-        Self {
-            client: Size {
-                width: CLIENT_WIDTH,
-                height: CLIENT_HEIGHT,
-            },
-            general_group: ControlRect::new(20, 16, 520, 250),
-            general_options: option_rows::<GENERAL_OPTION_COUNT>(38, 42, 484, 24, 27),
-            appearance_group: ControlRect::new(20, 280, 520, 316),
-            theme_label: ControlRect::new(38, 309, 64, 24),
-            theme_selector: ControlRect::new(112, 304, APPEARANCE_SELECTOR_WIDTH, 30),
-            icon_label: ControlRect::new(38, 347, 64, 24),
-            icon_selector: ControlRect::new(112, 342, APPEARANCE_SELECTOR_WIDTH, 30),
-            appearance_options: option_rows::<APPEARANCE_OPTION_COUNT>(38, 380, 484, 24, 27),
-            monitor_group: ControlRect::new(20, 610, 520, 64),
-            monitor_option: ControlRect::new(38, 635, 484, 24),
-            ok_button: ControlRect::new(338, 695, 96, 32),
-            cancel_button: ControlRect::new(444, 695, 96, 32),
-        }
-    }
-}
-
-const fn option_rows<const COUNT: usize>(
-    x: i32,
-    first_y: i32,
-    width: i32,
-    height: i32,
-    step: i32,
-) -> [ControlRect; COUNT] {
-    let mut rows = [ControlRect::new(0, 0, 0, 0); COUNT];
-    let mut index = 0;
-    let mut y = first_y;
-    while index < COUNT {
-        rows[index] = ControlRect::new(x, y, width, height);
-        y += step;
-        index += 1;
-    }
-    rows
-}
-
 pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
     let instance = dialog_host::module_instance()?;
     register_class(instance)?;
     let dpi = owner_dpi(owner);
-    let layout = DialogLayout::for_dpi(dpi);
+    let layout = SettingsLayout::for_dpi(dpi);
     let window_size = FRAME.window_size(layout.client, dpi)?;
     let window_origin = dialog_host::work_area_near_window(owner)?.centered(window_size);
     let initial_dark = resolve_current_theme(settings.appearance.theme) == ResolvedTheme::Dark;
@@ -445,7 +193,7 @@ impl DialogControls {
         self.options[option as usize]
     }
 
-    fn apply_layout(&self, layout: &DialogLayout, dpi: u32) -> Result<()> {
+    fn apply_layout(&self, layout: &SettingsLayout, dpi: u32) -> Result<()> {
         move_control(self.general_group, layout.general_group)?;
         for option in SettingOption::ALL {
             move_control(self.option(option), option.rect(layout))?;
@@ -602,7 +350,7 @@ impl DialogState {
         instance: HINSTANCE,
         host: &DialogHost<Self>,
     ) -> Result<()> {
-        let layout = DialogLayout::for_dpi(self.dpi);
+        let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
         self.controls.general_group = create_group(
             parent,
@@ -611,7 +359,7 @@ impl DialogState {
             layout.general_group,
             fonts.heading.0,
         )?;
-        self.create_options(parent, instance, &layout, &fonts, OptionGroup::General)?;
+        self.create_options(parent, instance, &layout, &fonts, Group::General)?;
         self.create_appearance_controls(parent, instance, &layout, &fonts)?;
         self.controls.monitor_group = create_group(
             parent,
@@ -620,7 +368,7 @@ impl DialogState {
             layout.monitor_group,
             fonts.heading.0,
         )?;
-        self.create_options(parent, instance, &layout, &fonts, OptionGroup::Monitor)?;
+        self.create_options(parent, instance, &layout, &fonts, Group::Monitor)?;
         self.controls.ok_button = create_button(
             parent,
             instance,
@@ -651,7 +399,7 @@ impl DialogState {
         &mut self,
         parent: HWND,
         instance: HINSTANCE,
-        layout: &DialogLayout,
+        layout: &SettingsLayout,
         fonts: &DialogFonts,
     ) -> Result<()> {
         self.controls.appearance_group = create_group(
@@ -679,16 +427,16 @@ impl DialogState {
             self.settings.appearance.icon,
             fonts.body.0,
         )?;
-        self.create_options(parent, instance, layout, fonts, OptionGroup::Appearance)
+        self.create_options(parent, instance, layout, fonts, Group::Appearance)
     }
 
     fn create_options(
         &mut self,
         parent: HWND,
         instance: HINSTANCE,
-        layout: &DialogLayout,
+        layout: &SettingsLayout,
         fonts: &DialogFonts,
-        group: OptionGroup,
+        group: Group,
     ) -> Result<()> {
         for option in SettingOption::ALL
             .into_iter()
@@ -710,7 +458,7 @@ impl DialogState {
 
     fn update_dpi(&mut self, dpi: u32) -> Result<()> {
         let dpi = dpi.max(BASE_DPI / 2);
-        let layout = DialogLayout::for_dpi(dpi);
+        let layout = SettingsLayout::for_dpi(dpi);
         let fonts = DialogFonts::create(dpi)?;
         self.controls.apply_layout(&layout, dpi)?;
         self.controls.apply_fonts(&fonts);
@@ -733,7 +481,7 @@ impl DialogState {
         if selected == CB_ERR {
             self.settings.appearance.theme
         } else {
-            theme_from_selector_index(usize::try_from(selected).unwrap_or_default())
+            THEME_CHOICES.value_at(usize::try_from(selected).unwrap_or_default())
         }
     }
 
@@ -751,7 +499,7 @@ impl DialogState {
         if selected == CB_ERR {
             self.settings.appearance.icon
         } else {
-            icon_from_selector_index(usize::try_from(selected).unwrap_or_default())
+            ICON_CHOICES.value_at(usize::try_from(selected).unwrap_or_default())
         }
     }
 
@@ -954,7 +702,7 @@ fn create_group(
     parent: HWND,
     instance: HINSTANCE,
     label: &str,
-    rect: ControlRect,
+    rect: Rect,
     font: HFONT,
 ) -> Result<HWND> {
     create_control(
@@ -978,7 +726,7 @@ fn create_checkbox(
     instance: HINSTANCE,
     label: &str,
     id: usize,
-    rect: ControlRect,
+    rect: Rect,
     checked: bool,
     font: HFONT,
     starts_group: bool,
@@ -1011,7 +759,7 @@ fn create_label(
     parent: HWND,
     instance: HINSTANCE,
     label: &str,
-    rect: ControlRect,
+    rect: Rect,
     font: HFONT,
 ) -> Result<HWND> {
     create_control(
@@ -1029,17 +777,17 @@ fn create_label(
 fn create_theme_selector(
     parent: HWND,
     instance: HINSTANCE,
-    rect: ControlRect,
+    rect: Rect,
     selected: Theme,
     font: HFONT,
 ) -> Result<HWND> {
     create_selector(
         parent,
         instance,
-        THEME_ID,
+        Selector::Theme.control_id(),
         rect,
-        &THEME_LABELS,
-        theme_selector_index(selected),
+        &Selector::Theme.entries(),
+        THEME_CHOICES.index_of(selected),
         font,
     )
 }
@@ -1047,17 +795,17 @@ fn create_theme_selector(
 fn create_icon_selector(
     parent: HWND,
     instance: HINSTANCE,
-    rect: ControlRect,
+    rect: Rect,
     selected: IconColor,
     font: HFONT,
 ) -> Result<HWND> {
     create_selector(
         parent,
         instance,
-        ICON_ID,
+        Selector::Icon.control_id(),
         rect,
-        &ICON_LABELS,
-        icon_selector_index(selected),
+        &Selector::Icon.entries(),
+        ICON_CHOICES.index_of(selected),
         font,
     )
 }
@@ -1070,7 +818,7 @@ fn create_selector(
     parent: HWND,
     instance: HINSTANCE,
     id: usize,
-    rect: ControlRect,
+    rect: Rect,
     labels: &[&str],
     selected_index: usize,
     font: HFONT,
@@ -1125,7 +873,7 @@ fn create_button(
     instance: HINSTANCE,
     label: &str,
     id: usize,
-    rect: ControlRect,
+    rect: Rect,
     default_button: bool,
     font: HFONT,
 ) -> Result<HWND> {
@@ -1515,27 +1263,8 @@ fn draw_text(
 }
 
 fn draw_checkmark(dc: HDC, rect: RECT, color: COLORREF, dpi: u32) -> Result<()> {
-    let points = checkmark_points(rect);
+    let points = checkmark_points(rect_from_native(rect));
     draw_polyline(dc, &points, color, scale(2, dpi).max(2))
-}
-
-fn checkmark_points(rect: RECT) -> [Point; 3] {
-    let width = rect.right.saturating_sub(rect.left);
-    let height = rect.bottom.saturating_sub(rect.top);
-    [
-        Point {
-            x: rect.left.saturating_add(width * 3 / 14),
-            y: rect.top.saturating_add(height * 7 / 14),
-        },
-        Point {
-            x: rect.left.saturating_add(width * 6 / 14),
-            y: rect.top.saturating_add(height * 10 / 14),
-        },
-        Point {
-            x: rect.left.saturating_add(width * 11 / 14),
-            y: rect.top.saturating_add(height * 4 / 14),
-        },
-    ]
 }
 
 fn draw_polyline(dc: HDC, points: &[Point], color: COLORREF, width: i32) -> Result<()> {
@@ -1598,7 +1327,7 @@ fn create_control(
     label: &str,
     style: WINDOW_STYLE,
     id: Option<usize>,
-    rect: ControlRect,
+    rect: Rect,
     font: HFONT,
 ) -> Result<HWND> {
     let text = wide(label);
@@ -1637,17 +1366,10 @@ fn set_control_font(control: HWND, font: HFONT) {
     }
 }
 
-fn move_control(control: HWND, rect: ControlRect) -> Result<()> {
+fn move_control(control: HWND, rect: Rect) -> Result<()> {
     unsafe {
         // SAFETY: control is a live child HWND and rect contains bounded, DPI-scaled coordinates.
         MoveWindow(control, rect.x, rect.y, rect.width, rect.height, true)
-    }
-}
-
-fn combo_window_rect(rect: ControlRect, dpi: u32) -> ControlRect {
-    ControlRect {
-        height: rect.height.saturating_add(scale(96, dpi)),
-        ..rect
     }
 }
 
@@ -1722,10 +1444,10 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
         state.cancel();
         request_dialog_close(hwnd);
         Some(LRESULT(0))
-    } else if command == THEME_ID && notification == CBN_SELCHANGE {
+    } else if command == Selector::Theme.control_id() && notification == CBN_SELCHANGE {
         state.apply_selected_theme();
         Some(LRESULT(0))
-    } else if command == ICON_ID && notification == CBN_SELCHANGE {
+    } else if command == Selector::Icon.control_id() && notification == CBN_SELCHANGE {
         state.apply_selected_icon();
         Some(LRESULT(0))
     } else if command == SettingOption::RightButtonWheelSwitching.control_id()
@@ -1800,66 +1522,7 @@ fn style_control_dc(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_checkbox_reads_only_its_bound_setting() {
-        let fields: [fn(&mut Settings) -> &mut bool; 16] = [
-            |s| &mut s.general.autostart,
-            |s| &mut s.general.replace_alt_tab,
-            |s| &mut s.general.replace_win_tab,
-            |s| &mut s.general.typed_search,
-            |s| &mut s.general.release_alt_switches,
-            |s| &mut s.general.release_right_button_switches,
-            |s| &mut s.general.right_button_wheel_switching,
-            |s| &mut s.general.mouse_over_selection,
-            |s| &mut s.appearance.compact_list,
-            |s| &mut s.appearance.large_icons,
-            |s| &mut s.appearance.show_numbers,
-            |s| &mut s.appearance.show_app_names,
-            |s| &mut s.appearance.visible_borders,
-            |s| &mut s.appearance.preview,
-            |s| &mut s.appearance.full_desktop_preview,
-            |s| &mut s.monitor.use_current_monitor_filter,
-        ];
-        let baseline = Settings::default();
-        for (index, field) in fields.into_iter().enumerate() {
-            let mut changed = baseline.clone();
-            *field(&mut changed) = !*field(&mut changed);
-            let mut expected = SettingOption::ALL.map(|option| option.read(&baseline));
-            expected[index] = !expected[index];
-            assert_eq!(
-                SettingOption::ALL.map(|option| option.read(&changed)),
-                expected,
-                "option {index}"
-            );
-            let option = SettingOption::ALL[index];
-            let mut roundtrip = baseline.clone();
-            option.write(&mut roundtrip, option.read(&changed));
-            assert_eq!(roundtrip, changed, "write for {option:?}");
-            option.write(&mut roundtrip, option.read(&baseline));
-            assert_eq!(roundtrip, baseline, "restore for {option:?}");
-        }
-    }
-
-    #[test]
-    fn named_options_preserve_unique_ids_and_layout_rows_at_each_dpi() {
-        for dpi in [96, 120, 144, 192] {
-            let layout = DialogLayout::for_dpi(dpi);
-            let rows = layout
-                .general_options
-                .into_iter()
-                .chain(layout.appearance_options)
-                .chain([layout.monitor_option]);
-            for (index, (option, row)) in SettingOption::ALL.into_iter().zip(rows).enumerate() {
-                assert_eq!(option.control_id(), OPTION_ID_BASE + index);
-                assert_eq!(
-                    option.rect(&layout),
-                    row,
-                    "layout for {option:?} at {dpi} DPI"
-                );
-            }
-        }
-    }
+    use alttabio::dialog_layout::Size;
 
     #[test]
     fn settings_window_is_not_owned_by_the_topmost_overlay() {
@@ -1901,53 +1564,6 @@ mod tests {
 
         assert_eq!(title, "AltTabio Settings");
         Ok(())
-    }
-
-    #[test]
-    fn visible_borders_option_tracks_the_appearance_setting() {
-        let mut settings = Settings::default();
-
-        assert_eq!(SettingOption::VisibleBorders.label(), "Visible borders");
-        assert!(!SettingOption::VisibleBorders.read(&settings));
-
-        settings.appearance.visible_borders = true;
-        assert!(SettingOption::VisibleBorders.read(&settings));
-    }
-
-    #[test]
-    fn typed_search_option_tracks_the_general_setting() {
-        let mut settings = Settings::default();
-
-        assert_eq!(
-            SettingOption::TypedSearch.label(),
-            "Enable typing to search tasks"
-        );
-        assert!(SettingOption::TypedSearch.read(&settings));
-
-        settings.general.typed_search = false;
-        assert!(!SettingOption::TypedSearch.read(&settings));
-    }
-
-    #[test]
-    fn theme_values_map_to_selector_indices_and_canonical_settings() {
-        for (index, theme) in [Theme::Auto, Theme::Light, Theme::Dark]
-            .into_iter()
-            .enumerate()
-        {
-            assert_eq!(theme_selector_index(theme), index);
-            assert_eq!(theme_from_selector_index(index), theme);
-            assert_eq!(THEME_LABELS[index], theme.as_ini_value());
-        }
-        assert_eq!(theme_from_selector_index(usize::MAX), Theme::Auto);
-    }
-
-    #[test]
-    fn icon_values_map_to_selector_indices_and_canonical_labels() {
-        for (index, icon) in IconColor::ALL.into_iter().enumerate() {
-            assert_eq!(icon_selector_index(icon), index);
-            assert_eq!(icon_from_selector_index(index), icon);
-            assert_eq!(ICON_LABELS[index], icon.as_ini_value());
-        }
     }
 
     #[test]
@@ -2010,102 +1626,5 @@ mod tests {
         assert!(targets.contains(&controls.general_group));
         assert!(targets.contains(&controls.appearance_group));
         assert!(targets.contains(&controls.monitor_group));
-    }
-
-    #[test]
-    fn checkmark_has_even_opposing_insets_inside_its_square() {
-        let square = RECT {
-            left: 0,
-            top: 0,
-            right: 14,
-            bottom: 14,
-        };
-
-        let points = checkmark_points(square);
-
-        assert_eq!(points[0], Point { x: 3, y: 7 });
-        assert_eq!(points[1], Point { x: 6, y: 10 });
-        assert_eq!(points[2], Point { x: 11, y: 4 });
-        assert_eq!(points[0].x - square.left, square.right - points[2].x);
-        assert_eq!(
-            points.iter().map(|point| point.y).min(),
-            Some(square.top + 4)
-        );
-        assert_eq!(
-            points.iter().map(|point| point.y).max(),
-            Some(square.bottom - 4)
-        );
-    }
-
-    #[test]
-    fn logical_layout_keeps_every_control_inside_its_section_or_client() {
-        let layout = DialogLayout::logical();
-        let client = ControlRect::new(0, 0, layout.client.width, layout.client.height);
-
-        assert!(
-            layout
-                .general_options
-                .into_iter()
-                .all(|rect| layout.general_group.contains(rect))
-        );
-        assert!(layout.appearance_group.contains(layout.theme_label));
-        assert!(layout.appearance_group.contains(layout.theme_selector));
-        assert!(layout.appearance_group.contains(layout.icon_label));
-        assert!(layout.appearance_group.contains(layout.icon_selector));
-        assert!(
-            layout
-                .appearance_options
-                .into_iter()
-                .all(|rect| layout.appearance_group.contains(rect))
-        );
-        assert!(layout.monitor_group.contains(layout.monitor_option));
-        assert!(client.contains(layout.general_group));
-        assert!(client.contains(layout.appearance_group));
-        assert!(client.contains(layout.monitor_group));
-        assert!(client.contains(layout.ok_button));
-        assert!(client.contains(layout.cancel_button));
-        assert!(layout.ok_button.right() < layout.cancel_button.x);
-        assert_eq!(layout.cancel_button.right(), layout.monitor_group.right());
-    }
-
-    #[test]
-    fn appearance_selectors_share_one_aligned_column() {
-        let layout = DialogLayout::logical();
-
-        assert_eq!(layout.theme_label.x, layout.icon_label.x);
-        assert_eq!(layout.theme_selector.x, layout.icon_selector.x);
-        assert_eq!(layout.theme_selector.width, layout.icon_selector.width);
-        assert_eq!(layout.theme_selector.width, APPEARANCE_SELECTOR_WIDTH);
-        assert!(layout.theme_selector.bottom() <= layout.icon_selector.y);
-    }
-
-    #[test]
-    fn layout_scales_consistently_at_one_hundred_fifty_percent() {
-        let normal = DialogLayout::for_dpi(96);
-        let scaled = DialogLayout::for_dpi(144);
-
-        assert_eq!(scaled.client.width, normal.client.width * 3 / 2);
-        assert_eq!(scaled.client.height, scale(CLIENT_HEIGHT, 144));
-        assert_eq!(scaled.general_group.x, normal.general_group.x * 3 / 2);
-        assert_eq!(
-            scaled.general_options[7].y,
-            scale(normal.general_options[7].y, 144)
-        );
-        assert_eq!(
-            scaled.theme_selector.width,
-            normal.theme_selector.width * 3 / 2
-        );
-        assert_eq!(
-            scaled.icon_selector.width,
-            normal.icon_selector.width * 3 / 2
-        );
-        assert_eq!(
-            scaled.cancel_button.right(),
-            normal.cancel_button.right() * 3 / 2
-        );
-        assert_eq!(
-            scaled.cancel_button.bottom(),
-            scale(DialogLayout::logical().cancel_button.bottom(), 144)
-        );
     }
 }
