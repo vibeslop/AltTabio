@@ -4,6 +4,7 @@ pub mod activation;
 pub mod app_switcher;
 pub mod close_button;
 pub mod deferred_switch;
+pub mod hook_flags;
 pub mod input;
 pub mod modal_state;
 pub mod overlay_layout;
