@@ -1,3 +1,6 @@
+//! Accessibility calls wait on the app they ask, up to a timeout, so one hung app would freeze
+//! the switcher if the main thread made them.
+
 use super::ax::AppObserver;
 use super::runtime::post_to_app;
 use super::window_list::{self, AX_TIMEOUT_SECONDS, EnumerationOptions, Unresponsive};
