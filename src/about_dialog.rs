@@ -6,7 +6,8 @@ use crate::native_drawing::{
     draw_text_with_font, fill_color, frame_color, rgb, system_color,
 };
 use crate::{app_icon, native_theme::DarkModeApi};
-use alttabio::dialog_layout::{MIN_DPI, Point, Rect, Size, hairline, scale};
+use alttabio::about_layout::{AboutLayout, CLIENT_HEIGHT, CLIENT_WIDTH};
+use alttabio::dialog_layout::{MIN_DPI, Point, Size, hairline, scale};
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
 use std::ffi::c_void;
@@ -39,62 +40,6 @@ const FRAME: DialogFrame = DialogFrame {
 const REPOSITORY_URL: &str = "https://github.com/vibeslop/AltTabio";
 const REPOSITORY_LABEL: &str = "github.com/vibeslop/AltTabio";
 const VERSION_LABEL: &str = concat!("Version ", env!("CARGO_PKG_VERSION"));
-const CLIENT_WIDTH: i32 = 430;
-const CLIENT_HEIGHT: i32 = 344;
-const CONTENT_HORIZONTAL_MARGIN: i32 = 94;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AboutLayout {
-    icon: Rect,
-    title: Rect,
-    version: Rect,
-    description: Rect,
-    repository: Rect,
-    copyright: Rect,
-    license: Rect,
-    footer: Rect,
-    close_button: Rect,
-}
-
-impl AboutLayout {
-    fn new(client_width: i32, client_height: i32, dpi: u32) -> Self {
-        let footer_height = scale(76, dpi).min(client_height);
-        let footer_top = client_height.saturating_sub(footer_height);
-        let button_width = scale(116, dpi).min(client_width);
-        let button_height = scale(42, dpi).min(footer_height);
-        let right_padding = scale(20, dpi);
-        let button_y = footer_top.saturating_add(
-            footer_height
-                .saturating_sub(button_height)
-                .saturating_div(2),
-        );
-        let content_left = scale(CONTENT_HORIZONTAL_MARGIN, dpi);
-        let content_width = client_width.saturating_sub(content_left.saturating_mul(2));
-        Self {
-            icon: Rect::new(
-                scale(20, dpi),
-                scale(18, dpi),
-                scale(48, dpi),
-                scale(48, dpi),
-            ),
-            title: Rect::new(content_left, scale(20, dpi), content_width, scale(38, dpi)),
-            version: Rect::new(content_left, scale(68, dpi), content_width, scale(28, dpi)),
-            description: Rect::new(content_left, scale(104, dpi), content_width, scale(28, dpi)),
-            repository: Rect::new(content_left, scale(140, dpi), content_width, scale(30, dpi)),
-            copyright: Rect::new(content_left, scale(184, dpi), content_width, scale(28, dpi)),
-            license: Rect::new(content_left, scale(214, dpi), content_width, scale(28, dpi)),
-            footer: Rect::new(0, footer_top, client_width, footer_height),
-            close_button: Rect::new(
-                client_width
-                    .saturating_sub(right_padding)
-                    .saturating_sub(button_width),
-                button_y,
-                button_width,
-                button_height,
-            ),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AboutPalette {
@@ -552,7 +497,6 @@ fn open_repository() -> std::result::Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alttabio::dialog_layout::BASE_DPI;
 
     #[test]
     fn about_content_uses_package_version_and_canonical_repository() {
@@ -573,59 +517,5 @@ mod tests {
         assert_ne!(light.text, dark.text);
         assert_eq!(dark.background, rgb(32, 32, 32));
         assert_eq!(dark.text, rgb(240, 240, 240));
-    }
-
-    #[test]
-    fn about_layout_keeps_the_link_and_close_button_inside_the_client() {
-        let layout = AboutLayout::new(CLIENT_WIDTH, CLIENT_HEIGHT, BASE_DPI);
-
-        assert!(layout.repository.x >= 0);
-        assert!(layout.repository.x + layout.repository.width <= CLIENT_WIDTH);
-        assert!(layout.close_button.x >= 0);
-        assert!(layout.close_button.x + layout.close_button.width <= CLIENT_WIDTH);
-        assert!(layout.close_button.y >= layout.footer.y);
-        assert!(layout.close_button.y + layout.close_button.height <= CLIENT_HEIGHT);
-    }
-
-    #[test]
-    fn about_layout_uses_compact_vertical_text_spacing() {
-        let layout = AboutLayout::new(CLIENT_WIDTH, CLIENT_HEIGHT, BASE_DPI);
-
-        assert_eq!(
-            layout.version.y - (layout.title.y + layout.title.height),
-            10
-        );
-        assert_eq!(
-            layout.description.y - (layout.version.y + layout.version.height),
-            8
-        );
-        assert_eq!(
-            layout.repository.y - (layout.description.y + layout.description.height),
-            8
-        );
-        assert_eq!(
-            layout.copyright.y - (layout.repository.y + layout.repository.height),
-            14
-        );
-        assert_eq!(
-            layout.license.y - (layout.copyright.y + layout.copyright.height),
-            2
-        );
-    }
-
-    #[test]
-    fn about_text_column_has_equal_horizontal_margins() {
-        let layout = AboutLayout::new(CLIENT_WIDTH, CLIENT_HEIGHT, BASE_DPI);
-
-        for text in [
-            layout.title,
-            layout.version,
-            layout.description,
-            layout.repository,
-            layout.copyright,
-            layout.license,
-        ] {
-            assert_eq!(text.x, CLIENT_WIDTH - (text.x + text.width));
-        }
     }
 }

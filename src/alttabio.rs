@@ -1,5 +1,6 @@
 //! Testable application behavior for `AltTabio`.
 
+pub mod about_layout;
 pub mod activation;
 pub mod app_switcher;
 pub mod close_button;
