@@ -2,9 +2,8 @@ use super::App;
 use super::activation::request_foreground;
 use super::display::position_on_cursor_monitor;
 use crate::preview::DwmPreview;
-use crate::renderer::{CloseButtonVisualState, RenderOptions, Renderer};
+use crate::renderer::{RenderOptions, Renderer};
 use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows};
-use alttabio::overlay_pointer;
 use std::ffi::c_void;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
@@ -124,7 +123,7 @@ impl App {
             switcher,
             self.preview.as_ref().and_then(DwmPreview::frame),
             render_options,
-            renderer_close_button_state(self.close_button.visual_state(selected_target)),
+            self.close_button.visual_state(selected_target),
         ) {
             eprintln!("Could not render the overlay: {error}");
         }
@@ -157,16 +156,5 @@ impl App {
         if !invalidated.as_bool() {
             eprintln!("Could not invalidate the overlay: {}", Error::from_thread());
         }
-    }
-}
-
-// The renderer still declares its own copy of the library's close-button state.
-const fn renderer_close_button_state(
-    state: overlay_pointer::CloseButtonVisualState,
-) -> CloseButtonVisualState {
-    match state {
-        overlay_pointer::CloseButtonVisualState::Normal => CloseButtonVisualState::Normal,
-        overlay_pointer::CloseButtonVisualState::Hovered => CloseButtonVisualState::Hovered,
-        overlay_pointer::CloseButtonVisualState::Pressed => CloseButtonVisualState::Pressed,
     }
 }

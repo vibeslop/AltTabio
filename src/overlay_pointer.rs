@@ -1,15 +1,8 @@
 //! Pointer interaction with the overlay's task list: hover selection and the close button.
 
+use crate::close_button::CloseButtonVisualState;
 use crate::switcher::Switcher;
 use crate::window_command::WindowCommand;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CloseButtonVisualState {
-    #[default]
-    Normal,
-    Hovered,
-    Pressed,
-}
 
 /// Targets are window handles, so a press stays bound to the window it started on even if the
 /// selection moves under the pointer.

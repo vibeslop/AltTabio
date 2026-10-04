@@ -1,3 +1,4 @@
+use alttabio::close_button::CloseButtonVisualState;
 use alttabio::overlay_layout::{for_compact_list, layout_dpi, layout_scale};
 use alttabio::settings::AppearanceSettings;
 use alttabio::switcher::Switcher;
@@ -111,14 +112,6 @@ pub struct RenderOptions {
     show_app_names: bool,
     compact_list: bool,
     large_icons: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CloseButtonVisualState {
-    #[default]
-    Normal,
-    Hovered,
-    Pressed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
