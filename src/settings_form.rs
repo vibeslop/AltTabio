@@ -1,18 +1,108 @@
-//! The Settings dialog's options, their bindings to `Settings`, and their placement in pixels.
+//! The Settings dialog's controls, their bindings to `Settings`, and their placement in pixels.
 
 use crate::dialog_layout::{Point, Rect, Size, scale};
 use crate::settings::{IconColor, Settings, Theme};
+use std::iter;
 
-pub const OPTION_COUNT: usize = 16;
+const OPTION_COUNT: usize = 16;
 const GENERAL_OPTION_COUNT: usize = 8;
 const APPEARANCE_OPTION_COUNT: usize = 7;
-/// `IDOK` and `IDCANCEL`, which `IsDialogMessageW` sends for Enter and Esc.
-pub const OK_ID: usize = 1;
-pub const CANCEL_ID: usize = 2;
+// IDOK and IDCANCEL, which IsDialogMessageW sends for Enter and Esc.
+const OK_ID: usize = 1;
+const CANCEL_ID: usize = 2;
 const OPTION_ID_BASE: usize = 100;
 const CLIENT_WIDTH: i32 = 560;
 const CLIENT_HEIGHT: i32 = 747;
 const APPEARANCE_SELECTOR_WIDTH: i32 = 180;
+
+/// Every child control of the dialog. The dialog creates, lays out, themes and paints its
+/// controls by walking `Control::all` instead of naming each one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Control {
+    Group(Group),
+    /// The caption left of a drop-down.
+    Label(Selector),
+    Selector(Selector),
+    Checkbox(SettingOption),
+    Button(DialogButton),
+}
+
+impl Control {
+    /// Every control in creation order, which is also the tab order.
+    pub fn all() -> impl Iterator<Item = Self> {
+        Group::ALL
+            .into_iter()
+            .flat_map(|group| {
+                iter::once(Self::Group(group))
+                    .chain(
+                        group.selectors().iter().flat_map(|selector| {
+                            [Self::Label(*selector), Self::Selector(*selector)]
+                        }),
+                    )
+                    .chain(
+                        SettingOption::ALL
+                            .into_iter()
+                            .filter(move |option| option.group() == group)
+                            .map(Self::Checkbox),
+                    )
+            })
+            .chain(DialogButton::ALL.map(Self::Button))
+    }
+
+    #[must_use]
+    pub fn with_id(id: usize) -> Option<Self> {
+        Self::all().find(|control| control.id() == Some(id))
+    }
+
+    /// The command identifier of a control that reports to the dialog.
+    #[must_use]
+    pub const fn id(self) -> Option<usize> {
+        match self {
+            Self::Group(_) | Self::Label(_) => None,
+            Self::Selector(selector) => Some(selector.control_id()),
+            Self::Checkbox(option) => Some(option.control_id()),
+            Self::Button(button) => Some(button.control_id()),
+        }
+    }
+
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::Group(group) => group.title(),
+            Self::Label(selector) => selector.label(),
+            Self::Selector(_) => "",
+            Self::Checkbox(option) => option.label(),
+            Self::Button(button) => button.label(),
+        }
+    }
+
+    /// The area the control shows.
+    #[must_use]
+    pub const fn rect(self, layout: &SettingsLayout) -> Rect {
+        match self {
+            Self::Group(group) => group.rect(layout),
+            Self::Label(selector) => selector.label_rect(layout),
+            Self::Selector(selector) => selector.rect(layout),
+            Self::Checkbox(option) => option.rect(layout),
+            Self::Button(button) => button.rect(layout),
+        }
+    }
+
+    /// The bounds of the control's window. A combo box's window also spans its drop-down list,
+    /// so it is taller than the field it shows.
+    #[must_use]
+    pub fn window_rect(self, layout: &SettingsLayout, dpi: u32) -> Rect {
+        let rect = self.rect(layout);
+        if let Self::Selector(_) = self {
+            Rect {
+                height: rect.height.saturating_add(scale(96, dpi)),
+                ..rect
+            }
+        } else {
+            rect
+        }
+    }
+}
 
 /// The group boxes that divide the dialog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,12 +113,63 @@ pub enum Group {
 }
 
 impl Group {
+    pub const ALL: [Self; 3] = [Self::General, Self::Appearance, Self::Monitor];
+
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Monitor => "Monitor",
+        }
+    }
+
+    /// The drop-downs at the top of the group, above its checkboxes.
+    const fn selectors(self) -> &'static [Selector] {
+        match self {
+            Self::Appearance => &Selector::ALL,
+            Self::General | Self::Monitor => &[],
+        }
+    }
+
+    const fn rect(self, layout: &SettingsLayout) -> Rect {
+        match self {
+            Self::General => layout.general_group,
+            Self::Appearance => layout.appearance_group,
+            Self::Monitor => layout.monitor_group,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DialogButton {
+    Ok,
+    Cancel,
+}
+
+impl DialogButton {
+    pub const ALL: [Self; 2] = [Self::Ok, Self::Cancel];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "OK",
+            Self::Cancel => "Cancel",
+        }
+    }
+
+    #[must_use]
+    pub const fn control_id(self) -> usize {
+        match self {
+            Self::Ok => OK_ID,
+            Self::Cancel => CANCEL_ID,
+        }
+    }
+
+    const fn rect(self, layout: &SettingsLayout) -> Rect {
+        match self {
+            Self::Ok => layout.ok_button,
+            Self::Cancel => layout.cancel_button,
         }
     }
 }
@@ -133,7 +274,6 @@ pub const ICON_CHOICES: Choices<IconColor> = Choices {
     name: IconColor::as_ini_value,
 };
 
-/// The drop-downs at the top of the Appearance group.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Selector {
     Theme,
@@ -141,6 +281,8 @@ pub enum Selector {
 }
 
 impl Selector {
+    pub const ALL: [Self; 2] = [Self::Theme, Self::Icon];
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -171,6 +313,20 @@ impl Selector {
         match self {
             Self::Theme => THEME_CHOICES.index_of(settings.appearance.theme),
             Self::Icon => ICON_CHOICES.index_of(settings.appearance.icon),
+        }
+    }
+
+    const fn label_rect(self, layout: &SettingsLayout) -> Rect {
+        match self {
+            Self::Theme => layout.theme_label,
+            Self::Icon => layout.icon_label,
+        }
+    }
+
+    const fn rect(self, layout: &SettingsLayout) -> Rect {
+        match self {
+            Self::Theme => layout.theme_selector,
+            Self::Icon => layout.icon_selector,
         }
     }
 }
@@ -249,15 +405,6 @@ const fn option_rows<const COUNT: usize>(
         index += 1;
     }
     rows
-}
-
-/// A combo box's window also spans its drop-down list, so it is taller than the field it shows.
-#[must_use]
-pub fn combo_window_rect(field: Rect, dpi: u32) -> Rect {
-    Rect {
-        height: field.height.saturating_add(scale(96, dpi)),
-        ..field
-    }
 }
 
 /// The three points of the tick drawn inside a checked box.
@@ -485,5 +632,90 @@ mod tests {
             scaled.cancel_button.bottom(),
             scale(SettingsLayout::logical().cancel_button.bottom(), 144)
         );
+    }
+
+    #[test]
+    fn control_table_lists_each_control_once_in_tab_order() {
+        let controls = Control::all().collect::<Vec<_>>();
+        let count = |kind: fn(&Control) -> bool| controls.iter().filter(|c| kind(c)).count();
+
+        assert_eq!(count(|control| matches!(control, Control::Group(_))), 3);
+        assert_eq!(count(|control| matches!(control, Control::Label(_))), 2);
+        assert_eq!(count(|control| matches!(control, Control::Selector(_))), 2);
+        assert_eq!(
+            count(|control| matches!(control, Control::Checkbox(_))),
+            OPTION_COUNT
+        );
+        assert_eq!(count(|control| matches!(control, Control::Button(_))), 2);
+        assert_eq!(controls.first(), Some(&Control::Group(Group::General)));
+        assert_eq!(
+            controls.get(controls.len() - 2..),
+            Some(
+                &[
+                    Control::Button(DialogButton::Ok),
+                    Control::Button(DialogButton::Cancel)
+                ][..]
+            )
+        );
+        for (index, control) in controls.iter().enumerate() {
+            assert_eq!(
+                controls.iter().filter(|other| *other == control).count(),
+                1,
+                "{control:?} at {index}"
+            );
+            if let Some(id) = control.id() {
+                assert_eq!(Control::with_id(id), Some(*control));
+            }
+        }
+        assert_eq!(
+            Control::with_id(OK_ID),
+            Some(Control::Button(DialogButton::Ok))
+        );
+        assert_eq!(
+            Control::with_id(CANCEL_ID),
+            Some(Control::Button(DialogButton::Cancel))
+        );
+    }
+
+    #[test]
+    fn controls_follow_the_group_box_that_contains_them() {
+        let layout = SettingsLayout::logical();
+        let mut group = None;
+        for control in Control::all() {
+            match control {
+                Control::Group(next) => group = Some(next),
+                Control::Button(_) => {}
+                Control::Label(_) | Control::Selector(_) | Control::Checkbox(_) => {
+                    let group = group.unwrap_or_else(|| panic!("{control:?} precedes every group"));
+                    assert!(
+                        group.rect(&layout).contains(control.rect(&layout)),
+                        "{control:?} outside {group:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_drop_down_windows_extend_below_their_field() {
+        let layout = SettingsLayout::for_dpi(144);
+
+        for control in Control::all() {
+            let field = control.rect(&layout);
+            let window = control.window_rect(&layout, 144);
+            let extension = if matches!(control, Control::Selector(_)) {
+                144
+            } else {
+                0
+            };
+            assert_eq!(
+                window,
+                Rect {
+                    height: field.height + extension,
+                    ..field
+                },
+                "{control:?}"
+            );
+        }
     }
 }

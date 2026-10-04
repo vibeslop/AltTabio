@@ -14,14 +14,16 @@ use crate::{
 use alttabio::dialog_layout::{BASE_DPI, Point, Rect, hairline, scale};
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
-    CANCEL_ID, Group, ICON_CHOICES, OK_ID, OPTION_COUNT, Selector, SettingOption, SettingsLayout,
-    THEME_CHOICES, checkmark_points, combo_window_rect,
+    Choices, Control, DialogButton, ICON_CHOICES, Selector, SettingOption, SettingsLayout,
+    THEME_CHOICES, checkmark_points,
 };
 use alttabio::theme::ResolvedTheme;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, E_FAIL, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_BTNFACE, COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT,
     COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT, DeleteObject, EndPaint, FW_NORMAL,
@@ -32,7 +34,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_GETSTATE, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_PUSHBUTTON, CB_ADDSTRING, CB_ERR, CB_SETCURSEL, CBN_SELCHANGE,
+    BS_GROUPBOX, BS_PUSHBUTTON, CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
     CBS_DROPDOWNLIST, CBS_HASSTRINGS, CreateWindowExW, GetClientRect, HMENU, MoveWindow,
     SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
     WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_ENABLE, WM_ERASEBKGND,
@@ -158,7 +160,10 @@ pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
     // The mutable borrow makes any synchronous callback re-entry during setup fail closed.
     host.state_mut()?.create_controls(window, instance, host)?;
     dialog.show_in_front();
-    let ok_button = host.state_mut()?.controls.ok_button;
+    let ok_button = host
+        .state_mut()?
+        .controls
+        .get(Control::Button(DialogButton::Ok));
     if let Err(error) = dialog_host::focus(ok_button) {
         eprintln!("Could not focus the settings OK button: {error}");
     }
@@ -174,117 +179,78 @@ fn settings_window_owner(_modal_controller: HWND) -> Option<HWND> {
     None
 }
 
+/// The window of each entry of `Control::all`, in creation order.
 #[derive(Default)]
-struct DialogControls {
-    general_group: HWND,
-    appearance_group: HWND,
-    monitor_group: HWND,
-    theme_label: HWND,
-    theme_selector: HWND,
-    icon_label: HWND,
-    icon_selector: HWND,
-    options: [HWND; OPTION_COUNT],
-    ok_button: HWND,
-    cancel_button: HWND,
-}
+struct DialogControls(Vec<(Control, HWND)>);
 
 impl DialogControls {
-    fn option(&self, option: SettingOption) -> HWND {
-        self.options[option as usize]
+    fn create(
+        parent: HWND,
+        instance: HINSTANCE,
+        layout: &SettingsLayout,
+        dpi: u32,
+        fonts: &DialogFonts,
+        settings: &Settings,
+    ) -> Result<Self> {
+        Control::all()
+            .map(|control| {
+                let rect = control.window_rect(layout, dpi);
+                create_child(parent, instance, control, rect, fonts.of(control), settings)
+                    .map(|hwnd| (control, hwnd))
+            })
+            .collect::<Result<_>>()
+            .map(Self)
+    }
+
+    /// The window of `control`, or a null handle before the controls exist.
+    fn get(&self, control: Control) -> HWND {
+        self.0
+            .iter()
+            .find(|(candidate, _)| *candidate == control)
+            .map_or_else(HWND::default, |(_, hwnd)| *hwnd)
+    }
+
+    fn find(&self, hwnd: HWND) -> Option<Control> {
+        self.0
+            .iter()
+            .find(|(_, candidate)| *candidate == hwnd)
+            .map(|(control, _)| *control)
+    }
+
+    fn checkbox(&self, option: SettingOption) -> HWND {
+        self.get(Control::Checkbox(option))
     }
 
     fn apply_layout(&self, layout: &SettingsLayout, dpi: u32) -> Result<()> {
-        move_control(self.general_group, layout.general_group)?;
-        for option in SettingOption::ALL {
-            move_control(self.option(option), option.rect(layout))?;
+        for &(control, hwnd) in &self.0 {
+            move_control(hwnd, control.window_rect(layout, dpi))?;
         }
-        move_control(self.appearance_group, layout.appearance_group)?;
-        move_control(self.theme_label, layout.theme_label)?;
-        move_control(
-            self.theme_selector,
-            combo_window_rect(layout.theme_selector, dpi),
-        )?;
-        move_control(self.icon_label, layout.icon_label)?;
-        move_control(
-            self.icon_selector,
-            combo_window_rect(layout.icon_selector, dpi),
-        )?;
-        move_control(self.monitor_group, layout.monitor_group)?;
-        move_control(self.ok_button, layout.ok_button)?;
-        move_control(self.cancel_button, layout.cancel_button)
+        Ok(())
     }
 
     fn apply_fonts(&self, fonts: &DialogFonts) {
-        for group in [
-            self.general_group,
-            self.appearance_group,
-            self.monitor_group,
-        ] {
-            set_control_font(group, fonts.heading.0);
-        }
-        for control in [
-            self.theme_label,
-            self.theme_selector,
-            self.icon_label,
-            self.icon_selector,
-        ]
-        .into_iter()
-        .chain(self.options)
-        .chain([self.ok_button, self.cancel_button])
-        {
-            set_control_font(control, fonts.body.0);
+        for &(control, hwnd) in &self.0 {
+            set_control_font(hwnd, fonts.of(control));
         }
     }
 
     fn theme_targets(&self) -> impl Iterator<Item = ThemeTarget> + '_ {
-        [
-            self.general_group,
-            self.appearance_group,
-            self.monitor_group,
-            self.theme_label,
-            self.icon_label,
-        ]
-        .into_iter()
-        .chain(self.options)
-        .chain([self.ok_button, self.cancel_button])
-        .map(|hwnd| ThemeTarget {
+        self.0.iter().map(|&(control, hwnd)| ThemeTarget {
             hwnd,
-            kind: ThemeTargetKind::Standard,
+            kind: if let Control::Selector(_) = control {
+                ThemeTargetKind::ComboBox
+            } else {
+                ThemeTargetKind::Standard
+            },
         })
-        .chain(
-            [self.theme_selector, self.icon_selector].map(|hwnd| ThemeTarget {
-                hwnd,
-                kind: ThemeTargetKind::ComboBox,
-            }),
-        )
     }
 
     fn custom_paint_targets(&self) -> impl Iterator<Item = HWND> + '_ {
-        [
-            self.general_group,
-            self.appearance_group,
-            self.monitor_group,
-        ]
-        .into_iter()
-        .chain(self.options)
-        .chain([
-            self.theme_selector,
-            self.icon_selector,
-            self.ok_button,
-            self.cancel_button,
-        ])
-    }
-}
-
-fn group_label(controls: &DialogControls, hwnd: HWND) -> Option<&'static str> {
-    if hwnd == controls.general_group {
-        Some("General")
-    } else if hwnd == controls.appearance_group {
-        Some("Appearance")
-    } else if hwnd == controls.monitor_group {
-        Some("Monitor")
-    } else {
-        None
+        // Static labels already take the palette's colors through WM_CTLCOLORSTATIC.
+        self.0
+            .iter()
+            .filter(|(control, _)| !matches!(control, Control::Label(_)))
+            .map(|(_, hwnd)| *hwnd)
     }
 }
 
@@ -352,41 +318,8 @@ impl DialogState {
     ) -> Result<()> {
         let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
-        self.controls.general_group = create_group(
-            parent,
-            instance,
-            "General",
-            layout.general_group,
-            fonts.heading.0,
-        )?;
-        self.create_options(parent, instance, &layout, &fonts, Group::General)?;
-        self.create_appearance_controls(parent, instance, &layout, &fonts)?;
-        self.controls.monitor_group = create_group(
-            parent,
-            instance,
-            "Monitor",
-            layout.monitor_group,
-            fonts.heading.0,
-        )?;
-        self.create_options(parent, instance, &layout, &fonts, Group::Monitor)?;
-        self.controls.ok_button = create_button(
-            parent,
-            instance,
-            "OK",
-            OK_ID,
-            layout.ok_button,
-            true,
-            fonts.body.0,
-        )?;
-        self.controls.cancel_button = create_button(
-            parent,
-            instance,
-            "Cancel",
-            CANCEL_ID,
-            layout.cancel_button,
-            false,
-            fonts.body.0,
-        )?;
+        self.controls =
+            DialogControls::create(parent, instance, &layout, self.dpi, &fonts, &self.settings)?;
         self.fonts = Some(fonts);
         install_custom_control_painting(&self.controls, host)?;
         self.sync_right_button_release_enabled();
@@ -395,69 +328,7 @@ impl DialogState {
         Ok(())
     }
 
-    fn create_appearance_controls(
-        &mut self,
-        parent: HWND,
-        instance: HINSTANCE,
-        layout: &SettingsLayout,
-        fonts: &DialogFonts,
-    ) -> Result<()> {
-        self.controls.appearance_group = create_group(
-            parent,
-            instance,
-            "Appearance",
-            layout.appearance_group,
-            fonts.heading.0,
-        )?;
-        self.controls.theme_label =
-            create_label(parent, instance, "Theme", layout.theme_label, fonts.body.0)?;
-        self.controls.theme_selector = create_theme_selector(
-            parent,
-            instance,
-            combo_window_rect(layout.theme_selector, self.dpi),
-            self.settings.appearance.theme,
-            fonts.body.0,
-        )?;
-        self.controls.icon_label =
-            create_label(parent, instance, "Icon", layout.icon_label, fonts.body.0)?;
-        self.controls.icon_selector = create_icon_selector(
-            parent,
-            instance,
-            combo_window_rect(layout.icon_selector, self.dpi),
-            self.settings.appearance.icon,
-            fonts.body.0,
-        )?;
-        self.create_options(parent, instance, layout, fonts, Group::Appearance)
-    }
-
-    fn create_options(
-        &mut self,
-        parent: HWND,
-        instance: HINSTANCE,
-        layout: &SettingsLayout,
-        fonts: &DialogFonts,
-        group: Group,
-    ) -> Result<()> {
-        for option in SettingOption::ALL
-            .into_iter()
-            .filter(|option| option.group() == group)
-        {
-            self.controls.options[option as usize] = create_checkbox(
-                parent,
-                instance,
-                option.label(),
-                option.control_id(),
-                option.rect(layout),
-                option.read(&self.settings),
-                fonts.body.0,
-                option == SettingOption::Autostart,
-            )?;
-        }
-        Ok(())
-    }
-
     fn update_dpi(&mut self, dpi: u32) -> Result<()> {
-        let dpi = dpi.max(BASE_DPI / 2);
         let layout = SettingsLayout::for_dpi(dpi);
         let fonts = DialogFonts::create(dpi)?;
         self.controls.apply_layout(&layout, dpi)?;
@@ -467,52 +338,47 @@ impl DialogState {
         Ok(())
     }
 
+    /// The value chosen in `selector`, or `current` while the list has no selection.
+    fn selected<T: Copy + Default + PartialEq>(
+        &self,
+        selector: Selector,
+        choices: &Choices<T>,
+        current: T,
+    ) -> T {
+        selected_index(self.controls.get(Control::Selector(selector)))
+            .map_or(current, |index| choices.value_at(index))
+    }
+
     fn selected_theme(&self) -> Theme {
-        let selected = unsafe {
-            // SAFETY: theme_selector is a live drop-down-list control with scalar message payloads.
-            SendMessageW(
-                self.controls.theme_selector,
-                windows::Win32::UI::WindowsAndMessaging::CB_GETCURSEL,
-                Some(WPARAM(0)),
-                Some(LPARAM(0)),
-            )
-        };
-        let selected = i32::try_from(selected.0).unwrap_or(CB_ERR);
-        if selected == CB_ERR {
-            self.settings.appearance.theme
-        } else {
-            THEME_CHOICES.value_at(usize::try_from(selected).unwrap_or_default())
-        }
+        self.selected(
+            Selector::Theme,
+            &THEME_CHOICES,
+            self.settings.appearance.theme,
+        )
     }
 
     fn selected_icon(&self) -> IconColor {
-        let selected = unsafe {
-            // SAFETY: icon_selector is a live drop-down-list control with scalar message payloads.
-            SendMessageW(
-                self.controls.icon_selector,
-                windows::Win32::UI::WindowsAndMessaging::CB_GETCURSEL,
-                Some(WPARAM(0)),
-                Some(LPARAM(0)),
-            )
-        };
-        let selected = i32::try_from(selected.0).unwrap_or(CB_ERR);
-        if selected == CB_ERR {
-            self.settings.appearance.icon
-        } else {
-            ICON_CHOICES.value_at(usize::try_from(selected).unwrap_or_default())
+        self.selected(Selector::Icon, &ICON_CHOICES, self.settings.appearance.icon)
+    }
+
+    fn selected_name(&self, selector: Selector) -> &'static str {
+        match selector {
+            Selector::Theme => self.selected_theme().as_ini_value(),
+            Selector::Icon => self.selected_icon().as_ini_value(),
         }
     }
 
     fn sync_right_button_release_enabled(&self) {
         let enabled = is_checked(
             self.controls
-                .option(SettingOption::RightButtonWheelSwitching),
+                .checkbox(SettingOption::RightButtonWheelSwitching),
         );
         unsafe {
-            // SAFETY: both option handles are live controls owned by this dialog.
-            let _was_enabled = EnableWindow(
+            // SAFETY: both option handles are live controls owned by this dialog. The result
+            // reports the previous state, not a failure.
+            let _was_disabled = EnableWindow(
                 self.controls
-                    .option(SettingOption::ReleaseRightButtonSwitches),
+                    .checkbox(SettingOption::ReleaseRightButtonSwitches),
                 enabled,
             );
         }
@@ -557,7 +423,10 @@ impl DialogState {
 
     fn accept(&mut self) {
         for option in SettingOption::ALL {
-            option.write(&mut self.settings, is_checked(self.controls.option(option)));
+            option.write(
+                &mut self.settings,
+                is_checked(self.controls.checkbox(option)),
+            );
         }
         self.settings.appearance.icon = self.selected_icon();
         self.settings.appearance.theme = self.selected_theme();
@@ -580,6 +449,14 @@ impl DialogFonts {
             body: OwnedFont::new(dpi, 9, FW_NORMAL.0.cast_signed(), false)?,
             heading: OwnedFont::new(dpi, 9, FW_SEMIBOLD.0.cast_signed(), false)?,
         })
+    }
+
+    const fn of(&self, control: Control) -> HFONT {
+        if let Control::Group(_) = control {
+            self.heading.0
+        } else {
+            self.body.0
+        }
     }
 }
 
@@ -619,6 +496,14 @@ impl ThemePalette {
                 accent: system_color(COLOR_HIGHLIGHT),
                 accent_text: system_color(COLOR_HIGHLIGHTTEXT),
             }
+        }
+    }
+
+    const fn label_text(&self, enabled: bool) -> COLORREF {
+        if enabled {
+            self.text
+        } else {
+            self.disabled_text
         }
     }
 }
@@ -698,200 +583,109 @@ fn combo_list_window(combo: HWND) -> Result<HWND> {
     }
 }
 
-fn create_group(
+fn create_child(
     parent: HWND,
     instance: HINSTANCE,
-    label: &str,
+    control: Control,
     rect: Rect,
     font: HFONT,
+    settings: &Settings,
 ) -> Result<HWND> {
-    create_control(
-        parent,
-        instance,
-        w!("BUTTON"),
-        label,
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
-        None,
-        rect,
-        font,
-    )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "checkbox construction keeps the Win32 parent, geometry, state, font, and tab-group contract explicit"
-)]
-fn create_checkbox(
-    parent: HWND,
-    instance: HINSTANCE,
-    label: &str,
-    id: usize,
-    rect: Rect,
-    checked: bool,
-    font: HFONT,
-    starts_group: bool,
-) -> Result<HWND> {
-    let group_style = if starts_group {
-        WS_GROUP
-    } else {
-        WINDOW_STYLE::default()
-    };
-    let control = create_control(
-        parent,
-        instance,
-        w!("BUTTON"),
-        label,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | group_style | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-        Some(id),
-        rect,
-        font,
-    )?;
-    if checked {
-        unsafe {
-            // SAFETY: control is a live checkbox and BM_SETCHECK consumes scalar values only.
-            SendMessageW(control, BM_SETCHECK, Some(WPARAM(1)), Some(LPARAM(0)));
+    let (class, style) = match control {
+        Control::Group(_) => (w!("BUTTON"), WINDOW_STYLE(BS_GROUPBOX as u32)),
+        Control::Label(_) => (w!("STATIC"), WINDOW_STYLE::default()),
+        Control::Selector(_) => (
+            w!("COMBOBOX"),
+            WS_TABSTOP
+                | WS_VSCROLL
+                | WINDOW_STYLE((CBS_DROPDOWNLIST | CBS_HASSTRINGS).cast_unsigned()),
+        ),
+        Control::Checkbox(option) => {
+            let group_style = if option == SettingOption::Autostart {
+                WS_GROUP
+            } else {
+                WINDOW_STYLE::default()
+            };
+            (
+                w!("BUTTON"),
+                WS_TABSTOP | group_style | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            )
         }
-    }
-    Ok(control)
-}
-
-fn create_label(
-    parent: HWND,
-    instance: HINSTANCE,
-    label: &str,
-    rect: Rect,
-    font: HFONT,
-) -> Result<HWND> {
-    create_control(
+        Control::Button(button) => {
+            let button_style = if button == DialogButton::Ok {
+                BS_DEFPUSHBUTTON
+            } else {
+                BS_PUSHBUTTON
+            };
+            (
+                w!("BUTTON"),
+                WS_TABSTOP | WINDOW_STYLE(button_style.cast_unsigned()),
+            )
+        }
+    };
+    let hwnd = create_control(
         parent,
         instance,
-        w!("STATIC"),
-        label,
-        WS_CHILD | WS_VISIBLE,
-        None,
-        rect,
-        font,
-    )
-}
-
-fn create_theme_selector(
-    parent: HWND,
-    instance: HINSTANCE,
-    rect: Rect,
-    selected: Theme,
-    font: HFONT,
-) -> Result<HWND> {
-    create_selector(
-        parent,
-        instance,
-        Selector::Theme.control_id(),
-        rect,
-        &Selector::Theme.entries(),
-        THEME_CHOICES.index_of(selected),
-        font,
-    )
-}
-
-fn create_icon_selector(
-    parent: HWND,
-    instance: HINSTANCE,
-    rect: Rect,
-    selected: IconColor,
-    font: HFONT,
-) -> Result<HWND> {
-    create_selector(
-        parent,
-        instance,
-        Selector::Icon.control_id(),
-        rect,
-        &Selector::Icon.entries(),
-        ICON_CHOICES.index_of(selected),
-        font,
-    )
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "selector construction keeps the native control contract explicit"
-)]
-fn create_selector(
-    parent: HWND,
-    instance: HINSTANCE,
-    id: usize,
-    rect: Rect,
-    labels: &[&str],
-    selected_index: usize,
-    font: HFONT,
-) -> Result<HWND> {
-    let selector = create_control(
-        parent,
-        instance,
-        w!("COMBOBOX"),
-        "",
-        WS_CHILD
-            | WS_VISIBLE
-            | WS_TABSTOP
-            | WS_VSCROLL
-            | WINDOW_STYLE((CBS_DROPDOWNLIST | CBS_HASSTRINGS).cast_unsigned()),
-        Some(id),
+        class,
+        control.text(),
+        WS_CHILD | WS_VISIBLE | style,
+        control.id(),
         rect,
         font,
     )?;
-    for label in labels {
-        let text = wide(label);
+    match control {
+        Control::Checkbox(option) if option.read(settings) => unsafe {
+            // SAFETY: hwnd is a live checkbox and BM_SETCHECK consumes scalar values only. It
+            // always returns zero.
+            SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(1)), Some(LPARAM(0)));
+        },
+        Control::Selector(selector) => fill_selector(hwnd, selector, settings)?,
+        _ => {}
+    }
+    Ok(hwnd)
+}
+
+fn fill_selector(hwnd: HWND, selector: Selector, settings: &Settings) -> Result<()> {
+    for entry in selector.entries() {
+        let text = wide(entry);
         let result = unsafe {
-            // SAFETY: selector is live and text remains valid throughout the synchronous insertion.
+            // SAFETY: hwnd is a live combo box and text remains valid throughout the synchronous
+            // insertion.
             SendMessageW(
-                selector,
+                hwnd,
                 CB_ADDSTRING,
                 Some(WPARAM(0)),
                 Some(LPARAM(text.as_ptr() as isize)),
             )
         };
         if i32::try_from(result.0).unwrap_or(CB_ERR) < 0 {
-            return Err(Error::from_hresult(HRESULT(0x8000_4005_u32.cast_signed())));
+            return Err(Error::from_hresult(E_FAIL));
         }
     }
     let result = unsafe {
-        // SAFETY: selector is live and selected_index refers to one of the inserted items.
+        // SAFETY: hwnd is a live combo box and the index refers to one of the inserted entries.
         SendMessageW(
-            selector,
+            hwnd,
             CB_SETCURSEL,
-            Some(WPARAM(selected_index)),
+            Some(WPARAM(selector.index(settings))),
             Some(LPARAM(0)),
         )
     };
     if i32::try_from(result.0).unwrap_or(CB_ERR) == CB_ERR {
-        Err(Error::from_hresult(HRESULT(0x8000_4005_u32.cast_signed())))
+        Err(Error::from_hresult(E_FAIL))
     } else {
-        Ok(selector)
+        Ok(())
     }
 }
 
-fn create_button(
-    parent: HWND,
-    instance: HINSTANCE,
-    label: &str,
-    id: usize,
-    rect: Rect,
-    default_button: bool,
-    font: HFONT,
-) -> Result<HWND> {
-    let button_style = if default_button {
-        BS_DEFPUSHBUTTON
-    } else {
-        BS_PUSHBUTTON
+/// The index of the entry selected in a combo box, or `None` while it has no selection.
+fn selected_index(combo: HWND) -> Option<usize> {
+    let selected = unsafe {
+        // SAFETY: combo is a live drop-down-list control with scalar message payloads.
+        SendMessageW(combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0)))
     };
-    create_control(
-        parent,
-        instance,
-        w!("BUTTON"),
-        label,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(button_style.cast_unsigned()),
-        Some(id),
-        rect,
-        font,
-    )
+    let selected = i32::try_from(selected.0).unwrap_or(CB_ERR);
+    (selected != CB_ERR).then(|| usize::try_from(selected).unwrap_or_default())
 }
 
 fn install_custom_control_painting(
@@ -1007,30 +801,23 @@ fn paint_settings_control(hwnd: HWND, dc: HDC, state: &DialogState) {
         eprintln!("Could not read settings control bounds for painting: {error}");
         return;
     }
-    let result = if let Some(label) = group_label(&state.controls, hwnd) {
-        paint_group_box(dc, client, label, state)
-    } else if let Some(option) = SettingOption::ALL
-        .into_iter()
-        .find(|option| state.controls.option(*option) == hwnd)
-    {
-        paint_checkbox(
+    let result = match state.controls.find(hwnd) {
+        Some(control @ Control::Group(_)) => paint_group_box(dc, client, control.text(), state),
+        Some(control @ Control::Checkbox(_)) => paint_checkbox(
             dc,
             client,
-            option.label(),
+            control.text(),
             is_checked(hwnd),
             is_control_enabled(hwnd),
             state,
-        )
-    } else if hwnd == state.controls.theme_selector {
-        paint_combo_box(dc, client, state.selected_theme().as_ini_value(), state)
-    } else if hwnd == state.controls.icon_selector {
-        paint_combo_box(dc, client, state.selected_icon().as_ini_value(), state)
-    } else if hwnd == state.controls.ok_button {
-        paint_push_button(dc, client, "OK", hwnd, state)
-    } else if hwnd == state.controls.cancel_button {
-        paint_push_button(dc, client, "Cancel", hwnd, state)
-    } else {
-        Ok(())
+        ),
+        Some(Control::Selector(selector)) => {
+            paint_combo_box(dc, client, state.selected_name(selector), state)
+        }
+        Some(control @ Control::Button(_)) => {
+            paint_push_button(dc, client, control.text(), hwnd, state)
+        }
+        Some(Control::Label(_)) | None => Ok(()),
     };
     if let Err(error) = result {
         eprintln!("Could not paint a settings control: {error}");
@@ -1052,7 +839,7 @@ fn paint_group_box(dc: HDC, client: RECT, label: &str, state: &DialogState) -> R
     )?;
 
     let Some(fonts) = state.fonts.as_ref() else {
-        return Err(Error::from_hresult(HRESULT(0x8000_4005_u32.cast_signed())));
+        return Err(Error::from_hresult(E_FAIL));
     };
     let text_size = measure_text(dc, label, fonts.heading.0)?;
     let horizontal_padding = scale(5, state.dpi);
@@ -1129,11 +916,7 @@ fn paint_checkbox(
         dc,
         label,
         text_rect,
-        if enabled {
-            state.palette.text
-        } else {
-            state.palette.disabled_text
-        },
+        state.palette.label_text(enabled),
         DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX | DRAW_TEXT_END_ELLIPSIS,
         state,
     )
@@ -1179,11 +962,7 @@ fn paint_push_button(
         dc,
         label,
         client,
-        if enabled {
-            state.palette.text
-        } else {
-            state.palette.disabled_text
-        },
+        state.palette.label_text(enabled),
         DRAW_TEXT_CENTER | DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
         state,
     )
@@ -1257,7 +1036,7 @@ fn draw_text(
     state: &DialogState,
 ) -> Result<()> {
     let Some(fonts) = state.fonts.as_ref() else {
-        return Err(Error::from_hresult(HRESULT(0x8000_4005_u32.cast_signed())));
+        return Err(Error::from_hresult(E_FAIL));
     };
     draw_text_with_font(dc, label, rect, color, format, fonts.body.0)
 }
@@ -1434,30 +1213,31 @@ fn handle_settings_message(
 }
 
 fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option<LRESULT> {
-    let command = usize::from(low_word(wparam.0));
+    let control = Control::with_id(usize::from(low_word(wparam.0)))?;
     let notification = u32::from(high_word(wparam.0));
-    if command == OK_ID {
-        state.accept();
-        request_dialog_close(hwnd);
-        Some(LRESULT(0))
-    } else if command == CANCEL_ID {
-        state.cancel();
-        request_dialog_close(hwnd);
-        Some(LRESULT(0))
-    } else if command == Selector::Theme.control_id() && notification == CBN_SELCHANGE {
-        state.apply_selected_theme();
-        Some(LRESULT(0))
-    } else if command == Selector::Icon.control_id() && notification == CBN_SELCHANGE {
-        state.apply_selected_icon();
-        Some(LRESULT(0))
-    } else if command == SettingOption::RightButtonWheelSwitching.control_id()
-        && notification == BN_CLICKED
-    {
-        state.sync_right_button_release_enabled();
-        Some(LRESULT(0))
-    } else {
-        None
+    match control {
+        Control::Button(DialogButton::Ok) => {
+            state.accept();
+            request_dialog_close(hwnd);
+        }
+        Control::Button(DialogButton::Cancel) => {
+            state.cancel();
+            request_dialog_close(hwnd);
+        }
+        Control::Selector(Selector::Theme) if notification == CBN_SELCHANGE => {
+            state.apply_selected_theme();
+        }
+        Control::Selector(Selector::Icon) if notification == CBN_SELCHANGE => {
+            state.apply_selected_icon();
+        }
+        Control::Checkbox(SettingOption::RightButtonWheelSwitching)
+            if notification == BN_CLICKED =>
+        {
+            state.sync_right_button_release_enabled();
+        }
+        _ => return None,
     }
+    Some(LRESULT(0))
 }
 
 fn request_dialog_close(hwnd: HWND) {
@@ -1523,6 +1303,7 @@ fn style_control_dc(
 mod tests {
     use super::*;
     use alttabio::dialog_layout::Size;
+    use alttabio::settings_form::Group;
 
     #[test]
     fn settings_window_is_not_owned_by_the_topmost_overlay() {
@@ -1600,31 +1381,23 @@ mod tests {
 
     #[test]
     fn group_headers_are_custom_paint_targets_with_stable_labels() {
-        let mut general = 0_u8;
-        let mut appearance = 0_u8;
-        let mut monitor = 0_u8;
-        let controls = DialogControls {
-            general_group: HWND(std::ptr::from_mut(&mut general).cast()),
-            appearance_group: HWND(std::ptr::from_mut(&mut appearance).cast()),
-            monitor_group: HWND(std::ptr::from_mut(&mut monitor).cast()),
-            ..DialogControls::default()
-        };
-
-        assert_eq!(
-            group_label(&controls, controls.general_group),
-            Some("General")
-        );
-        assert_eq!(
-            group_label(&controls, controls.appearance_group),
-            Some("Appearance")
-        );
-        assert_eq!(
-            group_label(&controls, controls.monitor_group),
-            Some("Monitor")
+        let mut storage = [0_u8; 32];
+        let controls = DialogControls(
+            Control::all()
+                .zip(storage.iter_mut())
+                .map(|(control, byte)| (control, HWND(std::ptr::from_mut(byte).cast())))
+                .collect(),
         );
         let targets = controls.custom_paint_targets().collect::<Vec<_>>();
-        assert!(targets.contains(&controls.general_group));
-        assert!(targets.contains(&controls.appearance_group));
-        assert!(targets.contains(&controls.monitor_group));
+
+        for (group, title) in [
+            (Group::General, "General"),
+            (Group::Appearance, "Appearance"),
+            (Group::Monitor, "Monitor"),
+        ] {
+            let hwnd = controls.get(Control::Group(group));
+            assert_eq!(controls.find(hwnd).map(Control::text), Some(title));
+            assert!(targets.contains(&hwnd), "{group:?}");
+        }
     }
 }
