@@ -13,7 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 impl App {
     pub(super) fn handle_foreground_check(&mut self) {
         win_events::acknowledge_foreground_check();
-        let policy = foreground_passthrough_policy(self.hwnd);
+        let policy = foreground_passthrough_policy(self.hwnd, &mut self.foreground_bounds_failing);
         if policy.bypasses_local_switching() && (self.is_visible() || self.pending_shell.is_some())
         {
             self.hide_overlay();
@@ -27,7 +27,12 @@ impl App {
     }
 }
 
-pub(super) fn foreground_passthrough_policy(overlay: HWND) -> PassthroughPolicy {
+/// `bounds_failing` records whether the last attempt to read the foreground window's bounds
+/// failed, so that a run of failures is logged once.
+pub(super) fn foreground_passthrough_policy(
+    overlay: HWND,
+    bounds_failing: &mut bool,
+) -> PassthroughPolicy {
     let hwnd = unsafe {
         // SAFETY: GetForegroundWindow has no pointer preconditions.
         GetForegroundWindow()
@@ -50,11 +55,11 @@ pub(super) fn foreground_passthrough_policy(overlay: HWND) -> PassthroughPolicy 
     };
     PassthroughPolicy::from_foreground(
         is_remote_desktop_client(&class_name, process.executable_stem()),
-        is_maximized_or_fullscreen(hwnd),
+        is_maximized_or_fullscreen(hwnd, bounds_failing),
     )
 }
 
-fn is_maximized_or_fullscreen(hwnd: HWND) -> bool {
+fn is_maximized_or_fullscreen(hwnd: HWND, bounds_failing: &mut bool) -> bool {
     if unsafe {
         // SAFETY: hwnd is the live foreground window.
         IsZoomed(hwnd)
@@ -63,29 +68,39 @@ fn is_maximized_or_fullscreen(hwnd: HWND) -> bool {
     {
         return true;
     }
+    // Every foreground change and every window move lands here, so a window whose bounds cannot
+    // be read would repeat its log line. Logging the first failure of a run is enough.
+    match foreground_bounds(hwnd) {
+        Ok((window, monitor)) => {
+            *bounds_failing = false;
+            window_fills_monitor(window, monitor)
+        }
+        Err(error) => {
+            if !std::mem::replace(bounds_failing, true) {
+                eprintln!("{error}");
+            }
+            false
+        }
+    }
+}
+
+/// The edges of the foreground window and of its monitor, as `window_fills_monitor` takes them.
+fn foreground_bounds(hwnd: HWND) -> Result<([i32; 4], [i32; 4]), String> {
     let mut window = RECT::default();
-    if unsafe {
+    unsafe {
         // SAFETY: `window` is writable and hwnd is a live top-level window.
         GetWindowRect(hwnd, &raw mut window)
     }
-    .is_err()
-    {
-        return false;
-    }
+    .map_err(|error| format!("Could not read the foreground window's bounds: {error}"))?;
     let monitor = unsafe {
         // SAFETY: hwnd is live and nearest-monitor fallback is requested.
         MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
     };
-    let Ok(info) = monitor_info(monitor) else {
-        return false;
-    };
-    window_fills_monitor(
+    let monitor = monitor_info(monitor)
+        .map_err(|error| format!("Could not read the foreground window's monitor: {error}"))?
+        .rcMonitor;
+    Ok((
         [window.left, window.top, window.right, window.bottom],
-        [
-            info.rcMonitor.left,
-            info.rcMonitor.top,
-            info.rcMonitor.right,
-            info.rcMonitor.bottom,
-        ],
-    )
+        [monitor.left, monitor.top, monitor.right, monitor.bottom],
+    ))
 }
