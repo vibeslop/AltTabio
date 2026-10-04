@@ -6,7 +6,7 @@ use super::{
     CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext, WM_HOOK_ACTION,
     WM_HOOK_HOTKEY_ACTION, process_with_context,
 };
-use alttabio::hook_flags::{INTERCEPTION_SUSPENDED, OVERLAY_FLAGS, encode_action};
+use alttabio::hook_flags::encode_action;
 use alttabio::input::{HookOutcome, InputAction, KeyTransition};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -36,9 +36,9 @@ fn post_context_actions(
     outcome: HookOutcome,
     mut post: impl FnMut(HWND, InputAction) -> bool,
 ) -> bool {
-    if context.flags.recovery_pending()
-        || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
-        || context.interception_generation & INTERCEPTION_SUSPENDED != 0
+    if !context
+        .flags
+        .generation_is_current(context.interception_generation)
     {
         context.registered_switch = None;
         return true;
@@ -65,9 +65,9 @@ fn post_context_actions(
         return true;
     }
     for action in outcome.actions() {
-        if context.flags.recovery_pending()
-            || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
-            || context.interception_generation & INTERCEPTION_SUSPENDED != 0
+        if !context
+            .flags
+            .generation_is_current(context.interception_generation)
         {
             // Keep release ownership even when a modal boundary races with this callback.
             return true;
@@ -139,7 +139,9 @@ fn route_registered_switch_with(
         outcome.suppress = false;
     }
     if context.registered_switch.is_some()
-        || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
+        || !context
+            .flags
+            .generation_is_current(context.interception_generation)
     {
         return outcome;
     }
@@ -233,7 +235,7 @@ mod tests {
     use super::*;
     use crate::hook::keyboard_state::KeyboardState;
     use crate::hook::test_context;
-    use alttabio::hook_flags::{HookFlags, OVERLAY_ACTIVE, SEARCH_ACTIVE};
+    use alttabio::hook_flags::{HookFlags, OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE};
     use alttabio::input::{HookSettings, HookState, Key, KeyEvent, Modifiers, MouseEvent};
     use std::sync::{Arc, atomic::AtomicBool};
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_LMENU;
