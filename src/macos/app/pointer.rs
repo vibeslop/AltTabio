@@ -31,6 +31,7 @@ impl App {
                     (location.x, location.y),
                     &shown,
                     selected_app,
+                    selected_window,
                 );
                 self.apply_pointer(response);
             }
