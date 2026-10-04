@@ -1,7 +1,7 @@
 //! Creation and state of the Settings child controls, one window per entry of `Control::all`.
 
 use super::DialogFonts;
-use crate::dialog_host::wide;
+use crate::win32::wide;
 use alttabio::dialog_layout::Rect;
 use alttabio::settings::Settings;
 use alttabio::settings_form::{Control, DialogButton, Selector, SettingOption, SettingsLayout};

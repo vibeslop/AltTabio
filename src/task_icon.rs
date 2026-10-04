@@ -1,3 +1,4 @@
+use crate::win32::wide;
 use std::collections::HashMap;
 use windows::Win32::Foundation::{HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::UI::Shell::PropertiesSystem::{
@@ -70,7 +71,7 @@ fn extract_icon(executable: &str) -> Option<OwnedIcon> {
     if executable.is_empty() || executable.contains('\0') {
         return None;
     }
-    let path: Vec<u16> = executable.encode_utf16().chain(Some(0)).collect();
+    let path = wide(executable);
     let mut icon = HICON::default();
     // SAFETY: path is terminated and live; icon is writable for the one requested large icon.
     let count = unsafe { ExtractIconExW(PCWSTR(path.as_ptr()), 0, Some(&raw mut icon), None, 1) };

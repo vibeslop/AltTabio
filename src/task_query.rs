@@ -258,7 +258,6 @@ mod tests {
     use super::*;
     use windows::Win32::Foundation::{HINSTANCE, LRESULT, WPARAM};
     use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_INHERITED, DWM_CLOAKED_SHELL};
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, WNDCLASSEXW, WS_POPUP,
     };
@@ -322,8 +321,7 @@ mod tests {
             })
             .unwrap_or_default()
         }
-        // SAFETY: querying this process module transfers no ownership.
-        let instance = HINSTANCE(unsafe { GetModuleHandleW(None) }?.0);
+        let instance = crate::win32::module_instance()?;
         let class = WNDCLASSEXW {
             cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).unwrap_or_default(),
             lpfnWndProc: Some(test_proc),

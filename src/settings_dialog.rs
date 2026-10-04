@@ -3,10 +3,10 @@ mod paint;
 mod theme;
 
 use crate::dialog_host::{
-    self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog, OwnerGuard, high_word,
-    low_word,
+    self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog, OwnerGuard,
 };
 use crate::native_drawing::{OwnedBrush, OwnedFont, system_color};
+use crate::win32::{self, high_word, low_word};
 use crate::{
     app_icon,
     native_theme::{DarkModeApi, resolve_current_theme},
@@ -45,12 +45,12 @@ const FRAME: DialogFrame = DialogFrame {
 };
 
 pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
-    let instance = dialog_host::module_instance()?;
+    let instance = win32::module_instance()?;
     register_class(instance)?;
     let dpi = owner_dpi(owner);
     let layout = SettingsLayout::for_dpi(dpi);
     let window_size = FRAME.window_size(layout.client, dpi)?;
-    let window_origin = dialog_host::work_area_near_window(owner)?.centered(window_size);
+    let window_origin = win32::work_area_near_window(owner)?.centered(window_size);
     let initial_dark = resolve_current_theme(settings.appearance.theme) == ResolvedTheme::Dark;
     let dark_mode_api = match DarkModeApi::load(initial_dark) {
         Ok(api) => Some(api),
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn settings_window_reports_its_caption() -> Result<()> {
-        let instance = dialog_host::module_instance()?;
+        let instance = win32::module_instance()?;
         register_class(instance)?;
         let dialog = ModalDialog::create(
             instance,

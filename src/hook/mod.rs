@@ -6,6 +6,7 @@ mod keyboard_state;
 mod recovery;
 mod replay;
 
+use crate::win32::module_instance;
 use alttabio::hook_flags::{
     HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS,
     SEARCH_ACTIVE,
@@ -26,8 +27,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -261,12 +261,8 @@ fn run_hook_thread(
     publish_recovery_flags(Some(Arc::clone(&hook_context.flags)));
     CONTEXT.with(|context| *context.borrow_mut() = Some(hook_context));
 
-    let module = unsafe {
-        // SAFETY: None requests a borrowed handle for this executable module.
-        GetModuleHandleW(None)
-    }
-    .map_err(|error| format!("Could not resolve the executable module: {error}"))?;
-    let instance = HINSTANCE(module.0);
+    let instance = module_instance()
+        .map_err(|error| format!("Could not resolve the executable module: {error}"))?;
     let keyboard = unsafe {
         // SAFETY: `keyboard_proc` has the required ABI and remains valid until this thread removes
         // the hook after its message loop exits.

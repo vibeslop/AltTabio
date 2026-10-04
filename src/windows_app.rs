@@ -21,6 +21,7 @@ use crate::startup;
 use crate::task_icon::TaskIcons;
 use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
+use crate::win32::{module_instance, wide};
 use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
 use alttabio::settings::Settings;
@@ -34,7 +35,6 @@ use std::cell::RefCell;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW,
     GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_OK,
@@ -354,7 +354,7 @@ fn show_error_for_window(owner: HWND, message: &str) {
 }
 
 fn show_error_box(owner: Option<HWND>, message: &str) {
-    let text = null_terminated(message);
+    let text = wide(message);
     let result = unsafe {
         // SAFETY: both UTF-16 buffers remain alive and null terminated for the synchronous call.
         MessageBoxW(
@@ -397,14 +397,6 @@ fn register_window_class(instance: HINSTANCE) -> Result<()> {
     }
 }
 
-fn module_instance() -> Result<HINSTANCE> {
-    let module = unsafe {
-        // SAFETY: None requests a borrowed handle for this executable module.
-        GetModuleHandleW(None)
-    }?;
-    Ok(HINSTANCE(module.0))
-}
-
 fn run_message_loop() -> Result<()> {
     let mut message = MSG::default();
     loop {
@@ -426,6 +418,7 @@ fn run_message_loop() -> Result<()> {
     }
 }
 
+// Only mouse.rs splits LPARAM through these; elsewhere the words come from `crate::win32`.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -442,16 +435,4 @@ const fn low_word_isize(value: isize) -> u16 {
 )]
 const fn high_word_isize(value: isize) -> u16 {
     (value >> 16) as u16
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Win32 packs a signed 16-bit wheel delta into the high word of WPARAM"
-)]
-const fn high_word_usize(value: usize) -> u16 {
-    (value >> 16) as u16
-}
-
-fn null_terminated(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
 }

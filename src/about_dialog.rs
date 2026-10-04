@@ -1,10 +1,9 @@
-use crate::dialog_host::{
-    self, DialogFrame, DialogWindow, Keyboard, ModalDialog, dark, native_rect, point_from_lparam,
-};
+use crate::dialog_host::{self, DialogFrame, DialogWindow, Keyboard, ModalDialog, dark};
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE, DRAW_TEXT_VCENTER, OwnedFont,
     draw_text_with_font, fill_color, frame_color, rgb, system_color,
 };
+use crate::win32::{self, native_rect, point_from_lparam};
 use crate::{app_icon, native_theme::DarkModeApi};
 use alttabio::about_layout::{AboutLayout, CLIENT_HEIGHT, CLIENT_WIDTH};
 use alttabio::dialog_layout::{MIN_DPI, Point, Size, hairline, scale};
@@ -161,7 +160,7 @@ impl DialogWindow for DialogState {
 }
 
 pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<(), String> {
-    let instance = dialog_host::module_instance().map_err(|error| error.to_string())?;
+    let instance = win32::module_instance().map_err(|error| error.to_string())?;
     let icon = app_icon::load_app(instance, icon_color).map_err(|error| error.to_string())?;
     dialog_host::register_class::<DialogState>(instance, icon, HBRUSH::default())
         .map_err(|error| error.to_string())?;
@@ -211,7 +210,7 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
 /// The origin and outer size that center About's client area at `dpi` on the cursor's monitor.
 fn window_bounds(dpi: u32) -> Result<(Point, Size)> {
     let size = FRAME.window_size(Size::new(CLIENT_WIDTH, CLIENT_HEIGHT).scaled(dpi), dpi)?;
-    let origin = dialog_host::work_area_near_cursor()?.centered(size);
+    let origin = win32::work_area_near_cursor()?.centered(size);
     Ok((origin, size))
 }
 
@@ -479,7 +478,7 @@ impl DialogFonts {
 }
 
 fn open_repository() -> std::result::Result<(), String> {
-    let repository_url = dialog_host::wide(REPOSITORY_URL);
+    let repository_url = win32::wide(REPOSITORY_URL);
     let result = unsafe {
         // SAFETY: repository_url remains live and all other string pointers are static or null.
         ShellExecuteW(

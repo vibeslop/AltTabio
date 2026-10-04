@@ -2,12 +2,10 @@ use super::App;
 use crate::process_info::ProcessInfo;
 use crate::task_query::window_class_name;
 use crate::win_events;
+use crate::win32::monitor_info;
 use alttabio::passthrough::{PassthroughPolicy, is_remote_desktop_client, window_fills_monitor};
-use std::mem::size_of;
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsZoomed,
 };
@@ -78,22 +76,16 @@ fn is_maximized_or_fullscreen(hwnd: HWND) -> bool {
         // SAFETY: hwnd is live and nearest-monitor fallback is requested.
         MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
     };
-    let mut monitor_info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or_default(),
-        ..MONITORINFO::default()
+    let Ok(info) = monitor_info(monitor) else {
+        return false;
     };
-    let success = unsafe {
-        // SAFETY: `monitor_info` is writable with a correct cbSize.
-        GetMonitorInfoW(monitor, &raw mut monitor_info)
-    };
-    success.as_bool()
-        && window_fills_monitor(
-            [window.left, window.top, window.right, window.bottom],
-            [
-                monitor_info.rcMonitor.left,
-                monitor_info.rcMonitor.top,
-                monitor_info.rcMonitor.right,
-                monitor_info.rcMonitor.bottom,
-            ],
-        )
+    window_fills_monitor(
+        [window.left, window.top, window.right, window.bottom],
+        [
+            info.rcMonitor.left,
+            info.rcMonitor.top,
+            info.rcMonitor.right,
+            info.rcMonitor.bottom,
+        ],
+    )
 }

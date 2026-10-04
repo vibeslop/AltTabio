@@ -1,15 +1,11 @@
 use super::App;
 use crate::preview::DwmPreview;
+use crate::win32::{monitor_info, monitor_near_cursor};
 use alttabio::overlay_window::{ScreenRect, overlay_bounds, overlay_bounds_for_dpi_change};
-use std::mem::size_of;
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MonitorFromRect,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-};
-use windows::core::{Error, Result};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
+use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+use windows::core::Result;
 
 impl App {
     pub(super) fn handle_dpi_changed(&mut self, lparam: LPARAM) {
@@ -105,28 +101,8 @@ impl App {
 }
 
 pub(super) fn position_on_cursor_monitor(hwnd: HWND) -> Result<()> {
-    let mut cursor = POINT::default();
-    unsafe {
-        // SAFETY: `cursor` is writable for the call.
-        GetCursorPos(&raw mut cursor)?;
-    }
-    let monitor = unsafe {
-        // SAFETY: the POINT value is initialized and the flag requests a nearest-monitor fallback.
-        MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
-    };
-    let mut monitor_info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or_default(),
-        ..MONITORINFO::default()
-    };
-    let success = unsafe {
-        // SAFETY: `monitor_info` is writable with a correct cbSize and monitor is the handle returned
-        // by MonitorFromPoint.
-        GetMonitorInfoW(monitor, &raw mut monitor_info)
-    };
-    if !success.as_bool() {
-        return Err(Error::from_thread());
-    }
-    let bounds = win32_rect(overlay_bounds(screen_rect(monitor_info.rcWork)));
+    let work_area = monitor_info(monitor_near_cursor()?)?.rcWork;
+    let bounds = win32_rect(overlay_bounds(screen_rect(work_area)));
     unsafe {
         // SAFETY: HWND is live; the calculated dimensions are within the selected work area.
         SetWindowPos(
@@ -147,19 +123,7 @@ fn monitor_work_area_from_rect(rectangle: RECT) -> Result<RECT> {
         // SAFETY: rectangle is initialized and the fallback flag requests the nearest monitor.
         MonitorFromRect(&raw const rectangle, MONITOR_DEFAULTTONEAREST)
     };
-    let mut monitor_info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or_default(),
-        ..MONITORINFO::default()
-    };
-    let success = unsafe {
-        // SAFETY: monitor_info is writable with a correct cbSize and monitor came from
-        // MonitorFromRect.
-        GetMonitorInfoW(monitor, &raw mut monitor_info)
-    };
-    if !success.as_bool() {
-        return Err(Error::from_thread());
-    }
-    Ok(monitor_info.rcWork)
+    Ok(monitor_info(monitor)?.rcWork)
 }
 
 const fn screen_rect(rect: RECT) -> ScreenRect {

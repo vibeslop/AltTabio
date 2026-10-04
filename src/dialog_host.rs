@@ -1,28 +1,25 @@
 //! Win32 plumbing shared by the native dialogs: window classes, the modal loop, and placement.
 
-use alttabio::dialog_layout::{MIN_DPI, Point, Rect, Size};
+use crate::win32::{low_word, wide};
+use alttabio::dialog_layout::{MIN_DPI, Point, Size};
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::mem::{size_of, size_of_val};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
 use windows::Win32::Foundation::{
-    E_FAIL, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT,
-    RECT, SetLastError, WIN32_ERROR, WPARAM,
+    E_FAIL, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
+    SetLastError, WIN32_ERROR, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HBRUSH, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromPoint, MonitorFromWindow,
-};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Graphics::Gdi::{HBRUSH, InvalidateRect};
 use windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON,
-    IDC_ARROW, IsDialogMessageW, LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE, WM_NCDESTROY,
+    DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, HICON, IDC_ARROW,
+    IsDialogMessageW, LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+    SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE, WM_NCDESTROY,
     WNDCLASSEXW,
 };
 use windows::core::{Error, PCWSTR, Result};
@@ -591,120 +588,5 @@ impl Drop for OwnerGuard {
             let _was_disabled = EnableWindow(self.0, true);
         }
         bring_to_front(self.0, "the AltTabio window");
-    }
-}
-
-pub(crate) fn module_instance() -> Result<HINSTANCE> {
-    let module = unsafe {
-        // SAFETY: None requests a borrowed handle for this executable module.
-        GetModuleHandleW(None)
-    }?;
-    Ok(HINSTANCE(module.0))
-}
-
-pub(crate) fn monitor_info(monitor: HMONITOR) -> Result<MONITORINFO> {
-    let mut info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or(u32::MAX),
-        ..MONITORINFO::default()
-    };
-    let read = unsafe {
-        // SAFETY: info is a writable structure with its size field initialized.
-        GetMonitorInfoW(monitor, &raw mut info)
-    };
-    if read.as_bool() {
-        Ok(info)
-    } else {
-        Err(Error::from_thread())
-    }
-}
-
-/// The work area of the monitor nearest `window`, including one that is hidden or off-screen.
-pub(crate) fn work_area_near_window(window: HWND) -> Result<Rect> {
-    let monitor = unsafe {
-        // SAFETY: window is a live HWND and the nearest-monitor fallback always yields a monitor.
-        MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)
-    };
-    Ok(rect_from_native(monitor_info(monitor)?.rcWork))
-}
-
-pub(crate) fn work_area_near_cursor() -> Result<Rect> {
-    let mut cursor = POINT::default();
-    unsafe {
-        // SAFETY: cursor is writable for the synchronous read.
-        GetCursorPos(&raw mut cursor)?;
-    }
-    let monitor = unsafe {
-        // SAFETY: cursor is an initialized screen point and the fallback always yields a monitor.
-        MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
-    };
-    Ok(rect_from_native(monitor_info(monitor)?.rcWork))
-}
-
-pub(crate) const fn native_rect(rect: Rect) -> RECT {
-    RECT {
-        left: rect.x,
-        top: rect.y,
-        right: rect.right(),
-        bottom: rect.bottom(),
-    }
-}
-
-pub(crate) const fn rect_from_native(rect: RECT) -> Rect {
-    Rect::from_edges(rect.left, rect.top, rect.right, rect.bottom)
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Win32 packs two 16-bit words into WPARAM and LPARAM"
-)]
-pub(crate) const fn low_word(value: usize) -> u16 {
-    value as u16
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Win32 packs two 16-bit words into WPARAM and LPARAM"
-)]
-pub(crate) const fn high_word(value: usize) -> u16 {
-    (value >> 16) as u16
-}
-
-/// Client coordinates from a mouse message, which are signed so they can lie left of or above
-/// the window.
-pub(crate) fn point_from_lparam(lparam: LPARAM) -> Point {
-    let raw = lparam.0.cast_unsigned();
-    Point::new(
-        i32::from(low_word(raw).cast_signed()),
-        i32::from(high_word(raw).cast_signed()),
-    )
-}
-
-pub(crate) fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn message_words_split_wparam_and_signed_lparam_coordinates() {
-        assert_eq!(low_word(0x0003_0002), 2);
-        assert_eq!(high_word(0x0003_0002), 3);
-        assert_eq!(high_word(usize::MAX), u16::MAX);
-        assert_eq!(point_from_lparam(LPARAM(0xfffe_fffd)), Point::new(-3, -2));
-    }
-
-    #[test]
-    fn native_rects_round_trip_through_dialog_rects() {
-        let native = RECT {
-            left: -40,
-            top: 10,
-            right: 60,
-            bottom: 90,
-        };
-
-        assert_eq!(rect_from_native(native), Rect::new(-40, 10, 100, 80));
-        assert_eq!(native_rect(rect_from_native(native)), native);
     }
 }

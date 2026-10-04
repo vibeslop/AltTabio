@@ -1,14 +1,12 @@
 use super::mouse::WM_MOUSE_LEAVE;
-use super::{
-    App, CLOSE_REFRESH_TIMER_ID, SHELL_DISMISS_TIMER_ID, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
-    high_word_isize, high_word_usize, low_word_isize,
-};
+use super::{App, CLOSE_REFRESH_TIMER_ID, SHELL_DISMISS_TIMER_ID, WM_SHOW_ABOUT, WM_SHOW_SETTINGS};
 use crate::hook::{HookThread, WM_HOOK_ACTION, decode_action, decode_virtual_key};
 use crate::shell_menu;
 use crate::tray::{TrayAction, TrayIcon, WM_TRAY_CALLBACK};
 use crate::win_events::{
     LISTED_REFRESH_RETRY_TIMER_ID, WM_FOREGROUND_CHECK, WM_LISTED_WINDOW_REFRESH,
 };
+use crate::win32::{high_word, low_word};
 use alttabio::input::{InputAction, OverlayKeyEvent, overlay_key_action};
 use alttabio::switcher::SwitcherEffect;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -69,13 +67,13 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_MOUSEWHEEL => {
-                let delta = high_word_usize(wparam.0).cast_signed();
+                let delta = high_word(wparam.0).cast_signed();
                 self.handle_input_action(InputAction::MouseWheel(i32::from(delta.signum())));
                 Some(LRESULT(0))
             }
             WM_SIZE => {
-                let width = u32::from(low_word_isize(lparam.0));
-                let height = u32::from(high_word_isize(lparam.0));
+                let width = u32::from(low_word(lparam.0.cast_unsigned()));
+                let height = u32::from(high_word(lparam.0.cast_unsigned()));
                 self.resize_content(width, height);
                 Some(LRESULT(0))
             }

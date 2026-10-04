@@ -1,7 +1,7 @@
 //! Native activation checks on a private desktop. The user's desktop is never switched.
 
 use super::*;
-use crate::windows_app::null_terminated;
+use crate::win32::wide;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -64,7 +64,7 @@ fn native_activation_fixture() {
     if std::env::var_os("ALTTABIO_ACTIVATION_FIXTURE").is_none() {
         return;
     }
-    let name = null_terminated(&format!("AltTabio-activation-test-{}", std::process::id()));
+    let name = wide(&format!("AltTabio-activation-test-{}", std::process::id()));
     // SAFETY: name is terminated and borrowed for the call. The desktop belongs to this
     // disposable fixture process, which exits after validation and releases all its objects.
     let desktop = unsafe {
@@ -122,7 +122,7 @@ fn native_activation_fixture() {
 }
 
 fn fixture_window(title: &str) -> HWND {
-    let title = null_terminated(title);
+    let title = wide(title);
     // SAFETY: STATIC is a system class, strings outlive the call, no callbacks or Rust
     // references are retained, and the current thread owns the resulting fixture window.
     let window = unsafe {

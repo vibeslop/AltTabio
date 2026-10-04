@@ -1,3 +1,4 @@
+use crate::win32::monitor_info;
 use alttabio::overlay_layout::{for_compact_list, layout_scale};
 use alttabio::preview_layout::{
     Rect as LayoutRect, Size as LayoutSize, calculate, workspace_to_screen,
@@ -10,9 +11,7 @@ use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
     DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
 };
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetClientRect, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic,
@@ -207,17 +206,7 @@ fn desktop_preview_layout(
     if monitor.is_invalid() {
         return None;
     }
-    let mut monitor_info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).ok()?,
-        ..MONITORINFO::default()
-    };
-    let monitor_read = unsafe {
-        // SAFETY: monitor_info has a correct cbSize and is writable for the synchronous call.
-        GetMonitorInfoW(monitor, &raw mut monitor_info)
-    };
-    if !monitor_read.as_bool() {
-        return None;
-    }
+    let monitor_info = monitor_info(monitor).ok()?;
     let restored = restored_window_bounds(source, &monitor_info);
     let window = source_window_bounds(source)?;
     let layout = calculate(

@@ -2,11 +2,12 @@
 
 use super::DialogState;
 use super::controls::{DialogControls, is_checked, is_control_enabled};
-use crate::dialog_host::{DialogHost, rect_from_native};
+use crate::dialog_host::DialogHost;
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
     DRAW_TEXT_VCENTER, draw_text_with_font, fill_color, frame_color, measure_text,
 };
+use crate::win32::rect_from_native;
 use alttabio::dialog_layout::{Point, hairline, scale};
 use alttabio::settings_form::{Control, checkmark_points};
 use std::ffi::c_void;
