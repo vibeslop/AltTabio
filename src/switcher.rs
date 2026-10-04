@@ -364,14 +364,14 @@ impl Switcher {
         self.rebuild_visible_indices();
     }
 
-    pub fn set_filter(&mut self, filter: &str) {
+    fn set_filter(&mut self, filter: &str) {
         if self.filter != filter {
             filter.clone_into(&mut self.filter);
             self.apply_filter();
         }
     }
 
-    pub fn clear_filter(&mut self) {
+    fn clear_filter(&mut self) {
         self.set_filter("");
     }
 
