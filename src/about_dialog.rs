@@ -6,7 +6,7 @@ use crate::native_drawing::{
 use crate::win32::{self, native_rect, point_from_lparam};
 use crate::{app_icon, native_theme::DarkModeApi};
 use alttabio::about_layout::{AboutLayout, CLIENT_HEIGHT, CLIENT_WIDTH};
-use alttabio::dialog_layout::{MIN_DPI, Point, Size, hairline, scale};
+use alttabio::dialog_layout::{BASE_DPI, Point, Size, hairline, scale};
 use alttabio::failure_run::FailureRun;
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
@@ -167,11 +167,10 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
     let icon = app_icon::load_app(instance, icon_color).map_err(|error| error.to_string())?;
     dialog_host::register_class::<DialogState>(instance, icon, HBRUSH::default())
         .map_err(|error| error.to_string())?;
-    let dpi = unsafe {
+    let dpi = known_dpi(unsafe {
         // SAFETY: GetDpiForSystem has no pointer or lifetime preconditions.
         GetDpiForSystem()
-    }
-    .max(MIN_DPI);
+    });
     let (origin, window_size) = window_bounds(dpi).map_err(|error| error.to_string())?;
     let state = DialogState::new(theme, dpi, icon)
         .map_err(|error| format!("Could not prepare About: {error}"))?;
@@ -210,6 +209,12 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
     Ok(())
 }
 
+/// Windows reports a DPI it cannot read as 0. That leaves the scale unknown rather than small, so
+/// About is laid out at 100%, as Settings is.
+const fn known_dpi(dpi: u32) -> u32 {
+    if dpi == 0 { BASE_DPI } else { dpi }
+}
+
 /// The origin and outer size that center About's client area at `dpi` on the cursor's monitor.
 fn window_bounds(dpi: u32) -> Result<(Point, Size)> {
     let size = FRAME.window_size(Size::new(CLIENT_WIDTH, CLIENT_HEIGHT).scaled(dpi), dpi)?;
@@ -219,11 +224,10 @@ fn window_bounds(dpi: u32) -> Result<(Point, Size)> {
 
 fn apply_initial_window_dpi(dialog: &ModalDialog<DialogState>) -> Result<()> {
     let window = dialog.window();
-    let dpi = unsafe {
+    let dpi = known_dpi(unsafe {
         // SAFETY: window is the live About window whose monitor determines its effective DPI.
         GetDpiForWindow(window)
-    }
-    .max(MIN_DPI);
+    });
     // The state borrow ends with this statement, before SetWindowPos dispatches messages.
     dialog.host()?.state_mut()?.update_dpi(dpi)?;
     let (origin, size) = window_bounds(dpi)?;
