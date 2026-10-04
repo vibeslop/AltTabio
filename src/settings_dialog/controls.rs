@@ -88,44 +88,36 @@ fn create_child(
     font: HFONT,
     settings: &Settings,
 ) -> Result<HWND> {
-    let (class, style) = match control {
+    let (class, kind_style) = match control {
         Control::Group(_) => (w!("BUTTON"), WINDOW_STYLE(BS_GROUPBOX as u32)),
         Control::Label(_) => (w!("STATIC"), WINDOW_STYLE::default()),
         Control::Selector(_) => (
             w!("COMBOBOX"),
-            WS_TABSTOP
-                | WS_VSCROLL
-                | WINDOW_STYLE((CBS_DROPDOWNLIST | CBS_HASSTRINGS).cast_unsigned()),
+            WS_VSCROLL | WINDOW_STYLE((CBS_DROPDOWNLIST | CBS_HASSTRINGS).cast_unsigned()),
         ),
-        Control::Checkbox(option) => {
-            let group_style = if option == SettingOption::Autostart {
-                WS_GROUP
-            } else {
-                WINDOW_STYLE::default()
-            };
-            (
-                w!("BUTTON"),
-                WS_TABSTOP | group_style | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-            )
-        }
+        Control::Checkbox(_) => (w!("BUTTON"), WINDOW_STYLE(BS_AUTOCHECKBOX as u32)),
         Control::Button(button) => {
             let button_style = if button == DialogButton::Ok {
                 BS_DEFPUSHBUTTON
             } else {
                 BS_PUSHBUTTON
             };
-            (
-                w!("BUTTON"),
-                WS_TABSTOP | WINDOW_STYLE(button_style.cast_unsigned()),
-            )
+            (w!("BUTTON"), WINDOW_STYLE(button_style.cast_unsigned()))
         }
     };
+    let mut style = WS_CHILD | WS_VISIBLE | kind_style;
+    if control.is_tab_stop() {
+        style |= WS_TABSTOP;
+    }
+    if Control::first_tab_stop() == Some(control) {
+        style |= WS_GROUP;
+    }
     let hwnd = create_control(
         parent,
         instance,
         class,
         control.text(),
-        WS_CHILD | WS_VISIBLE | style,
+        style,
         control.id(),
         rect,
         font,

@@ -54,6 +54,20 @@ impl Control {
         Self::all().find(|control| control.id() == Some(id))
     }
 
+    /// Whether Tab moves the focus to the control.
+    #[must_use]
+    pub const fn is_tab_stop(self) -> bool {
+        matches!(
+            self,
+            Self::Selector(_) | Self::Checkbox(_) | Self::Button(_)
+        )
+    }
+
+    #[must_use]
+    pub fn first_tab_stop() -> Option<Self> {
+        Self::all().find(|control| control.is_tab_stop())
+    }
+
     /// The command identifier of a control that reports to the dialog.
     #[must_use]
     pub const fn id(self) -> Option<usize> {
@@ -637,25 +651,40 @@ mod tests {
     #[test]
     fn control_table_lists_each_control_once_in_tab_order() {
         let controls = Control::all().collect::<Vec<_>>();
-        let count = |kind: fn(&Control) -> bool| controls.iter().filter(|c| kind(c)).count();
 
-        assert_eq!(count(|control| matches!(control, Control::Group(_))), 3);
-        assert_eq!(count(|control| matches!(control, Control::Label(_))), 2);
-        assert_eq!(count(|control| matches!(control, Control::Selector(_))), 2);
         assert_eq!(
-            count(|control| matches!(control, Control::Checkbox(_))),
-            OPTION_COUNT
+            controls,
+            [
+                Control::Group(Group::General),
+                Control::Checkbox(SettingOption::Autostart),
+                Control::Checkbox(SettingOption::ReplaceAltTab),
+                Control::Checkbox(SettingOption::ReplaceWinTab),
+                Control::Checkbox(SettingOption::TypedSearch),
+                Control::Checkbox(SettingOption::ReleaseAltSwitches),
+                Control::Checkbox(SettingOption::ReleaseRightButtonSwitches),
+                Control::Checkbox(SettingOption::RightButtonWheelSwitching),
+                Control::Checkbox(SettingOption::MouseOverSelection),
+                Control::Group(Group::Appearance),
+                Control::Label(Selector::Theme),
+                Control::Selector(Selector::Theme),
+                Control::Label(Selector::Icon),
+                Control::Selector(Selector::Icon),
+                Control::Checkbox(SettingOption::CompactList),
+                Control::Checkbox(SettingOption::LargeIcons),
+                Control::Checkbox(SettingOption::ShowNumbers),
+                Control::Checkbox(SettingOption::ShowAppNames),
+                Control::Checkbox(SettingOption::VisibleBorders),
+                Control::Checkbox(SettingOption::Preview),
+                Control::Checkbox(SettingOption::FullDesktopPreview),
+                Control::Group(Group::Monitor),
+                Control::Checkbox(SettingOption::CurrentMonitorFilter),
+                Control::Button(DialogButton::Ok),
+                Control::Button(DialogButton::Cancel),
+            ]
         );
-        assert_eq!(count(|control| matches!(control, Control::Button(_))), 2);
-        assert_eq!(controls.first(), Some(&Control::Group(Group::General)));
         assert_eq!(
-            controls.get(controls.len() - 2..),
-            Some(
-                &[
-                    Control::Button(DialogButton::Ok),
-                    Control::Button(DialogButton::Cancel)
-                ][..]
-            )
+            Control::first_tab_stop(),
+            Some(Control::Checkbox(SettingOption::Autostart))
         );
         for (index, control) in controls.iter().enumerate() {
             assert_eq!(
