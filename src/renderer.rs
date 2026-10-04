@@ -1,14 +1,16 @@
 use alttabio::close_button::CloseButtonVisualState;
 use alttabio::overlay_layout::{
-    LogicalRect, close_glyph_geometry, for_compact_list, layout_dpi, layout_scale,
+    LogicalRect, OverlayLayout, close_glyph_geometry, for_compact_list, layout_dpi, layout_scale,
     task_text_vertical_layout, window_frame_geometry,
 };
 use alttabio::settings::AppearanceSettings;
-use alttabio::switcher::Switcher;
+use alttabio::switcher::{SwitchTask, Switcher};
 use alttabio::theme::{ResolvedTheme, Rgb8};
 use std::ffi::c_void;
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U, D2D1_COLOR_F};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_COLOR_F,
+};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_PRESENT_OPTIONS_NONE, D2D1_RENDER_TARGET_PROPERTIES,
@@ -403,11 +405,6 @@ fn create_brush(
     }
 }
 
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::too_many_lines,
-    reason = "rendering one bounded on-screen task-list pass keeps the geometry together"
-)]
 fn draw_switcher(
     resources: &RenderResources,
     text: &TextFormats,
@@ -422,170 +419,254 @@ fn draw_switcher(
         // SAFETY: the target is valid for this UI-thread paint operation.
         target.GetSize()
     };
-    let layout = for_compact_list(options.compact_list);
+    let canvas = Canvas {
+        resources,
+        text,
+        layout: for_compact_list(options.compact_list),
+        options,
+        scale,
+        close_button_state,
+    };
+    let layout = canvas.layout;
     let list_width = layout.list_width(size.width, scale);
     let visible_rows = layout.visible_row_count(size.height);
     let start = switcher.visible_range(visible_rows).start;
     let selected_handle = switcher.selected_task().map(|task| task.window_handle);
 
     unsafe {
-        // SAFETY: all Direct2D interfaces are valid on this UI thread; all rectangles and UTF-16
-        // buffers remain alive for their respective synchronous drawing calls.
+        // SAFETY: the target is valid on this UI thread and the color outlives the call.
         target.BeginDraw();
         target.Clear(Some(&raw const resources.background_color));
+    }
+    if options.visible_borders {
+        canvas.draw_window_border(size);
+    }
+    if let Some(frame) = preview_frame {
+        canvas.draw_preview_frame(frame);
+    }
+    canvas.draw_divider(list_width, size.height);
+    for (visible_position, task) in switcher
+        .positioned_visible_tasks()
+        .skip(start)
+        .take(visible_rows)
+    {
+        let visible_index = visible_position.saturating_sub(1);
+        canvas.draw_row(
+            layout.row_bounds(visible_index - start, list_width),
+            selected_handle == Some(task.window_handle),
+            visible_position,
+            task,
+        );
+    }
+    unsafe {
+        // SAFETY: this ends the BeginDraw above on the same target.
+        target.EndDraw(None, None)
+    }
+}
 
-        if options.visible_borders {
-            let window_frame = window_frame_geometry(size.width, size.height, scale);
-            let frame_rect = rounded_rect(window_frame.rect, window_frame.radius);
-            target.DrawRoundedRectangle(
-                &raw const frame_rect,
-                &resources.window_border_brush,
-                window_frame.stroke_width,
+/// What every part of one paint draws with, between `BeginDraw` and `EndDraw`.
+struct Canvas<'a> {
+    resources: &'a RenderResources,
+    text: &'a TextFormats,
+    layout: OverlayLayout,
+    options: RenderOptions,
+    scale: f32,
+    close_button_state: CloseButtonVisualState,
+}
+
+impl Canvas<'_> {
+    fn draw_window_border(&self, size: D2D_SIZE_F) {
+        let frame = window_frame_geometry(size.width, size.height, self.scale);
+        let rect = rounded_rect(frame.rect, frame.radius);
+        unsafe {
+            // SAFETY: the target and brush are valid on this UI thread and `rect` outlives the
+            // call.
+            self.resources.target.DrawRoundedRectangle(
+                &raw const rect,
+                &self.resources.window_border_brush,
+                frame.stroke_width,
                 None,
             );
         }
+    }
 
-        if let Some(frame) = preview_frame {
-            let preview_frame = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: frame.rect.left as f32 / frame.scale + 0.5,
-                    top: frame.rect.top as f32 / frame.scale + 0.5,
-                    right: frame.rect.right as f32 / frame.scale - 0.5,
-                    bottom: frame.rect.bottom as f32 / frame.scale - 0.5,
-                },
-                radiusX: 3.0,
-                radiusY: 3.0,
-            };
-            target.FillRoundedRectangle(
-                &raw const preview_frame,
-                &resources.preview_background_brush,
-            );
-            if options.visible_borders {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "the preview frame is an on-screen pixel rectangle represented exactly as f32"
+    )]
+    fn draw_preview_frame(&self, frame: PreviewFrame) {
+        let rect = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: frame.rect.left as f32 / frame.scale + 0.5,
+                top: frame.rect.top as f32 / frame.scale + 0.5,
+                right: frame.rect.right as f32 / frame.scale - 0.5,
+                bottom: frame.rect.bottom as f32 / frame.scale - 0.5,
+            },
+            radiusX: 3.0,
+            radiusY: 3.0,
+        };
+        let target = &self.resources.target;
+        unsafe {
+            // SAFETY: the target and brushes are valid on this UI thread and `rect` outlives both
+            // calls.
+            target.FillRoundedRectangle(&raw const rect, &self.resources.preview_background_brush);
+            if self.options.visible_borders {
                 target.DrawRoundedRectangle(
-                    &raw const preview_frame,
-                    &resources.preview_border_brush,
+                    &raw const rect,
+                    &self.resources.preview_border_brush,
                     1.0,
                     None,
                 );
             }
         }
+    }
 
+    fn draw_divider(&self, list_width: f32, height: f32) {
+        let padding = self.layout.outer_padding;
         let divider = D2D_RECT_F {
-            left: list_width + layout.outer_padding,
-            top: layout.outer_padding,
-            right: list_width + layout.outer_padding + 1.0,
-            bottom: size.height - layout.outer_padding,
+            left: list_width + padding,
+            top: padding,
+            right: list_width + padding + 1.0,
+            bottom: height - padding,
         };
-        target.FillRectangle(&raw const divider, &resources.divider_brush);
+        unsafe {
+            // SAFETY: the target and brush are valid on this UI thread and `divider` outlives the
+            // call.
+            self.resources
+                .target
+                .FillRectangle(&raw const divider, &self.resources.divider_brush);
+        }
+    }
 
-        for (visible_position, task) in switcher
-            .positioned_visible_tasks()
-            .skip(start)
-            .take(visible_rows)
-        {
-            let visible_index = visible_position.saturating_sub(1);
-            let bounds = layout.row_bounds(visible_index - start, list_width);
-            if selected_handle == Some(task.window_handle) {
-                target.FillRoundedRectangle(
+    fn draw_row(
+        &self,
+        bounds: LogicalRect,
+        selected: bool,
+        visible_position: usize,
+        task: &SwitchTask,
+    ) {
+        let layout = self.layout;
+        let options = self.options;
+        let close_button = selected.then(|| layout.close_button_bounds(bounds));
+        if selected {
+            unsafe {
+                // SAFETY: the target and brush are valid on this UI thread and the rectangle
+                // outlives the call.
+                self.resources.target.FillRoundedRectangle(
                     &rounded_rect(bounds, layout.selection_radius),
-                    &resources.selected_brush,
-                );
-            }
-
-            let close_bounds = (selected_handle == Some(task.window_handle))
-                .then(|| layout.close_button_bounds(bounds));
-
-            let number = visible_position
-                .to_string()
-                .encode_utf16()
-                .collect::<Vec<_>>();
-            let title = task.title.encode_utf16().collect::<Vec<_>>();
-            if options.show_numbers {
-                target.DrawText(
-                    &number,
-                    &text.number,
-                    &D2D_RECT_F {
-                        left: bounds.left,
-                        top: bounds.top,
-                        right: bounds.left + layout.number_width,
-                        bottom: bounds.bottom,
-                    },
-                    &resources.number_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                    DWRITE_MEASURING_MODE_NATURAL,
-                );
-            }
-            let content_left = layout.text_left(options.show_numbers);
-            let text_layout = task_text_vertical_layout(
-                bounds.top,
-                bounds.bottom,
-                options.show_app_names,
-                options.compact_list,
-            );
-            target.DrawText(
-                &title,
-                &text.title,
-                &D2D_RECT_F {
-                    left: content_left,
-                    top: text_layout.title_top,
-                    right: close_bounds.map_or(bounds.right - 12.0, |button| {
-                        button.left - layout.close_button_gap
-                    }),
-                    bottom: text_layout.title_bottom,
-                },
-                &resources.primary_brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
-            if let Some((app_name_top, app_name_bottom)) = text_layout.app_name {
-                let app_name = task.process_name.encode_utf16().collect::<Vec<_>>();
-                target.DrawText(
-                    &app_name,
-                    &text.detail,
-                    &D2D_RECT_F {
-                        left: content_left,
-                        top: app_name_top,
-                        right: close_bounds.map_or(bounds.right - 12.0, |button| {
-                            button.left - layout.close_button_gap
-                        }),
-                        bottom: app_name_bottom,
-                    },
-                    &resources.secondary_brush,
-                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                    DWRITE_MEASURING_MODE_NATURAL,
-                );
-            }
-            if let Some(close_bounds) = close_bounds {
-                let glyph = close_glyph_geometry(close_bounds, options.compact_list, scale);
-                let background = match close_button_state {
-                    CloseButtonVisualState::Normal => None,
-                    CloseButtonVisualState::Hovered => Some(&resources.close_hover_brush),
-                    CloseButtonVisualState::Pressed => Some(&resources.close_pressed_brush),
-                };
-                if let Some(background) = background {
-                    target.FillRoundedRectangle(
-                        &rounded_rect(close_bounds, layout.selection_radius - 1.0),
-                        background,
-                    );
-                }
-                target.DrawLine(
-                    Vector2::new(glyph.bounds.left, glyph.bounds.top),
-                    Vector2::new(glyph.bounds.right, glyph.bounds.bottom),
-                    &resources.primary_brush,
-                    glyph.stroke_width,
-                    None,
-                );
-                target.DrawLine(
-                    Vector2::new(glyph.bounds.right, glyph.bounds.top),
-                    Vector2::new(glyph.bounds.left, glyph.bounds.bottom),
-                    &resources.primary_brush,
-                    glyph.stroke_width,
-                    None,
+                    &self.resources.selected_brush,
                 );
             }
         }
 
-        target.EndDraw(None, None)
+        let number = visible_position
+            .to_string()
+            .encode_utf16()
+            .collect::<Vec<_>>();
+        let title = task.title.encode_utf16().collect::<Vec<_>>();
+        if options.show_numbers {
+            self.draw_text(
+                &number,
+                &self.text.number,
+                LogicalRect {
+                    right: bounds.left + layout.number_width,
+                    ..bounds
+                },
+                &self.resources.number_brush,
+            );
+        }
+        let left = layout.text_left(options.show_numbers);
+        let right = layout.text_right(bounds, close_button);
+        let text_layout = task_text_vertical_layout(
+            bounds.top,
+            bounds.bottom,
+            options.show_app_names,
+            options.compact_list,
+        );
+        self.draw_text(
+            &title,
+            &self.text.title,
+            LogicalRect {
+                left,
+                top: text_layout.title_top,
+                right,
+                bottom: text_layout.title_bottom,
+            },
+            &self.resources.primary_brush,
+        );
+        if let Some((top, bottom)) = text_layout.app_name {
+            let app_name = task.process_name.encode_utf16().collect::<Vec<_>>();
+            self.draw_text(
+                &app_name,
+                &self.text.detail,
+                LogicalRect {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+                &self.resources.secondary_brush,
+            );
+        }
+        if let Some(close_button) = close_button {
+            self.draw_close_button(close_button);
+        }
+    }
+
+    fn draw_text(
+        &self,
+        text: &[u16],
+        format: &IDWriteTextFormat,
+        bounds: LogicalRect,
+        brush: &ID2D1SolidColorBrush,
+    ) {
+        unsafe {
+            // SAFETY: the target, format and brush are valid on this UI thread, and the text and
+            // rectangle outlive the synchronous call.
+            self.resources.target.DrawText(
+                text,
+                format,
+                &d2d_rect(bounds),
+                brush,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+    }
+
+    fn draw_close_button(&self, bounds: LogicalRect) {
+        let resources = self.resources;
+        let target = &resources.target;
+        let background = match self.close_button_state {
+            CloseButtonVisualState::Normal => None,
+            CloseButtonVisualState::Hovered => Some(&resources.close_hover_brush),
+            CloseButtonVisualState::Pressed => Some(&resources.close_pressed_brush),
+        };
+        let glyph = close_glyph_geometry(bounds, self.options.compact_list, self.scale);
+        unsafe {
+            // SAFETY: the target and brushes are valid on this UI thread and the rectangle
+            // outlives the call.
+            if let Some(background) = background {
+                target.FillRoundedRectangle(
+                    &rounded_rect(bounds, self.layout.selection_radius - 1.0),
+                    background,
+                );
+            }
+            target.DrawLine(
+                Vector2::new(glyph.bounds.left, glyph.bounds.top),
+                Vector2::new(glyph.bounds.right, glyph.bounds.bottom),
+                &resources.primary_brush,
+                glyph.stroke_width,
+                None,
+            );
+            target.DrawLine(
+                Vector2::new(glyph.bounds.right, glyph.bounds.top),
+                Vector2::new(glyph.bounds.left, glyph.bounds.bottom),
+                &resources.primary_brush,
+                glyph.stroke_width,
+                None,
+            );
+        }
     }
 }
 

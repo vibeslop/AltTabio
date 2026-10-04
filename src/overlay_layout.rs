@@ -147,6 +147,15 @@ impl OverlayLayout {
         self.icon_slot_left(show_numbers) + self.icon_slot_width + self.icon_text_gap
     }
 
+    /// Where a row's title and app name are clipped: short of the close button the selected
+    /// row carries, or of the row's end.
+    #[must_use]
+    pub fn text_right(self, row_bounds: LogicalRect, close_button: Option<LogicalRect>) -> f32 {
+        close_button.map_or(row_bounds.right - 12.0, |button| {
+            button.left - self.close_button_gap
+        })
+    }
+
     #[must_use]
     pub fn close_button_bounds(self, row_bounds: LogicalRect) -> LogicalRect {
         let top = row_bounds.top + ((self.row_height - self.close_button_size) / 2.0);
@@ -431,6 +440,21 @@ mod tests {
             }
         );
         assert_close(roomy.text_left(false), 68.0);
+    }
+
+    #[test]
+    fn text_stops_short_of_the_close_button_or_the_row_end() {
+        let compact = for_compact_list(true);
+        let row = compact.row_bounds(0, 260.0);
+        let close_button = compact.close_button_bounds(row);
+        assert_close(compact.text_right(row, None), 248.0);
+        assert_close(compact.text_right(row, Some(close_button)), 222.0);
+
+        let roomy = for_compact_list(false);
+        let row = roomy.row_bounds(0, 414.0);
+        let close_button = roomy.close_button_bounds(row);
+        assert_close(roomy.text_right(row, None), 402.0);
+        assert_close(roomy.text_right(row, Some(close_button)), 368.0);
     }
 
     #[test]
