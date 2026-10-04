@@ -37,7 +37,9 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    ERROR_SUCCESS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SetLastError, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_USE_IMMERSIVE_DARK_MODE,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
@@ -149,11 +151,19 @@ pub fn run(
             .initialize(hwnd, !preview_mode)
     };
     if let Err(error) = hook_result {
-        unsafe {
+        let destroy_result = unsafe {
             // SAFETY: `hwnd` is the live overlay window created above.
-            DestroyWindow(hwnd)?;
-            // SAFETY: after DestroyWindow returns no callback retains the unique host allocation.
-            drop(Box::from_raw(host_pointer));
+            DestroyWindow(hwnd)
+        };
+        match destroy_result {
+            Ok(()) => unsafe {
+                // SAFETY: after DestroyWindow returns no callback retains the unique host allocation.
+                drop(Box::from_raw(host_pointer));
+            },
+            // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
+            Err(destroy_error) => {
+                eprintln!("Could not destroy AltTabio after its startup failed: {destroy_error}");
+            }
         }
         return Err(Error::new(
             windows::core::HRESULT(0x8000_4005_u32.cast_signed()),
@@ -195,16 +205,7 @@ pub fn run(
 }
 
 pub fn show_fatal_error(message: &str) {
-    let text = null_terminated(message);
-    unsafe {
-        // SAFETY: both UTF-16 buffers remain alive and null terminated for the synchronous call.
-        MessageBoxW(
-            None,
-            PCWSTR(text.as_ptr()),
-            w!("AltTabio"),
-            MB_OK | MB_ICONERROR,
-        );
-    }
+    show_error_box(None, message);
 }
 
 struct ComApartment;
@@ -764,15 +765,16 @@ impl App {
             match self.start_input_hooks(new_hook_settings) {
                 Ok(()) => {}
                 Err(error) => {
-                    let _ = self.start_input_hooks(old_hook_settings);
+                    let hooks_rollback = self.start_input_hooks(old_hook_settings);
                     let settings_rollback = self.settings_store.save(&previous_settings);
                     let autostart_rollback = autostart_changed
                         .then(|| startup::set_enabled(previous_autostart.enabled))
                         .transpose();
                     let mut message =
                         format!("The new input-hook settings could not be activated. {error}");
-                    if self.hooks.is_none() {
-                        message.push_str("\n\nThe previous input hooks could not be restored.");
+                    if let Err(rollback_error) = hooks_rollback {
+                        message.push_str("\n\nThe previous input hooks could not be restored. ");
+                        message.push_str(&rollback_error);
                     }
                     if let Err(rollback_error) = settings_rollback {
                         message.push_str("\n\nSettings rollback also failed: ");
@@ -1524,9 +1526,12 @@ impl App {
 
     fn paint(&mut self) {
         let mut paint = PAINTSTRUCT::default();
-        unsafe {
+        let dc = unsafe {
             // SAFETY: `paint` is writable and BeginPaint/EndPaint are paired for this WM_PAINT.
-            BeginPaint(self.hwnd, &raw mut paint);
+            BeginPaint(self.hwnd, &raw mut paint)
+        };
+        if dc.is_invalid() {
+            eprintln!("Could not begin painting the overlay");
         }
         let render_options = RenderOptions::from(&self.settings.appearance);
         let switcher = self.session.switcher();
@@ -1540,10 +1545,16 @@ impl App {
         ) {
             eprintln!("Could not render the overlay: {error}");
         }
-        Renderer::draw_icons(self.hwnd, paint.hdc, switcher, render_options);
-        unsafe {
-            // SAFETY: this exactly balances the successful BeginPaint call above.
-            let _ended = EndPaint(self.hwnd, &raw const paint);
+        // Direct2D draws through its own window target; only the GDI icons need the paint DC.
+        if !dc.is_invalid() {
+            Renderer::draw_icons(self.hwnd, dc, switcher, render_options);
+        }
+        let ended = unsafe {
+            // SAFETY: this balances the BeginPaint call above for the same PAINTSTRUCT.
+            EndPaint(self.hwnd, &raw const paint)
+        };
+        if !ended.as_bool() {
+            eprintln!("Could not finish painting the overlay");
         }
     }
 
@@ -1640,9 +1651,12 @@ unsafe extern "system" fn window_proc(
             };
             app.hwnd = hwnd;
             drop(app);
-            unsafe {
-                // SAFETY: host remains live through the message loop.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, host as isize);
+            // SAFETY: host remains live through the message loop.
+            if let Err(error) = unsafe { set_window_user_data(hwnd, host as isize) } {
+                // Failing creation lets `run` free the host instead of running a window that
+                // can never reach it.
+                eprintln!("Could not attach AltTabio to its window: {error}");
+                return Some(LRESULT(0));
             }
             return Some(LRESULT(1));
         }
@@ -1677,9 +1691,9 @@ unsafe extern "system" fn window_proc(
             return Some(LRESULT(0));
         }
         if message == WM_NCDESTROY {
-            unsafe {
-                // SAFETY: clearing user data prevents later messages from observing host.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            // SAFETY: clearing user data prevents later messages from observing host.
+            if let Err(error) = unsafe { set_window_user_data(hwnd, 0) } {
+                eprintln!("Could not detach AltTabio from its window: {error}");
             }
             return None;
         }
@@ -1716,6 +1730,31 @@ unsafe extern "system" fn window_proc(
     handled.unwrap_or_else(|| default_window_proc(hwnd, message, wparam, lparam))
 }
 
+/// # Safety
+///
+/// `value` must be zero or an `AppHost` pointer that stays live until `WM_NCDESTROY` clears it,
+/// because `window_proc` dereferences any nonzero user data.
+unsafe fn set_window_user_data(hwnd: HWND, value: isize) -> Result<()> {
+    unsafe {
+        // SAFETY: SetLastError only writes this thread's last-error value.
+        SetLastError(ERROR_SUCCESS);
+    }
+    let previous = unsafe {
+        // SAFETY: hwnd is the window being handled, and the caller upholds the contract for the
+        // stored value.
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, value)
+    };
+    // Zero is also what a successful call returns when the previous value was zero, so only a
+    // last error separates failure from success.
+    if previous == 0 {
+        let error = Error::from_thread();
+        if error.code().is_err() {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 const fn is_modal_dialog_message(message: u32) -> bool {
     matches!(message, WM_SHOW_SETTINGS | WM_SHOW_ABOUT)
 }
@@ -1745,14 +1784,24 @@ const fn hook_actions_enabled(settings_dialog_open: bool, about_dialog_open: boo
 }
 
 fn show_error_for_window(owner: HWND, message: &str) {
+    show_error_box(Some(owner), message);
+}
+
+fn show_error_box(owner: Option<HWND>, message: &str) {
     let text = null_terminated(message);
-    unsafe {
+    let result = unsafe {
         // SAFETY: both UTF-16 buffers remain alive and null terminated for the synchronous call.
         MessageBoxW(
-            Some(owner),
+            owner,
             PCWSTR(text.as_ptr()),
             w!("AltTabio"),
             MB_OK | MB_ICONERROR,
+        )
+    };
+    if result.0 == 0 {
+        eprintln!(
+            "Could not show an error dialog ({}): {message}",
+            Error::from_thread()
         );
     }
 }
@@ -1767,12 +1816,17 @@ fn foreground_passthrough_policy(overlay: HWND) -> PassthroughPolicy {
     }
     let class_name = window_class_name(hwnd);
     let mut process_id = 0_u32;
-    unsafe {
+    let thread_id = unsafe {
         // SAFETY: process_id is writable and hwnd is the live foreground window.
-        GetWindowThreadProcessId(hwnd, Some(&raw mut process_id));
-    }
-    let process =
-        ProcessInfo::query(process_id).unwrap_or_else(|_| ProcessInfo::unavailable(process_id));
+        GetWindowThreadProcessId(hwnd, Some(&raw mut process_id))
+    };
+    // A process that refuses the query or has exited leaves the executable unknown. The window
+    // class still identifies remote desktop clients, so the policy proceeds without it.
+    let process = if thread_id == 0 {
+        ProcessInfo::unavailable(process_id)
+    } else {
+        ProcessInfo::query(process_id).unwrap_or_else(|_| ProcessInfo::unavailable(process_id))
+    };
     PassthroughPolicy::from_foreground(
         is_remote_desktop_client(&class_name, process.executable_stem()),
         is_maximized_or_fullscreen(hwnd),
@@ -2048,9 +2102,12 @@ fn activate_window(owner: HWND) -> bool {
         // SAFETY: target is a borrowed top-level or owned-popup HWND.
         IsIconic(target).as_bool()
     } {
-        unsafe {
+        let restore_posted = unsafe {
             // SAFETY: target is a borrowed HWND; ShowWindowAsync does not transfer ownership.
-            let _was_visible = ShowWindowAsync(target, SW_RESTORE);
+            ShowWindowAsync(target, SW_RESTORE)
+        };
+        if !restore_posted.as_bool() {
+            eprintln!("Could not restore the minimized window before activating it");
         }
     }
 
