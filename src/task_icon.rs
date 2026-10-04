@@ -107,10 +107,7 @@ fn shell_app_icon(app_id: &str) -> Result<Option<OwnedIcon>> {
     if app_id.is_empty() || app_id.contains('\0') {
         return Ok(None);
     }
-    let path: Vec<u16> = format!("shell:AppsFolder\\{app_id}")
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    let path = wide(&format!("shell:AppsFolder\\{app_id}"));
     // SAFETY: COM is initialized on this thread and path is a live terminated string.
     let item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None) }?;
     // SAFETY: item is a live COM interface; this handler supplies the Shell's icon extractor.
