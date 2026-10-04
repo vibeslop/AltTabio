@@ -100,7 +100,7 @@ impl OverlayLayout {
         clippy::cast_precision_loss,
         reason = "a visible row index is a small integer represented exactly as f32"
     )]
-    pub fn row_top(self, row: usize) -> f32 {
+    fn row_top(self, row: usize) -> f32 {
         self.list_top() + (row as f32 * (self.row_height + self.row_gap))
     }
 
@@ -125,7 +125,7 @@ impl OverlayLayout {
     }
 
     #[must_use]
-    pub fn icon_slot_left(self, show_numbers: bool) -> f32 {
+    fn icon_slot_left(self, show_numbers: bool) -> f32 {
         self.outer_padding + if show_numbers { self.number_width } else { 0.0 }
     }
 
