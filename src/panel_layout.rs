@@ -1,6 +1,7 @@
 //! The macOS switcher panel's geometry: a strip of app icons, the selected app's windows under
 //! it, and, when previews are on, the selected window beside them. Points, top-left origin.
 
+use crate::app_switcher::AppEntry;
 use crate::preview_layout::Rect;
 use crate::switcher::ProcessIdentity;
 
@@ -34,6 +35,8 @@ const PREVIEW_GAP: f64 = 12.0;
 /// The capture sits this far inside the preview well, rounded to the well's radius minus it.
 pub const PREVIEW_INSET: f64 = 8.0;
 const LIST_WIDTH_BESIDE_PREVIEW: f64 = 340.0;
+/// The windows the number keys 1 to 9 pick carry their number beside them.
+const NUMBERED_ROWS: usize = 9;
 
 /// Where a window is when it is not plainly on the current desktop.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -240,6 +243,72 @@ impl Layout {
     }
 }
 
+/// The most apps and the longest window list a session has listed. The panel is sized for
+/// them, so it never shrinks under the pointer while it shows.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Extent {
+    pub apps: usize,
+    pub windows: usize,
+}
+
+impl Extent {
+    pub fn widen(&mut self, apps: &[AppEntry]) {
+        let windows = apps.iter().map(|app| app.windows.len()).max().unwrap_or(0);
+        self.apps = self.apps.max(apps.len());
+        self.windows = self.windows.max(windows);
+    }
+}
+
+/// Which of the selected app's windows the list draws, and the notes around them.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ListRows {
+    /// The first window drawn.
+    pub start: usize,
+    pub count: usize,
+    pub selected_row: Option<usize>,
+    /// Drawn where the rows go when the app has no window.
+    pub empty_note: Option<String>,
+    /// Drawn in the slot after the last row when the list scrolls.
+    pub more_note: Option<String>,
+}
+
+impl ListRows {
+    /// Fits `total` windows into `slots` rows, moving the previous `start` only as far as it
+    /// takes to show `selected`.
+    #[must_use]
+    pub fn new(start: usize, selected: Option<usize>, total: usize, slots: usize) -> Self {
+        // A list longer than the panel gives its last slot to the count of the rest.
+        let fits = if total > slots {
+            slots.saturating_sub(1).max(1)
+        } else {
+            slots
+        };
+        let start = scroll_into_view(start, selected.unwrap_or_default(), total, fits);
+        let count = total.saturating_sub(start).min(fits);
+        Self {
+            start,
+            count,
+            selected_row: selected
+                .and_then(|index| index.checked_sub(start))
+                .filter(|row| *row < count),
+            empty_note: (total == 0).then(|| "No open windows".to_owned()),
+            more_note: (count < slots)
+                .then(|| more_note(total, start, count))
+                .flatten(),
+        }
+    }
+}
+
+/// The number beside the window at `index` in its app's list, the key that picks it.
+#[must_use]
+pub const fn row_number(index: usize) -> Option<usize> {
+    if index < NUMBERED_ROWS {
+        Some(index + 1)
+    } else {
+        None
+    }
+}
+
 /// The geometry and scroll positions of the last frame drawn.
 #[derive(Clone, Copy, Debug)]
 pub struct Shown {
@@ -415,6 +484,70 @@ mod tests {
         assert_eq!(scroll_into_view(4, 2, 10, 5), 2);
         assert_eq!(scroll_into_view(8, 9, 10, 5), 5);
         assert_eq!(scroll_into_view(3, 1, 2, 5), 0);
+    }
+
+    #[test]
+    fn a_long_list_gives_its_last_slot_to_the_count_of_the_rest() {
+        let top = ListRows::new(0, Some(0), 10, 5);
+        assert_eq!((top.start, top.count, top.selected_row), (0, 4, Some(0)));
+        assert_eq!(top.more_note.as_deref(), Some("6 more"));
+
+        let bottom = ListRows::new(top.start, Some(9), 10, 5);
+        assert_eq!(
+            (bottom.start, bottom.count, bottom.selected_row),
+            (6, 4, Some(3))
+        );
+        assert_eq!(bottom.more_note.as_deref(), Some("6 more above"));
+
+        let fits = ListRows::new(0, Some(2), 5, 5);
+        assert_eq!((fits.start, fits.count, fits.more_note), (0, 5, None));
+        // A single slot shows a window rather than only the count.
+        let single = ListRows::new(0, Some(1), 3, 1);
+        assert_eq!((single.start, single.count, single.more_note), (1, 1, None));
+    }
+
+    #[test]
+    fn an_app_without_windows_gets_the_empty_note_and_no_selected_row() {
+        let empty = ListRows::new(3, None, 0, 5);
+
+        assert_eq!((empty.start, empty.count, empty.selected_row), (0, 0, None));
+        assert_eq!(empty.empty_note.as_deref(), Some("No open windows"));
+        assert_eq!(empty.more_note, None);
+        assert_eq!(ListRows::new(0, Some(0), 1, 5).empty_note, None);
+    }
+
+    #[test]
+    fn only_the_windows_the_number_keys_reach_are_numbered() {
+        assert_eq!(row_number(0), Some(1));
+        assert_eq!(row_number(8), Some(9));
+        assert_eq!(row_number(9), None);
+    }
+
+    #[test]
+    fn the_extent_grows_with_the_listing_and_never_shrinks() {
+        let app = |id, windows: &[isize]| AppEntry {
+            process: ProcessIdentity::new(id, 0),
+            name: String::new(),
+            windows: windows.to_vec(),
+        };
+        let mut extent = Extent::default();
+
+        extent.widen(&[app(1, &[10, 11]), app(2, &[])]);
+        assert_eq!(
+            extent,
+            Extent {
+                apps: 2,
+                windows: 2
+            }
+        );
+        extent.widen(&[app(1, &[10, 11, 12])]);
+        assert_eq!(
+            extent,
+            Extent {
+                apps: 2,
+                windows: 3
+            }
+        );
     }
 
     #[test]

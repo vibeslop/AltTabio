@@ -25,7 +25,9 @@ use alttabio::app_switcher::{
     group_by_app,
 };
 use alttabio::input::WindowCommand;
-use alttabio::panel_layout::{Layout, Shown, WindowState, more_note, scroll_into_view};
+use alttabio::panel_layout::{
+    Extent, Layout, ListRows, Shown, WindowState, row_number, scroll_into_view,
+};
 use alttabio::panel_pointer::{Dwell, MenuFor, Pointer, Response, TILE_DWELL_SECONDS};
 use alttabio::settings::Settings;
 use alttabio::switcher::ProcessIdentity;
@@ -389,9 +391,7 @@ pub struct App {
     recent_apps: RecentApps,
     // Windows in the order they last had focus, which orders each app's windows.
     window_history: WindowHistory,
-    // The most apps and the longest window list this session has listed. The panel is sized
-    // for them, so it never shrinks under the pointer while it shows.
-    extent: (usize, usize),
+    extent: Extent,
     // The first tile and row drawn; they move only as far as the selection needs.
     tile_start: usize,
     row_start: usize,
@@ -485,7 +485,7 @@ impl App {
             icons: HashMap::new(),
             recent_apps,
             window_history: WindowHistory::default(),
-            extent: (0, 0),
+            extent: Extent::default(),
             tile_start: 0,
             row_start: 0,
             shown: None,
@@ -785,7 +785,7 @@ impl App {
             let before = self.switcher.selected_target();
             self.switcher.refresh(self.app_entries());
             if self.switcher.is_active() {
-                self.widen_extent();
+                self.extent.widen(self.switcher.apps());
                 self.selection_changed(before);
             } else {
                 self.hide_overlay();
@@ -935,8 +935,8 @@ impl App {
             return;
         }
         self.reset_pointer();
-        self.extent = (0, 0);
-        self.widen_extent();
+        self.extent = Extent::default();
+        self.extent.widen(self.switcher.apps());
         self.tile_start = 0;
         self.row_start = 0;
         self.shown = None;
@@ -1072,16 +1072,10 @@ impl App {
         resolve(self.settings.appearance.theme, system)
     }
 
-    fn widen_extent(&mut self) {
-        let apps = self.switcher.apps();
-        let windows = apps.iter().map(|app| app.windows.len()).max().unwrap_or(0);
-        self.extent = (self.extent.0.max(apps.len()), self.extent.1.max(windows));
-    }
-
     fn layout(&self, overlay: &Overlay) -> Layout {
         Layout::new(
-            self.extent.0,
-            self.extent.1,
+            self.extent.apps,
+            self.extent.windows,
             self.settings.appearance.preview,
             overlay.max_size(),
         )
@@ -1112,7 +1106,7 @@ impl App {
         }
 
         let tiles = self.tiles(layout, selected_app);
-        let (rows, selected_row, empty_note, more_note) = self.rows(layout);
+        let (rows, list) = self.rows(layout);
         let preview = self
             .settings
             .appearance
@@ -1126,15 +1120,15 @@ impl App {
             tiles: tiles.len(),
             row_start: self.row_start,
             rows: rows.len(),
-            selected_row,
+            selected_row: list.selected_row,
         });
         overlay.present(FrameModel {
             layout,
             tokens: SwitcherTokens::new(self.resolved_theme()),
             tiles,
             rows,
-            empty_note,
-            more_note,
+            empty_note: list.empty_note,
+            more_note: list.more_note,
             close_state: self.pointer.close_state(),
             preview,
         });
@@ -1159,36 +1153,28 @@ impl App {
             .collect()
     }
 
-    /// The selected app's rows scrolled so the selected window shows, the selected row among
-    /// them, and the notes for an app without windows or a list longer than the panel.
-    fn rows(
-        &mut self,
-        layout: Layout,
-    ) -> (Vec<Row>, Option<usize>, Option<String>, Option<String>) {
+    /// The selected app's rows scrolled so the selected window shows, and where they sit in
+    /// its list.
+    fn rows(&mut self, layout: Layout) -> (Vec<Row>, ListRows) {
         let windows = self
             .switcher
             .selected_app()
             .map_or(&[][..], |app| &app.windows[..]);
         let selected_window = self.switcher.selected_window_index();
-        // A list longer than the panel gives its last slot to the count of the rest.
-        let fits = if windows.len() > layout.row_slots {
-            layout.row_slots.saturating_sub(1).max(1)
-        } else {
-            layout.row_slots
-        };
-        self.row_start = scroll_into_view(
+        let list = ListRows::new(
             self.row_start,
-            selected_window.unwrap_or_default(),
+            selected_window,
             windows.len(),
-            fits,
+            layout.row_slots,
         );
+        self.row_start = list.start;
         let rows = windows
             .iter()
             .enumerate()
-            .skip(self.row_start)
-            .take(fits)
+            .skip(list.start)
+            .take(list.count)
             .map(|(index, handle)| Row {
-                number: (index < 9).then_some(index + 1),
+                number: row_number(index),
                 title: self
                     .record(*handle)
                     .map(|record| record.title.clone())
@@ -1196,15 +1182,8 @@ impl App {
                 state: self.window_state(*handle),
                 selected: selected_window == Some(index),
             })
-            .collect::<Vec<_>>();
-        let more_note = (rows.len() < layout.row_slots)
-            .then(|| more_note(windows.len(), self.row_start, rows.len()))
-            .flatten();
-        let empty_note = windows.is_empty().then(|| "No open windows".to_owned());
-        let selected_row = selected_window
-            .and_then(|index| index.checked_sub(self.row_start))
-            .filter(|row| *row < rows.len());
-        (rows, selected_row, empty_note, more_note)
+            .collect();
+        (rows, list)
     }
 
     fn selected_window_id(&self) -> Option<u32> {
