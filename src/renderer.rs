@@ -7,7 +7,7 @@ use alttabio::settings::AppearanceSettings;
 use alttabio::switcher::Switcher;
 use alttabio::theme::{ResolvedTheme, Rgb8};
 use canvas::Canvas;
-use icons::draw_icon_pass;
+use icons::{IconPassFailure, draw_icon_pass};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
@@ -35,7 +35,8 @@ pub struct Renderer {
     // DirectWrite takes UTF-16, so every title, app name and number is re-encoded on each paint;
     // one buffer reused for all of them keeps painting from allocating.
     utf16: Vec<u16>,
-    icon_pass_failing: bool,
+    icon_client_area_failing: bool,
+    icon_draw_failing: bool,
 }
 
 struct TextFormats {
@@ -154,7 +155,8 @@ impl Renderer {
             theme,
             resources: None,
             utf16: Vec::new(),
-            icon_pass_failing: false,
+            icon_client_area_failing: false,
+            icon_draw_failing: false,
         })
     }
 
@@ -248,15 +250,29 @@ impl Renderer {
         switcher: &Switcher,
         options: RenderOptions,
     ) {
-        let failure = draw_icon_pass(hwnd, hdc, switcher, options).err();
         // The overlay repaints on every selection change, so an icon that keeps failing would log
-        // on each paint. Logging the first paint of a run of failures is enough.
-        if let Some(failure) = &failure
-            && !self.icon_pass_failing
-        {
-            eprintln!("{failure}");
+        // on each paint. Logging the first paint of a run of failures is enough, once for each
+        // kind, so a client-area failure does not hide icon failures after it. A pass that stops
+        // at the client area never reaches the icons and leaves their run as it was.
+        match draw_icon_pass(hwnd, hdc, switcher, options) {
+            Ok(()) => {
+                self.icon_client_area_failing = false;
+                self.icon_draw_failing = false;
+            }
+            Err(failure @ IconPassFailure::ClientArea(_)) => {
+                if !self.icon_client_area_failing {
+                    eprintln!("{failure}");
+                }
+                self.icon_client_area_failing = true;
+            }
+            Err(failure @ IconPassFailure::Icons { .. }) => {
+                self.icon_client_area_failing = false;
+                if !self.icon_draw_failing {
+                    eprintln!("{failure}");
+                }
+                self.icon_draw_failing = true;
+            }
         }
-        self.icon_pass_failing = failure.is_some();
     }
 
     #[allow(
