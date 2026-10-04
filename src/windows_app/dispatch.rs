@@ -5,11 +5,11 @@ use crate::app_messages::{
     WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION, WM_LISTED_WINDOW_REFRESH,
     WM_SHOW_ABOUT, WM_SHOW_SETTINGS, WM_TRAY_CALLBACK,
 };
-use crate::hook::{HookThread, decode_action, decode_virtual_key};
+use crate::hook::{HookThread, decode_action};
 use crate::shell_menu;
 use crate::tray::{TrayAction, TrayIcon};
 use crate::win32::{high_word, low_word};
-use alttabio::input::{InputAction, OverlayKeyEvent, overlay_key_action};
+use alttabio::input::{InputAction, OverlayKeyEvent, decode_virtual_key, overlay_key_action};
 use alttabio::switcher::SwitcherEffect;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_SHIFT};

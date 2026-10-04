@@ -13,7 +13,7 @@ use alttabio::hook_flags::{
 };
 use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
-    MouseEvent,
+    MouseEvent, decode_virtual_key,
 };
 use alttabio::passthrough::PassthroughPolicy;
 use delivery::{dispatch_registered_switch, post_actions, route_registered_switch};
@@ -39,7 +39,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::Error;
 
-pub(crate) use alttabio::input::decode_virtual_key;
 pub use replay::send_shell_escape;
 
 // Thread messages for the hook thread's own queue, kept together so a test can check that they

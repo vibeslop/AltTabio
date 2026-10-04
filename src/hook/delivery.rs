@@ -3,13 +3,13 @@
 //! permission to take the foreground.
 
 use super::{
-    CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext, decode_virtual_key,
+    CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext,
     process_with_context,
 };
 use crate::app_messages::{WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION};
 use alttabio::hook_delivery::{Delivery, deliver, routes_tab_through_hotkey};
 use alttabio::hook_flags::encode_action;
-use alttabio::input::{HookOutcome, InputAction, Key, KeyTransition};
+use alttabio::input::{HookOutcome, InputAction, Key, KeyTransition, decode_virtual_key};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
