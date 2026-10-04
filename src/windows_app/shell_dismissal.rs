@@ -1,4 +1,5 @@
-use super::{App, SHELL_DISMISS_TIMER_ID};
+use super::App;
+use crate::app_messages::SHELL_DISMISS_TIMER_ID;
 use crate::shell_menu;
 use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll, SwitchResume};
 use alttabio::input::InputAction;

@@ -1,4 +1,5 @@
 use crate::app_icon;
+use crate::app_messages::WM_TRAY_CALLBACK;
 use crate::native_theme::{DarkModeApi, PreferredAppMode, preferred_app_mode};
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
@@ -11,11 +12,9 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_SEPARATOR, MF_STRING,
     RegisterWindowMessageW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
 };
 use windows::core::{Error, PCWSTR, Result, w};
-
-pub const WM_TRAY_CALLBACK: u32 = WM_APP + 2;
 
 const fn is_recreation_message(message: u32, registered_message: u32) -> bool {
     registered_message != 0 && message == registered_message

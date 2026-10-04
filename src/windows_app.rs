@@ -11,6 +11,7 @@ mod refresh;
 mod shell_dismissal;
 mod wndproc;
 
+use crate::app_messages::WM_DESTROY_APP;
 use crate::hook::HookThread;
 use crate::native_theme::resolve_current_theme;
 use crate::preview::DwmPreview;
@@ -46,13 +47,6 @@ use wndproc::window_proc;
 
 const WINDOW_CLASS: PCWSTR = w!("AltTabioRustOverlay");
 const WINDOW_TITLE: PCWSTR = w!("AltTabio");
-// hook, tray, and win_events also define message and timer IDs for the overlay window, so new IDs
-// must not collide with theirs.
-const WM_SHOW_SETTINGS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 3;
-const WM_DESTROY_APP: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
-const WM_SHOW_ABOUT: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5;
-const CLOSE_REFRESH_TIMER_ID: usize = 1;
-const SHELL_DISMISS_TIMER_ID: usize = 3;
 
 pub fn run(
     preview_mode: bool,

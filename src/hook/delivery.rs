@@ -3,9 +3,10 @@
 //! permission to take the foreground.
 
 use super::{
-    CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext, WM_HOOK_ACTION,
-    WM_HOOK_HOTKEY_ACTION, decode_virtual_key, process_with_context,
+    CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext, decode_virtual_key,
+    process_with_context,
 };
+use crate::app_messages::{WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION};
 use alttabio::hook_delivery::{Delivery, deliver, routes_tab_through_hotkey};
 use alttabio::hook_flags::encode_action;
 use alttabio::input::{HookOutcome, InputAction, Key, KeyTransition};

@@ -1,3 +1,6 @@
+use crate::app_messages::{
+    LISTED_REFRESH_RETRY_TIMER_ID, WM_FOREGROUND_CHECK, WM_LISTED_WINDOW_REFRESH,
+};
 use alttabio::task_refresh::{ListedRefreshSignal, RefreshBatch, request_listed_refresh};
 use std::ffi::c_void;
 use std::panic::catch_unwind;
@@ -7,13 +10,10 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWi
 use windows::Win32::UI::WindowsAndMessaging::{
     CHILDID_SELF, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
     EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
-    EVENT_SYSTEM_MOVESIZEEND, OBJID_WINDOW, PostMessageW, WINEVENT_OUTOFCONTEXT, WM_APP, WM_TIMER,
+    EVENT_SYSTEM_MOVESIZEEND, OBJID_WINDOW, PostMessageW, WINEVENT_OUTOFCONTEXT, WM_TIMER,
 };
 use windows::core::Error;
 
-pub const WM_FOREGROUND_CHECK: u32 = WM_APP + 6;
-pub const WM_LISTED_WINDOW_REFRESH: u32 = WM_APP + 7;
-pub const LISTED_REFRESH_RETRY_TIMER_ID: usize = 2;
 pub const LISTED_REFRESH_RETRY_DELAY_MS: u32 = 50;
 
 static WIN_EVENT_NOTIFY_HWND: AtomicIsize = AtomicIsize::new(0);

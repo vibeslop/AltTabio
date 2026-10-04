@@ -1,7 +1,8 @@
-use super::{AppHost, WM_DESTROY_APP, WM_SHOW_ABOUT, WM_SHOW_SETTINGS};
-use crate::win_events::{
-    self, WM_FOREGROUND_CHECK, WM_LISTED_WINDOW_REFRESH, is_listed_refresh_wakeup,
+use super::AppHost;
+use crate::app_messages::{
+    WM_DESTROY_APP, WM_FOREGROUND_CHECK, WM_LISTED_WINDOW_REFRESH, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
 };
+use crate::win_events::{self, is_listed_refresh_wakeup};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, LRESULT, SetLastError, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -175,8 +176,7 @@ fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::WM_HOOK_ACTION;
-    use crate::win_events::LISTED_REFRESH_RETRY_TIMER_ID;
+    use crate::app_messages::{LISTED_REFRESH_RETRY_TIMER_ID, WM_HOOK_ACTION};
     use alttabio::task_refresh::{
         RefreshDecision, RetryTimer, TaskListRefresh, apply_listed_refresh_batch,
     };

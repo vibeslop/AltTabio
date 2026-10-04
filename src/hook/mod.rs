@@ -42,8 +42,6 @@ use windows::core::Error;
 pub(crate) use alttabio::input::decode_virtual_key;
 pub use replay::send_shell_escape;
 
-pub const WM_HOOK_ACTION: u32 = WM_APP + 1;
-pub const WM_HOOK_HOTKEY_ACTION: u32 = WM_APP + 21;
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
 

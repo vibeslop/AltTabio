@@ -1,11 +1,13 @@
+use super::App;
 use super::mouse::WM_MOUSE_LEAVE;
-use super::{App, CLOSE_REFRESH_TIMER_ID, SHELL_DISMISS_TIMER_ID, WM_SHOW_ABOUT, WM_SHOW_SETTINGS};
-use crate::hook::{HookThread, WM_HOOK_ACTION, decode_action, decode_virtual_key};
-use crate::shell_menu;
-use crate::tray::{TrayAction, TrayIcon, WM_TRAY_CALLBACK};
-use crate::win_events::{
-    LISTED_REFRESH_RETRY_TIMER_ID, WM_FOREGROUND_CHECK, WM_LISTED_WINDOW_REFRESH,
+use crate::app_messages::{
+    CLOSE_REFRESH_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID, SHELL_DISMISS_TIMER_ID,
+    WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION, WM_LISTED_WINDOW_REFRESH,
+    WM_SHOW_ABOUT, WM_SHOW_SETTINGS, WM_TRAY_CALLBACK,
 };
+use crate::hook::{HookThread, decode_action, decode_virtual_key};
+use crate::shell_menu;
+use crate::tray::{TrayAction, TrayIcon};
 use crate::win32::{high_word, low_word};
 use alttabio::input::{InputAction, OverlayKeyEvent, overlay_key_action};
 use alttabio::switcher::SwitcherEffect;
@@ -113,7 +115,7 @@ impl App {
             return Some(LRESULT(0));
         }
         match message {
-            WM_HOOK_ACTION | crate::hook::WM_HOOK_HOTKEY_ACTION => {
+            WM_HOOK_ACTION | WM_HOOK_HOTKEY_ACTION => {
                 if !self.modal_state().any_open()
                     && self
                         .hooks
@@ -121,8 +123,7 @@ impl App {
                         .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
-                    if message == crate::hook::WM_HOOK_HOTKEY_ACTION
-                        && matches!(action, InputAction::Switch(_))
+                    if message == WM_HOOK_HOTKEY_ACTION && matches!(action, InputAction::Switch(_))
                     {
                         self.resume_shell_switch_with_hotkey(action);
                     } else {
