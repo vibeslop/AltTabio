@@ -96,6 +96,7 @@ mod tests {
     use crate::overlay_layout::{close_glyph_geometry, layout_dpi};
     use crate::settings::Settings;
     use crate::switcher::SwitchTask;
+    use TaskListHit::{CloseButton, Task};
 
     fn hit_test_task_list(
         switcher: &mut Switcher,
@@ -180,12 +181,122 @@ mod tests {
         assert!(defaults.appearance.compact_list);
         assert!(defaults.general.typed_search);
 
-        assert_fractional_dpi_pixel_grid(defaults.appearance.compact_list);
+        // In logical pixels the list spans x 18 to 243.2, its rows y 18 to 62 and 64 to 108,
+        // and the selected row's close button x 211.2 to 235.2 and y 10 to 34 below the row's
+        // top. Each pair of pixels below straddles one of those edges.
+        let mut switcher = scrolled_switcher();
+        assert_hits_at_fractional_dpi(
+            &mut switcher,
+            true,
+            &[
+                ((22, 50), None),
+                ((23, 50), Some(Task(7))),
+                ((303, 50), Some(Task(7))),
+                ((304, 50), None),
+                ((100, 22), None),
+                ((100, 23), Some(Task(7))),
+                ((100, 77), Some(Task(7))),
+                ((100, 78), None),
+                ((100, 79), None),
+                ((100, 80), Some(Task(8))),
+                ((100, 134), Some(Task(8))),
+                ((100, 135), None),
+                ((100, 209), None),
+                ((263, 110), Some(Task(8))),
+                ((264, 110), Some(CloseButton(8))),
+                ((293, 110), Some(CloseButton(8))),
+                ((294, 110), Some(Task(8))),
+                ((280, 92), Some(Task(8))),
+                ((280, 93), Some(CloseButton(8))),
+                ((280, 122), Some(CloseButton(8))),
+                ((280, 123), Some(Task(8))),
+                ((280, 50), Some(Task(7))),
+            ],
+        );
+
+        // Hovering the seventh task selects it without scrolling the list.
+        assert_eq!(
+            hit_at_fractional_dpi(&mut switcher, true, (100, 50)),
+            Some(Task(7))
+        );
+        assert!(switcher.select_visible_position(7));
+        assert_hits_at_fractional_dpi(
+            &mut switcher,
+            true,
+            &[
+                ((100, 23), Some(Task(7))),
+                ((100, 77), Some(Task(7))),
+                ((100, 78), None),
+                ((100, 80), Some(Task(8))),
+                ((100, 134), Some(Task(8))),
+                ((100, 135), None),
+                ((280, 34), Some(Task(7))),
+                ((280, 35), Some(CloseButton(7))),
+                ((280, 64), Some(CloseButton(7))),
+                ((280, 65), Some(Task(7))),
+                ((280, 110), Some(Task(8))),
+            ],
+        );
     }
 
     #[test]
-    fn normal_list_maps_every_fractional_dpi_pixel_to_the_row_drawn_there() {
-        assert_fractional_dpi_pixel_grid(false);
+    fn normal_list_maps_fractional_dpi_pixels_to_the_row_drawn_there() {
+        // In logical pixels the list spans x 20 to 414.4, its rows y 20 to 78 and 84 to 142,
+        // and the selected row's close button x 376.4 to 406.4 and y 14 to 44 below the row's
+        // top. Each pair of pixels below straddles one of those edges.
+        let mut switcher = scrolled_switcher();
+        assert_hits_at_fractional_dpi(
+            &mut switcher,
+            false,
+            &[
+                ((24, 50), None),
+                ((25, 50), Some(Task(7))),
+                ((517, 50), Some(Task(7))),
+                ((518, 50), None),
+                ((100, 24), None),
+                ((100, 25), Some(Task(7))),
+                ((100, 97), Some(Task(7))),
+                ((100, 98), None),
+                ((100, 104), None),
+                ((100, 105), Some(Task(8))),
+                ((100, 177), Some(Task(8))),
+                ((100, 178), None),
+                ((100, 209), None),
+                ((470, 140), Some(Task(8))),
+                ((471, 140), Some(CloseButton(8))),
+                ((507, 140), Some(CloseButton(8))),
+                ((508, 140), Some(Task(8))),
+                ((490, 122), Some(Task(8))),
+                ((490, 123), Some(CloseButton(8))),
+                ((490, 159), Some(CloseButton(8))),
+                ((490, 160), Some(Task(8))),
+                ((490, 60), Some(Task(7))),
+            ],
+        );
+
+        // Hovering the seventh task selects it without scrolling the list.
+        assert_eq!(
+            hit_at_fractional_dpi(&mut switcher, false, (100, 50)),
+            Some(Task(7))
+        );
+        assert!(switcher.select_visible_position(7));
+        assert_hits_at_fractional_dpi(
+            &mut switcher,
+            false,
+            &[
+                ((100, 25), Some(Task(7))),
+                ((100, 97), Some(Task(7))),
+                ((100, 98), None),
+                ((100, 105), Some(Task(8))),
+                ((100, 177), Some(Task(8))),
+                ((100, 178), None),
+                ((490, 42), Some(Task(7))),
+                ((490, 43), Some(CloseButton(7))),
+                ((490, 79), Some(CloseButton(7))),
+                ((490, 80), Some(Task(7))),
+                ((490, 140), Some(Task(8))),
+            ],
+        );
     }
 
     #[test]
@@ -316,125 +427,33 @@ mod tests {
         switcher
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "known positive logical test coordinates fit exactly inside an i32 client area"
-    )]
-    fn assert_fractional_dpi_pixel_grid(compact_list: bool) {
-        const DPI: u32 = 120;
-        const CLIENT_PIXEL_WIDTH: i32 = 1_125;
-        const CLIENT_PIXEL_HEIGHT: i32 = 210;
-        const EXPECTED_VISIBLE_START: usize = 6;
-
+    /// Ten tasks with the eighth selected, in a 1125 by 210 pixel client at 120 DPI: 900 by 168
+    /// logical pixels, which fit two rows, the seventh and eighth task.
+    fn scrolled_switcher() -> Switcher {
         let mut switcher = switcher_with_tasks(10);
         assert!(switcher.select_visible_position(8));
-        assert_pixel_grid(&mut switcher, compact_list, EXPECTED_VISIBLE_START);
-
-        let layout = for_compact_list(compact_list);
-        let scale = layout_scale(DPI);
-        let row_x = ((layout.outer_padding + 1.0) * scale).ceil() as i32;
-        let row_y = ((layout.list_top() + 1.0) * scale).ceil() as i32;
-        let hovered = hit_test_pixels(
-            &mut switcher,
-            (CLIENT_PIXEL_WIDTH, CLIENT_PIXEL_HEIGHT),
-            (row_x, row_y),
-            DPI,
-            compact_list,
-        );
-        assert_eq!(hovered, Some(TaskListHit::Task(7)));
-        assert!(hovered.is_some_and(|hit| switcher.select_visible_position(hit.position())));
-
-        assert_pixel_grid(&mut switcher, compact_list, EXPECTED_VISIBLE_START);
+        switcher
     }
 
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "the exhaustive test grid uses small client pixel coordinates"
-    )]
-    fn assert_pixel_grid(
+    fn hit_at_fractional_dpi(
         switcher: &mut Switcher,
         compact_list: bool,
-        expected_visible_start: usize,
-    ) {
-        const DPI: u32 = 120;
-        const CLIENT_PIXEL_WIDTH: i32 = 1_125;
-        const CLIENT_PIXEL_HEIGHT: i32 = 210;
-        let scale = layout_scale(DPI);
-        let logical_scale = 1.0 / scale;
-        let client_width = CLIENT_PIXEL_WIDTH as f32 * logical_scale;
-        let client_height = CLIENT_PIXEL_HEIGHT as f32 * logical_scale;
-
-        for pixel_y in 0..CLIENT_PIXEL_HEIGHT {
-            for pixel_x in 0..CLIENT_PIXEL_WIDTH {
-                let expected = expected_hit(
-                    switcher,
-                    (client_width, client_height),
-                    (
-                        pixel_x as f32 * logical_scale,
-                        pixel_y as f32 * logical_scale,
-                    ),
-                    compact_list,
-                    expected_visible_start,
-                    scale,
-                );
-                let actual = hit_test_pixels(
-                    switcher,
-                    (CLIENT_PIXEL_WIDTH, CLIENT_PIXEL_HEIGHT),
-                    (pixel_x, pixel_y),
-                    DPI,
-                    compact_list,
-                );
-                assert_eq!(
-                    actual, expected,
-                    "unexpected hit at physical pixel ({pixel_x}, {pixel_y})"
-                );
-            }
-        }
+        pixel: (i32, i32),
+    ) -> Option<TaskListHit> {
+        hit_test_pixels(switcher, (1_125, 210), pixel, 120, compact_list)
     }
 
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "the exhaustive test grid maps a small row index to logical coordinates"
-    )]
-    fn expected_hit(
-        switcher: &Switcher,
-        client_size: (f32, f32),
-        point: (f32, f32),
+    fn assert_hits_at_fractional_dpi(
+        switcher: &mut Switcher,
         compact_list: bool,
-        visible_start: usize,
-        scale: f32,
-    ) -> Option<TaskListHit> {
-        let (client_width, client_height) = client_size;
-        let (x, y) = point;
-        let layout = for_compact_list(compact_list);
-        let list_width = layout.list_width(client_width, scale);
-        let list_top = layout.list_top();
-        if x < layout.outer_padding || x >= list_width || y < list_top {
-            return None;
-        }
-
-        let row = layout.visible_row_at(client_height, y)?;
-        let position = visible_start + row + 1;
-        if position > switcher.visible_task_count() {
-            return None;
-        }
-
-        let row_top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-        let close_bounds = layout.close_button_bounds(LogicalRect {
-            left: layout.outer_padding,
-            top: row_top,
-            right: list_width,
-            bottom: row_top + layout.row_height,
-        });
-        if switcher.selected_visible_index().map(|index| index + 1) == Some(position)
-            && x >= close_bounds.left
-            && x < close_bounds.right
-            && y >= close_bounds.top
-            && y < close_bounds.bottom
-        {
-            Some(TaskListHit::CloseButton(position))
-        } else {
-            Some(TaskListHit::Task(position))
+        expected: &[((i32, i32), Option<TaskListHit>)],
+    ) {
+        for &(pixel, hit) in expected {
+            assert_eq!(
+                hit_at_fractional_dpi(switcher, compact_list, pixel),
+                hit,
+                "unexpected hit at physical pixel {pixel:?}"
+            );
         }
     }
 
