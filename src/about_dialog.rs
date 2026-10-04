@@ -6,7 +6,7 @@ use crate::native_drawing::{
 use crate::win32::{self, native_rect, point_from_lparam};
 use crate::{app_icon, native_theme::DarkModeApi};
 use alttabio::about_layout::{AboutLayout, CLIENT_HEIGHT, CLIENT_WIDTH};
-use alttabio::dialog_layout::{BASE_DPI, Point, Size, hairline, scale};
+use alttabio::dialog_layout::{Point, Size, hairline, known_dpi, scale};
 use alttabio::failure_run::FailureRun;
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
@@ -207,12 +207,6 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
         open_repository()?;
     }
     Ok(())
-}
-
-/// Windows reports a DPI it cannot read as 0. That leaves the scale unknown rather than small, so
-/// About is laid out at 100%, as Settings is.
-const fn known_dpi(dpi: u32) -> u32 {
-    if dpi == 0 { BASE_DPI } else { dpi }
 }
 
 /// The origin and outer size that center About's client area at `dpi` on the cursor's monitor.

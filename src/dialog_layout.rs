@@ -11,6 +11,13 @@ pub fn scale(value: i32, dpi: u32) -> i32 {
     i32::try_from(numerator / i64::from(BASE_DPI)).unwrap_or(i32::MAX)
 }
 
+/// `dpi`, or `BASE_DPI` when Windows reports 0 for a DPI it cannot read. That leaves the scale
+/// unknown rather than small, so the dialogs lay out at 100%.
+#[must_use]
+pub const fn known_dpi(dpi: u32) -> u32 {
+    if dpi == 0 { BASE_DPI } else { dpi }
+}
+
 /// The width of a hairline at `dpi`, never thinner than one pixel.
 #[must_use]
 pub fn hairline(dpi: u32) -> i32 {
@@ -139,6 +146,13 @@ mod tests {
         assert_eq!(scale(3, 120), 4);
         assert_eq!(hairline(MIN_DPI), 1);
         assert_eq!(hairline(192), 2);
+    }
+
+    #[test]
+    fn an_unread_dpi_falls_back_to_the_base_dpi() {
+        assert_eq!(known_dpi(0), BASE_DPI);
+        assert_eq!(known_dpi(MIN_DPI), MIN_DPI);
+        assert_eq!(known_dpi(144), 144);
     }
 
     #[test]

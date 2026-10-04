@@ -11,7 +11,7 @@ use crate::{
     app_icon,
     native_theme::{DarkModeApi, resolve_current_theme},
 };
-use alttabio::dialog_layout::BASE_DPI;
+use alttabio::dialog_layout::known_dpi;
 use alttabio::failure_run::SharedFailureRun;
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
@@ -309,11 +309,10 @@ fn register_class(instance: HINSTANCE) -> Result<()> {
 }
 
 fn owner_dpi(owner: HWND) -> u32 {
-    let dpi = unsafe {
+    known_dpi(unsafe {
         // SAFETY: owner is the live application window used for this modal dialog.
         GetDpiForWindow(owner)
-    };
-    if dpi == 0 { BASE_DPI } else { dpi }
+    })
 }
 
 fn handle_settings_message(
@@ -391,7 +390,7 @@ fn request_dialog_close(hwnd: HWND) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alttabio::dialog_layout::{Point, Size};
+    use alttabio::dialog_layout::{BASE_DPI, Point, Size};
 
     #[test]
     fn settings_window_is_not_owned_by_the_topmost_overlay() {
