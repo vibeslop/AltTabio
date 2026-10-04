@@ -6,7 +6,7 @@ mod keyboard_state;
 mod recovery;
 mod replay;
 
-use crate::win32::module_instance;
+use crate::win32::{high_word, module_instance};
 use alttabio::hook_flags::{
     HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS,
     SEARCH_ACTIVE,
@@ -491,7 +491,7 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
     let event = match u32::try_from(wparam.0).ok()? {
         WM_RBUTTONDOWN => MouseEvent::RightButtonPressed,
         WM_RBUTTONUP => MouseEvent::RightButtonReleased,
-        WM_MOUSEWHEEL => MouseEvent::Wheel((data.mouseData >> 16) as i16),
+        WM_MOUSEWHEEL => MouseEvent::Wheel(high_word(data.mouseData as usize).cast_signed()),
         _ => return None,
     };
     let (mut outcome, replayed_mouse_event) = process_with_context(|context| {
