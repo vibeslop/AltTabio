@@ -15,7 +15,7 @@ use std::mem::{size_of, size_of_val};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
-    WPARAM,
+    SetLastError, WIN32_ERROR, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
@@ -479,18 +479,23 @@ pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
         return Err(error);
     }
 
-    unsafe {
-        // SAFETY: window is fully initialized and owned by this UI thread.
+    let foreground = unsafe {
+        // SAFETY: window is fully initialized and owned by this UI thread. ShowWindow reports the
+        // previous visibility, not a failure.
         let _was_visible = ShowWindow(window, SW_SHOW);
-        let _foreground = SetForegroundWindow(window);
+        SetForegroundWindow(window)
+    };
+    if !foreground.as_bool() {
+        // Windows refuses the foreground while the user works in another process; settings still
+        // shows.
+        eprintln!("Windows kept settings out of the foreground");
     }
     let ok_button = unsafe {
         // SAFETY: host_pointer remains live and setup has released its mutable state borrow.
         (*host_pointer).state.borrow().controls.ok_button
     };
-    unsafe {
-        // SAFETY: ok_button is a fully initialized child of the live settings window.
-        let _focused = SetFocus(Some(ok_button));
+    if let Err(error) = focus(ok_button) {
+        eprintln!("Could not focus the settings OK button: {error}");
     }
     let loop_result = run_dialog_loop(window, host_pointer);
     if let Err(loop_error) = loop_result {
@@ -1656,25 +1661,32 @@ fn draw_polyline(dc: HDC, points: &[Point], color: COLORREF, width: i32) -> Resu
         // SAFETY: dc is live and pen remains owned through the complete drawing operation.
         SelectObject(dc, HGDIOBJ(pen.0))
     };
-    let mut success = unsafe {
-        // SAFETY: dc is live and the previous-point output is intentionally unused.
-        MoveToEx(dc, first.x, first.y, std::ptr::null_mut()).as_bool()
-    };
-    for point in remaining {
-        success &= unsafe {
-            // SAFETY: dc remains live with the owned pen selected.
-            LineTo(dc, point.x, point.y).as_bool()
+    let mut success = previous != HGDIOBJ::default();
+    if success {
+        success = unsafe {
+            // SAFETY: dc is live and the previous-point output is intentionally unused.
+            MoveToEx(dc, first.x, first.y, std::ptr::null_mut()).as_bool()
         };
+        for point in remaining {
+            success &= unsafe {
+                // SAFETY: dc remains live with the owned pen selected.
+                LineTo(dc, point.x, point.y).as_bool()
+            };
+        }
+        let restored = unsafe {
+            // SAFETY: previous is the object returned by SelectObject for this dc.
+            SelectObject(dc, previous)
+        };
+        if restored == HGDIOBJ::default() {
+            eprintln!("Could not restore the settings drawing pen");
+        }
     }
-    unsafe {
-        // SAFETY: previous is the object returned by SelectObject for this dc.
-        if previous != HGDIOBJ::default() {
-            SelectObject(dc, previous);
-        }
+    let deleted = unsafe {
         // SAFETY: pen is uniquely owned and no longer selected into dc.
-        if !DeleteObject(HGDIOBJ(pen.0)).as_bool() {
-            eprintln!("Could not release a settings drawing pen");
-        }
+        DeleteObject(HGDIOBJ(pen.0))
+    };
+    if !deleted.as_bool() {
+        eprintln!("Could not release a settings drawing pen");
     }
     if success {
         Ok(())
@@ -2157,11 +2169,28 @@ impl OwnerGuard {
 
 impl Drop for OwnerGuard {
     fn drop(&mut self) {
-        unsafe {
-            // SAFETY: owner remains live after the nested dialog closes.
+        let foreground = unsafe {
+            // SAFETY: owner remains live after the nested dialog closes. EnableWindow reports the
+            // previous state, not a failure.
             let _was_disabled = EnableWindow(self.0, true);
-            let _foreground = SetForegroundWindow(self.0);
+            SetForegroundWindow(self.0)
+        };
+        if !foreground.as_bool() {
+            eprintln!("Windows kept AltTabio out of the foreground after settings closed");
         }
+    }
+}
+
+fn focus(control: HWND) -> Result<()> {
+    let result = unsafe {
+        // SAFETY: control is a live child of this thread's window. Clearing the last error first
+        // tells a failure from a null previous focus.
+        SetLastError(WIN32_ERROR(0));
+        SetFocus(Some(control))
+    };
+    match result {
+        Err(error) if error.code().is_err() => Err(error),
+        _ => Ok(()),
     }
 }
 
