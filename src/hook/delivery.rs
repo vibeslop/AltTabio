@@ -4,13 +4,13 @@
 
 use super::{
     CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext, WM_HOOK_ACTION,
-    WM_HOOK_HOTKEY_ACTION, process_with_context,
+    WM_HOOK_HOTKEY_ACTION, decode_virtual_key, process_with_context,
 };
+use alttabio::hook_delivery::{Delivery, deliver, routes_tab_through_hotkey};
 use alttabio::hook_flags::encode_action;
-use alttabio::input::{HookOutcome, InputAction, KeyTransition};
+use alttabio::input::{HookOutcome, InputAction, Key, KeyTransition};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_TAB;
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, GetForegroundWindow, KBDLLHOOKSTRUCT, LLKHF_INJECTED, PostMessageW,
 };
@@ -64,40 +64,25 @@ fn post_context_actions(
         }
         return true;
     }
-    for action in outcome.actions() {
-        if !context
-            .flags
-            .generation_is_current(context.interception_generation)
-        {
-            // Keep release ownership even when a modal boundary races with this callback.
-            return true;
-        }
-        let opens_overlay = matches!(
-            action,
-            InputAction::Switch(_) | InputAction::RightButtonPressed
-        );
-        if opens_overlay
-            && !context.flags.update_overlay(
-                context.interception_generation,
-                true,
-                context.settings.typed_search,
-            )
-        {
+    let target = context.target;
+    match deliver(
+        &context.flags,
+        context.interception_generation,
+        context.settings.typed_search,
+        outcome,
+        |action| post(target, action),
+    ) {
+        // Keep release ownership even when a modal boundary races with this callback.
+        Delivery::Posted | Delivery::Stale => true,
+        Delivery::OverlayRefused => {
             context.state.reset_gestures();
-            return true;
+            true
         }
-        if !post(context.target, action) {
+        Delivery::PostFailed => {
             context.record_error(HOOK_ERROR_POST_ACTION);
-            if opens_overlay {
-                let _cleared =
-                    context
-                        .flags
-                        .update_overlay(context.interception_generation, false, false);
-            }
-            return false;
+            false
         }
     }
-    true
 }
 
 fn post_action(target: HWND, action: InputAction, generation: usize) -> bool {
@@ -129,10 +114,8 @@ fn route_registered_switch_with(
     foreground: impl FnOnce() -> HWND,
     register: impl FnOnce(usize) -> Result<crate::switch_hotkey::PendingSwitch, Error>,
 ) -> HookOutcome {
-    if data.vkCode == u32::from(VK_TAB.0)
-        && transition == KeyTransition::Released
-        && context.registered_tab_down
-    {
+    let key = decode_virtual_key(data.vkCode);
+    if key == Key::Tab && transition == KeyTransition::Released && context.registered_tab_down {
         // Windows received this physical down as a hotkey. Balance it even if the pure
         // switcher would normally own the release of an intercepted Tab.
         context.registered_tab_down = false;
@@ -145,9 +128,7 @@ fn route_registered_switch_with(
     {
         return outcome;
     }
-    if data.vkCode != u32::from(VK_TAB.0) || transition != KeyTransition::Pressed
-        || data.flags.contains(LLKHF_INJECTED)
-        || !outcome.actions().any(|action| matches!(action, InputAction::Switch(_)))
+    if !routes_tab_through_hotkey(key, transition, data.flags.contains(LLKHF_INJECTED), outcome)
         // Intercepting Tab is not input delivered to our UI. Receive the physical hotkey
         // whenever another window owns foreground, including ordinary applications.
         || foreground() == context.target
@@ -236,9 +217,9 @@ mod tests {
     use crate::hook::keyboard_state::KeyboardState;
     use crate::hook::test_context;
     use alttabio::hook_flags::{HookFlags, OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE};
-    use alttabio::input::{HookSettings, HookState, Key, KeyEvent, Modifiers, MouseEvent};
+    use alttabio::input::{HookSettings, HookState, KeyEvent, Modifiers, MouseEvent};
     use std::sync::{Arc, atomic::AtomicBool};
-    use windows::Win32::UI::Input::KeyboardAndMouse::VK_LMENU;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LMENU, VK_TAB};
 
     #[test]
     fn ordinary_alt_tab_requests_foreground_permission_before_replaying_release() {
