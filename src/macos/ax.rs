@@ -37,6 +37,9 @@ impl AxElement {
 
     /// Bounds every call through this element so an unresponsive app cannot stall enumeration.
     pub fn set_messaging_timeout(&self, seconds: f32) {
+        // A failure is safe to ignore: the element keeps the global timeout, which is slower but
+        // still bounded. Apple lists a negative timeout, which callers never pass, and an invalid
+        // element, whose next call fails with an error the caller handles.
         let _error = unsafe {
             // SAFETY: the element is live for the duration of the call.
             self.0.set_messaging_timeout(seconds)
