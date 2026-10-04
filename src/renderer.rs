@@ -2,6 +2,7 @@ mod canvas;
 mod icons;
 
 use alttabio::close_button::CloseButtonVisualState;
+use alttabio::failure_run::FailureRun;
 use alttabio::overlay_layout::{for_compact_list, layout_dpi, layout_scale};
 use alttabio::settings::AppearanceSettings;
 use alttabio::switcher::Switcher;
@@ -35,8 +36,8 @@ pub struct Renderer {
     // DirectWrite takes UTF-16, so every title, app name and number is re-encoded on each paint;
     // one buffer reused for all of them keeps painting from allocating.
     utf16: Vec<u16>,
-    icon_client_area_failing: bool,
-    icon_draw_failing: bool,
+    icon_client_area_failures: FailureRun,
+    icon_draw_failures: FailureRun,
 }
 
 struct TextFormats {
@@ -155,8 +156,8 @@ impl Renderer {
             theme,
             resources: None,
             utf16: Vec::new(),
-            icon_client_area_failing: false,
-            icon_draw_failing: false,
+            icon_client_area_failures: FailureRun::default(),
+            icon_draw_failures: FailureRun::default(),
         })
     }
 
@@ -256,21 +257,19 @@ impl Renderer {
         // at the client area never reaches the icons and leaves their run as it was.
         match draw_icon_pass(hwnd, hdc, switcher, options) {
             Ok(()) => {
-                self.icon_client_area_failing = false;
-                self.icon_draw_failing = false;
+                self.icon_client_area_failures.succeed();
+                self.icon_draw_failures.succeed();
             }
             Err(failure @ IconPassFailure::ClientArea(_)) => {
-                if !self.icon_client_area_failing {
+                if self.icon_client_area_failures.fail() {
                     eprintln!("{failure}");
                 }
-                self.icon_client_area_failing = true;
             }
             Err(failure @ IconPassFailure::Icons { .. }) => {
-                self.icon_client_area_failing = false;
-                if !self.icon_draw_failing {
+                self.icon_client_area_failures.succeed();
+                if self.icon_draw_failures.fail() {
                     eprintln!("{failure}");
                 }
-                self.icon_draw_failing = true;
             }
         }
     }

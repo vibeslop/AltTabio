@@ -24,6 +24,7 @@ use crate::task_icon::TaskIcons;
 use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
 use crate::win32::{module_instance, wide};
+use alttabio::failure_run::FailureRun;
 use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
 use alttabio::settings::Settings;
@@ -202,9 +203,9 @@ struct App {
     session: SwitcherSession,
     task_icons: TaskIcons,
     renderer: Renderer,
-    begin_paint_failing: bool,
-    foreground_bounds_failing: bool,
-    hit_test_failing: bool,
+    begin_paint_failures: FailureRun,
+    foreground_bounds_failures: FailureRun,
+    hit_test_failures: FailureRun,
     resolved_theme: ResolvedTheme,
     preview: Option<DwmPreview>,
     hooks: Option<HookThread>,
@@ -251,9 +252,9 @@ impl App {
             session,
             task_icons: TaskIcons::default(),
             renderer: Renderer::new(resolved_theme)?,
-            begin_paint_failing: false,
-            foreground_bounds_failing: false,
-            hit_test_failing: false,
+            begin_paint_failures: FailureRun::default(),
+            foreground_bounds_failures: FailureRun::default(),
+            hit_test_failures: FailureRun::default(),
             resolved_theme,
             preview: None,
             hooks: None,

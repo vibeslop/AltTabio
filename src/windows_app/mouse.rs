@@ -146,12 +146,11 @@ impl App {
         // Every mouse message hit tests, so a failure that lasts would log on each move. Logging
         // the first failure of a run is enough.
         match client_result {
-            Ok(()) => self.hit_test_failing = false,
+            Ok(()) => self.hit_test_failures.succeed(),
             Err(error) => {
-                if !self.hit_test_failing {
+                if self.hit_test_failures.fail() {
                     eprintln!("Could not read the overlay's client area for a hit test: {error}");
                 }
-                self.hit_test_failing = true;
                 return None;
             }
         }

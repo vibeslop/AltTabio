@@ -8,7 +8,7 @@ impl App {
         &mut self,
         settings: HookSettings,
     ) -> std::result::Result<(), String> {
-        let policy = foreground_passthrough_policy(self.hwnd, &mut self.foreground_bounds_failing);
+        let policy = foreground_passthrough_policy(self.hwnd, &mut self.foreground_bounds_failures);
         if policy.bypasses_local_switching() && self.is_visible() {
             self.hide_overlay();
         }

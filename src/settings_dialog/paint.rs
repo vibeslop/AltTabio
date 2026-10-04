@@ -142,14 +142,13 @@ fn paint_control_message(hwnd: HWND, state: &DialogState) -> LRESULT {
     };
     // Only a successful BeginPaint validates the update region, so after a failure WM_PAINT
     // keeps arriving until a call succeeds. Logging the first failure of a run is enough.
-    let begin_failed = dc == HDC::default();
-    if begin_failed && !state.begin_paint_failing.get() {
-        eprintln!("Could not begin painting a settings control");
-    }
-    state.begin_paint_failing.set(begin_failed);
-    if begin_failed {
+    if dc == HDC::default() {
+        if state.begin_paint_failures.fail() {
+            eprintln!("Could not begin painting a settings control");
+        }
         return LRESULT(0);
     }
+    state.begin_paint_failures.succeed();
     paint_settings_control(hwnd, dc, state);
     unsafe {
         // SAFETY: paint was filled by the successful BeginPaint above for this hwnd.

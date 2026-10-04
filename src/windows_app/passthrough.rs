@@ -3,6 +3,7 @@ use crate::process_info::ProcessInfo;
 use crate::task_query::window_class_name;
 use crate::win_events;
 use crate::win32::monitor_info;
+use alttabio::failure_run::FailureRun;
 use alttabio::passthrough::{PassthroughPolicy, is_remote_desktop_client, window_fills_monitor};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
@@ -13,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 impl App {
     pub(super) fn handle_foreground_check(&mut self) {
         win_events::acknowledge_foreground_check();
-        let policy = foreground_passthrough_policy(self.hwnd, &mut self.foreground_bounds_failing);
+        let policy = foreground_passthrough_policy(self.hwnd, &mut self.foreground_bounds_failures);
         if policy.bypasses_local_switching() && (self.is_visible() || self.pending_shell.is_some())
         {
             self.hide_overlay();
@@ -27,11 +28,11 @@ impl App {
     }
 }
 
-/// `bounds_failing` records whether the last attempt to read the foreground window's bounds
-/// failed, so that a run of failures is logged once.
+/// `bounds_failures` tracks reading the foreground window's bounds, so that a run of failures is
+/// logged once.
 pub(super) fn foreground_passthrough_policy(
     overlay: HWND,
-    bounds_failing: &mut bool,
+    bounds_failures: &mut FailureRun,
 ) -> PassthroughPolicy {
     let hwnd = unsafe {
         // SAFETY: GetForegroundWindow has no pointer preconditions.
@@ -55,11 +56,11 @@ pub(super) fn foreground_passthrough_policy(
     };
     PassthroughPolicy::from_foreground(
         is_remote_desktop_client(&class_name, process.executable_stem()),
-        is_maximized_or_fullscreen(hwnd, bounds_failing),
+        is_maximized_or_fullscreen(hwnd, bounds_failures),
     )
 }
 
-fn is_maximized_or_fullscreen(hwnd: HWND, bounds_failing: &mut bool) -> bool {
+fn is_maximized_or_fullscreen(hwnd: HWND, bounds_failures: &mut FailureRun) -> bool {
     if unsafe {
         // SAFETY: hwnd is the live foreground window.
         IsZoomed(hwnd)
@@ -72,11 +73,11 @@ fn is_maximized_or_fullscreen(hwnd: HWND, bounds_failing: &mut bool) -> bool {
     // be read would repeat its log line. Logging the first failure of a run is enough.
     match foreground_bounds(hwnd) {
         Ok((window, monitor)) => {
-            *bounds_failing = false;
+            bounds_failures.succeed();
             window_fills_monitor(window, monitor)
         }
         Err(error) => {
-            if !std::mem::replace(bounds_failing, true) {
+            if bounds_failures.fail() {
                 eprintln!("{error}");
             }
             false

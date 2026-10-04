@@ -12,6 +12,7 @@ use crate::{
     native_theme::{DarkModeApi, resolve_current_theme},
 };
 use alttabio::dialog_layout::BASE_DPI;
+use alttabio::failure_run::SharedFailureRun;
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
     Choices, Control, DialogButton, ICON_CHOICES, Selector, SettingOption, SettingsLayout,
@@ -19,7 +20,6 @@ use alttabio::settings_form::{
 };
 use alttabio::theme::ResolvedTheme;
 use controls::{DialogControls, is_checked, selected_index};
-use std::cell::Cell;
 use std::ffi::c_void;
 use theme::ThemePalette;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -105,9 +105,9 @@ struct DialogState {
     instance: HINSTANCE,
     dpi: u32,
     accepted: bool,
-    /// Whether the last `BeginPaint` of any custom-painted control failed. A `Cell` because
-    /// painting runs from the control subclass, which only borrows the state shared.
-    begin_paint_failing: Cell<bool>,
+    /// Failures of `BeginPaint` across every custom-painted control. Painting runs from the
+    /// control subclass, which only borrows the state shared.
+    begin_paint_failures: SharedFailureRun,
 }
 
 impl DialogWindow for DialogState {
@@ -148,7 +148,7 @@ impl DialogState {
             instance,
             dpi,
             accepted: false,
-            begin_paint_failing: Cell::new(false),
+            begin_paint_failures: SharedFailureRun::default(),
         }
     }
 
