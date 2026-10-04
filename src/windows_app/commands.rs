@@ -165,8 +165,12 @@ fn run_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
     else {
         return false;
     };
-    let Ok(path) = executable_path(process.0) else {
-        return false;
+    let path = match executable_path(process.0) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Could not find the selected process's executable: {error}");
+            return false;
+        }
     };
     if let Err(error) = launch_with_shell_token(&path) {
         eprintln!(
@@ -200,7 +204,13 @@ fn open_selected_process(
                 }
             }
         },
-        |process| process_started_at(process.0).ok(),
+        |process| {
+            process_started_at(process.0)
+                .map_err(|error| {
+                    eprintln!("Could not read when the selected process started: {error}");
+                })
+                .ok()
+        },
         process_id,
     )
 }
