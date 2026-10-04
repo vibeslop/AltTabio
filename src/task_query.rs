@@ -7,15 +7,13 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use windows::Win32::Foundation::{HWND, LPARAM, POINT};
+use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_APP, DWMWA_CLOAKED, DwmGetWindowAttribute};
-use windows::Win32::Graphics::Gdi::{
-    HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint, MonitorFromWindow,
-};
+use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetCursorPos,
-    GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetShellWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    IsWindowVisible, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, Result};
 
@@ -26,15 +24,7 @@ pub struct EnumeratedTasks {
 
 pub fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTasks> {
     let current_monitor = if settings.monitor.use_current_monitor_filter {
-        let mut cursor = POINT::default();
-        unsafe {
-            // SAFETY: cursor is writable for the synchronous call.
-            GetCursorPos(&raw mut cursor)?;
-        }
-        Some(unsafe {
-            // SAFETY: cursor was initialized above and nearest-monitor fallback guarantees a result.
-            MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
-        })
+        Some(crate::win32::monitor_near_cursor()?)
     } else {
         None
     };
