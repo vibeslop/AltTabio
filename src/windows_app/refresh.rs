@@ -1,8 +1,8 @@
 use super::App;
+use super::commands::execute as execute_window_command;
 use crate::app_messages::{CLOSE_REFRESH_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID};
 use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows};
 use crate::win_events::{self, LISTED_REFRESH_RETRY_DELAY_MS};
-use crate::window_commands::execute as execute_window_command;
 use alttabio::switcher::WindowCommandRequest;
 use alttabio::task_refresh::{
     ContextMenuCommandOutcome, RefreshDecision, RetryTimer, apply_listed_refresh_batch,

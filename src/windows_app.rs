@@ -1,5 +1,6 @@
 mod activation;
 mod appearance;
+mod commands;
 mod dialogs;
 mod dispatch;
 mod display;

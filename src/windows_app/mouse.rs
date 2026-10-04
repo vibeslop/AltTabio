@@ -1,6 +1,6 @@
+use super::commands::show_menu as show_window_command_menu;
 use super::{App, AppHost};
 use crate::win32::point_from_lparam;
-use crate::window_commands::show_menu as show_window_command_menu;
 use alttabio::input::InputAction;
 use alttabio::overlay_pointer::{close_target_for_hit, select_hovered_position};
 use alttabio::switcher::SwitcherEffect;

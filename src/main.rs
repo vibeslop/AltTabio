@@ -47,8 +47,6 @@ mod win32;
 #[cfg(windows)]
 mod win_events;
 #[cfg(windows)]
-mod window_commands;
-#[cfg(windows)]
 mod windows_app;
 
 fn main() {

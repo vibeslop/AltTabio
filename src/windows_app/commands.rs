@@ -1,3 +1,7 @@
+//! The Win32 side of window commands: the task list's right-click menu that picks one, and the
+//! calls that carry it out on a window or its process. Which window a command acts on is decided
+//! in the library.
+
 use crate::process_info::{executable_path, process_started_at};
 use alttabio::process_identity::ProcessIdentity;
 use alttabio::window_command::WindowCommand;
@@ -22,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-pub fn show_menu(owner: HWND) -> Option<WindowCommand> {
+pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let menu = unsafe {
         // SAFETY: CreatePopupMenu has no pointer preconditions and returns a uniquely owned menu.
         CreatePopupMenu()
@@ -71,7 +75,7 @@ pub fn show_menu(owner: HWND) -> Option<WindowCommand> {
         .find_map(|(id, _, command)| (*id == selected).then_some(*command))
 }
 
-pub fn execute(
+pub(super) fn execute(
     command: WindowCommand,
     window_handle: isize,
     process_identity: ProcessIdentity,
