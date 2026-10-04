@@ -39,8 +39,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::Error;
 
+pub(crate) use alttabio::input::decode_virtual_key;
 pub use flags::decode_action;
-pub(crate) use keyboard_state::decode_virtual_key;
 pub use replay::send_shell_escape;
 
 pub const WM_HOOK_ACTION: u32 = WM_APP + 1;

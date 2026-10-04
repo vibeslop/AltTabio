@@ -232,8 +232,7 @@ pub(super) fn post_action_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::decode_virtual_key;
-    use alttabio::input::Key;
+    use alttabio::input::{Key, decode_virtual_key};
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F4, VK_RETURN};
 
     #[test]

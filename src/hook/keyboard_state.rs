@@ -2,13 +2,11 @@
 //! translates with the modifiers the user actually holds.
 
 use super::key_pressed;
-use alttabio::input::{HookState, Key, KeyTransition};
+use alttabio::input::{HookState, KeyTransition, decode_virtual_key};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, GetKeyboardState, ToUnicodeEx, VIRTUAL_KEY, VK_0, VK_1, VK_9, VK_BACK,
-    VK_CAPITAL, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9,
-    VK_HOME, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_NUMPAD0,
-    VK_NUMPAD1, VK_NUMPAD9, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
-    VK_SCROLL, VK_SHIFT, VK_SNAPSHOT, VK_TAB, VK_UP,
+    GetKeyboardLayout, GetKeyboardState, ToUnicodeEx, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL,
+    VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_RCONTROL, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT;
 
@@ -195,50 +193,15 @@ pub(super) fn translate_search_character(
     characters.next().is_none().then_some(character)
 }
 
-pub(crate) fn decode_virtual_key(virtual_key: u32) -> Key {
-    match virtual_key {
-        value if value == u32::from(VK_TAB.0) => Key::Tab,
-        value if value == u32::from(VK_RETURN.0) => Key::Enter,
-        value if value == u32::from(VK_HOME.0) => Key::Home,
-        value if value == u32::from(VK_END.0) => Key::End,
-        value if value == u32::from(VK_ESCAPE.0) => Key::Escape,
-        value if value == u32::from(VK_F4.0) => Key::F4,
-        value if value == u32::from(VK_F5.0) => Key::Function(5),
-        value if value == u32::from(VK_F6.0) => Key::Function(6),
-        value if value == u32::from(VK_F7.0) => Key::Function(7),
-        value if value == u32::from(VK_F8.0) => Key::Function(8),
-        value if value == u32::from(VK_F9.0) => Key::Function(9),
-        value if value == u32::from(VK_MENU.0) => Key::Alt,
-        value if value == u32::from(VK_LMENU.0) => Key::LeftAlt,
-        value if value == u32::from(VK_RMENU.0) => Key::RightAlt,
-        value if value == u32::from(VK_LWIN.0) => Key::LeftWindows,
-        value if value == u32::from(VK_RWIN.0) => Key::RightWindows,
-        value if value == u32::from(VK_CONTROL.0) => Key::Control,
-        value if value == u32::from(VK_LCONTROL.0) => Key::LeftControl,
-        value if value == u32::from(VK_RCONTROL.0) => Key::RightControl,
-        value if value == u32::from(VK_LSHIFT.0) => Key::LeftShift,
-        value if value == u32::from(VK_RSHIFT.0) => Key::RightShift,
-        value if value == u32::from(VK_SNAPSHOT.0) => Key::PrintScreen,
-        value if value == u32::from(VK_BACK.0) => Key::Backspace,
-        value if value == u32::from(VK_LEFT.0) => Key::LeftArrow,
-        value if value == u32::from(VK_UP.0) => Key::UpArrow,
-        value if value == u32::from(VK_RIGHT.0) => Key::RightArrow,
-        value if value == u32::from(VK_DOWN.0) => Key::DownArrow,
-        value if value >= u32::from(VK_1.0) && value <= u32::from(VK_9.0) => {
-            Key::Digit(u8::try_from(value - u32::from(VK_0.0)).unwrap_or_default())
-        }
-        value if value >= u32::from(VK_NUMPAD1.0) && value <= u32::from(VK_NUMPAD9.0) => {
-            Key::NumpadDigit(u8::try_from(value - u32::from(VK_NUMPAD0.0)).unwrap_or_default())
-        }
-        value => Key::Other(u16::try_from(value).unwrap_or_default()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hook::test_context;
-    use alttabio::input::{InputAction, KeyEvent, Modifiers};
+    use alttabio::input::{InputAction, Key, KeyEvent, Modifiers};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_1, VK_DOWN, VK_END, VK_ESCAPE, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_LEFT,
+        VK_RIGHT, VK_SNAPSHOT, VK_UP,
+    };
 
     #[test]
     fn desktop_rebase_clears_old_modifiers_but_preserves_fresh_suppressed_shift() {
