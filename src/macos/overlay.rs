@@ -299,15 +299,81 @@ impl ContextMenuTarget {
     }
 }
 
-const fn command_for_tag(tag: isize) -> Option<WindowCommand> {
-    match tag {
-        1 => Some(WindowCommand::Close),
-        2 => Some(WindowCommand::Minimize),
-        3 => Some(WindowCommand::Hide),
-        4 => Some(WindowCommand::Quit),
-        5 => Some(WindowCommand::Terminate),
-        _ => None,
+struct MenuItem {
+    command: WindowCommand,
+    /// Window items read as they are; app items name the app after this.
+    title: &'static str,
+    key: &'static str,
+    on_window: bool,
+    /// A separator comes before this item unless it is the first.
+    separated: bool,
+}
+
+/// The command menu from top to bottom. An item's tag is its index here plus one, so the 0 of an
+/// untagged item names no command.
+const MENU: [MenuItem; 5] = [
+    MenuItem {
+        command: WindowCommand::Close,
+        title: "Close Window",
+        key: "w",
+        on_window: true,
+        separated: false,
+    },
+    MenuItem {
+        command: WindowCommand::Minimize,
+        title: "Minimize Window",
+        key: "m",
+        on_window: true,
+        separated: false,
+    },
+    MenuItem {
+        command: WindowCommand::Hide,
+        title: "Hide",
+        key: "h",
+        on_window: false,
+        separated: true,
+    },
+    MenuItem {
+        command: WindowCommand::Quit,
+        title: "Quit",
+        key: "q",
+        on_window: false,
+        separated: false,
+    },
+    MenuItem {
+        command: WindowCommand::Terminate,
+        title: "Force Quit",
+        key: "",
+        on_window: false,
+        separated: true,
+    },
+];
+
+/// The tag, title, and key of each item the menu shows, `None` standing for a separator. Window
+/// commands appear only when a `window` is selected; the app commands name the app.
+fn menu_entries(window: bool, app_name: &str) -> Vec<Option<(isize, String, &'static str)>> {
+    let mut entries = Vec::new();
+    for (index, item) in MENU.iter().enumerate() {
+        if item.on_window && !window {
+            continue;
+        }
+        if item.separated && !entries.is_empty() {
+            entries.push(None);
+        }
+        let title = if item.on_window {
+            item.title.to_owned()
+        } else {
+            format!("{} {app_name}", item.title)
+        };
+        let tag = isize::try_from(index + 1).unwrap_or_default();
+        entries.push(Some((tag, title, item.key)));
     }
+    entries
+}
+
+fn command_for_tag(tag: isize) -> Option<WindowCommand> {
+    let index = usize::try_from(tag).ok()?.checked_sub(1)?;
+    MENU.get(index).map(|item| item.command)
 }
 
 pub struct Overlay {
@@ -479,8 +545,7 @@ impl Overlay {
         self.view.setNeedsDisplay(true);
     }
 
-    /// Runs the command menu synchronously; call it outside any app-state borrow. Window
-    /// commands appear only when a window is selected; the app commands name the app.
+    /// Runs the command menu synchronously; call it outside any app-state borrow.
     #[must_use]
     pub fn show_context_menu(
         &self,
@@ -492,17 +557,7 @@ impl Overlay {
         let target = ContextMenuTarget::new(self.mtm);
         let menu = NSMenu::new(self.mtm);
         menu.setAutoenablesItems(false);
-        let mut entries: Vec<Option<(isize, String, &str)>> = Vec::new();
-        if window {
-            entries.push(Some((1, "Close Window".to_owned(), "w")));
-            entries.push(Some((2, "Minimize Window".to_owned(), "m")));
-            entries.push(None);
-        }
-        entries.push(Some((3, format!("Hide {app_name}"), "h")));
-        entries.push(Some((4, format!("Quit {app_name}"), "q")));
-        entries.push(None);
-        entries.push(Some((5, format!("Force Quit {app_name}"), "")));
-        for entry in entries {
+        for entry in menu_entries(window, app_name) {
             let Some((tag, title, key)) = entry else {
                 menu.addItem(&NSMenuItem::separatorItem(self.mtm));
                 continue;
@@ -929,5 +984,55 @@ mod tests {
         assert_eq!(command_for_tag(1), Some(WindowCommand::Close));
         assert_eq!(command_for_tag(5), Some(WindowCommand::Terminate));
         assert_eq!(command_for_tag(0), None);
+        assert_eq!(command_for_tag(6), None);
+        assert_eq!(command_for_tag(-1), None);
+        let chosen = menu_entries(true, "Notes")
+            .into_iter()
+            .flatten()
+            .map(|(tag, _, _)| command_for_tag(tag))
+            .collect::<Vec<_>>();
+        let listed = MENU
+            .iter()
+            .map(|item| Some(item.command))
+            .collect::<Vec<_>>();
+        assert_eq!(chosen, listed);
+    }
+
+    #[test]
+    fn the_menu_offers_window_commands_only_for_a_window() {
+        let titles = |window| {
+            menu_entries(window, "Notes")
+                .into_iter()
+                .map(|entry| entry.map(|(_, title, _)| title))
+                .collect::<Vec<_>>()
+        };
+        let expected = |titles: &[Option<&str>]| {
+            titles
+                .iter()
+                .map(|title| title.map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            titles(true),
+            expected(&[
+                Some("Close Window"),
+                Some("Minimize Window"),
+                None,
+                Some("Hide Notes"),
+                Some("Quit Notes"),
+                None,
+                Some("Force Quit Notes"),
+            ])
+        );
+        assert_eq!(
+            titles(false),
+            expected(&[
+                Some("Hide Notes"),
+                Some("Quit Notes"),
+                None,
+                Some("Force Quit Notes"),
+            ])
+        );
     }
 }
