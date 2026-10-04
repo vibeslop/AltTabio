@@ -79,54 +79,60 @@ impl KeyEvent {
     }
 }
 
-/// Windows virtual-key codes of the keys with their own name. Decoding and replay both read this
-/// table, so a replayed key carries the code it was decoded from.
-const NAMED_KEYS: [(Key, u16); 22] = [
-    (Key::Tab, 0x09),
-    (Key::Enter, 0x0D),
-    (Key::Home, 0x24),
-    (Key::End, 0x23),
-    (Key::Escape, 0x1B),
-    (Key::F4, 0x73),
-    (Key::Alt, 0x12),
-    (Key::LeftAlt, 0xA4),
-    (Key::RightAlt, 0xA5),
-    (Key::LeftWindows, 0x5B),
-    (Key::RightWindows, 0x5C),
-    (Key::Control, 0x11),
-    (Key::LeftControl, 0xA2),
-    (Key::RightControl, 0xA3),
-    (Key::LeftShift, 0xA0),
-    (Key::RightShift, 0xA1),
-    (Key::PrintScreen, 0x2C),
-    (Key::Backspace, 0x08),
-    (Key::LeftArrow, 0x25),
-    (Key::UpArrow, 0x26),
-    (Key::RightArrow, 0x27),
-    (Key::DownArrow, 0x28),
-];
-
 // A numbered key sits at its base plus its number. Only the numbers the switcher acts on decode
 // to it; VK_0, VK_NUMPAD0, F1 to F3 and F10 onward stay `Other`.
 const DIGIT_BASE: u16 = 0x30;
 const NUMPAD_DIGIT_BASE: u16 = 0x60;
 const FUNCTION_BASE: u16 = 0x6F;
 
-impl Key {
-    /// The Windows virtual-key code that delivers this key.
-    #[must_use]
-    pub fn virtual_key(self) -> u16 {
-        match self {
-            Self::Function(number) => FUNCTION_BASE + u16::from(number),
-            Self::Digit(digit) => DIGIT_BASE + u16::from(digit),
-            Self::NumpadDigit(digit) => NUMPAD_DIGIT_BASE + u16::from(digit),
-            Self::Other(code) => code,
-            named => NAMED_KEYS
-                .iter()
-                .find(|&&(key, _)| key == named)
-                .map_or(0, |&(_, code)| code),
+// Declare each named key once, with its code. The encoding match and the list that decoding scans
+// are both generated from that declaration. The match has no wildcard arm, so a new variant fails
+// to compile until it is declared, and declaring it also lists it for decoding.
+macro_rules! named_keys {
+    ($( $key:ident = $code:literal, )+) => {
+        /// The keys with a name of their own. Decoding compares each one's code, so a replayed key
+        /// carries the code it was decoded from.
+        const NAMED_KEYS: [Key; [$( Key::$key ),+].len()] = [$( Key::$key ),+];
+
+        impl Key {
+            /// The Windows virtual-key code that delivers this key.
+            #[must_use]
+            pub const fn virtual_key(self) -> u16 {
+                match self {
+                    $( Self::$key => $code, )+
+                    Self::Function(number) => FUNCTION_BASE + number as u16,
+                    Self::Digit(digit) => DIGIT_BASE + digit as u16,
+                    Self::NumpadDigit(digit) => NUMPAD_DIGIT_BASE + digit as u16,
+                    Self::Other(code) => code,
+                }
+            }
         }
-    }
+    };
+}
+
+named_keys! {
+    Tab = 0x09,
+    Enter = 0x0D,
+    Home = 0x24,
+    End = 0x23,
+    Escape = 0x1B,
+    F4 = 0x73,
+    Alt = 0x12,
+    LeftAlt = 0xA4,
+    RightAlt = 0xA5,
+    LeftWindows = 0x5B,
+    RightWindows = 0x5C,
+    Control = 0x11,
+    LeftControl = 0xA2,
+    RightControl = 0xA3,
+    LeftShift = 0xA0,
+    RightShift = 0xA1,
+    PrintScreen = 0x2C,
+    Backspace = 0x08,
+    LeftArrow = 0x25,
+    UpArrow = 0x26,
+    RightArrow = 0x27,
+    DownArrow = 0x28,
 }
 
 /// Names a Windows virtual-key code; codes without a name stay `Other`.
@@ -135,7 +141,7 @@ pub fn decode_virtual_key(virtual_key: u32) -> Key {
     let Ok(code) = u16::try_from(virtual_key) else {
         return Key::Other(0);
     };
-    if let Some(&(key, _)) = NAMED_KEYS.iter().find(|&&(_, named)| named == code) {
+    if let Some(&key) = NAMED_KEYS.iter().find(|key| key.virtual_key() == code) {
         return key;
     }
     let numbered = |base: u16, numbers: core::ops::RangeInclusive<u8>| {
@@ -217,9 +223,16 @@ mod tests {
 
     #[test]
     fn named_keys_decode_from_their_own_code() {
-        for (key, code) in NAMED_KEYS {
-            assert_eq!(decode_virtual_key(u32::from(code)), key);
-            assert_eq!(key.virtual_key(), code);
+        for key in NAMED_KEYS {
+            assert_eq!(decode_virtual_key(u32::from(key.virtual_key())), key);
+        }
+    }
+
+    #[test]
+    fn named_keys_are_listed_once() {
+        for key in NAMED_KEYS {
+            let listed = NAMED_KEYS.iter().filter(|&&other| other == key).count();
+            assert_eq!(listed, 1, "{key:?}");
         }
     }
 
@@ -339,7 +352,7 @@ mod tests {
             assert_eq!(key.virtual_key(), virtual_key.0, "{key:?}");
             assert_eq!(decode_virtual_key(u32::from(virtual_key.0)), key);
         }
-        for (key, _) in NAMED_KEYS {
+        for key in NAMED_KEYS {
             assert!(
                 expected.iter().any(|&(checked, _)| checked == key),
                 "{key:?}"
