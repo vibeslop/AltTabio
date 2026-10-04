@@ -1,17 +1,18 @@
 use super::{App, AppHost, high_word_isize, low_word_isize};
-use crate::renderer::{Renderer, TaskListHit};
 use crate::window_commands::show_menu as show_window_command_menu;
 use alttabio::input::InputAction;
 use alttabio::overlay_pointer::select_hovered_position;
 use alttabio::switcher::{Switcher, SwitcherEffect};
+use alttabio::task_list_hit::{TaskListHit, hit_test_pixels};
 use alttabio::task_refresh::ContextMenuCommandOutcome;
 use alttabio::window_command::WindowCommand;
 use std::mem::size_of;
-use windows::Win32::Foundation::{HWND, LPARAM, POINT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetCursorPos};
 
 pub(super) const WM_MOUSE_LEAVE: u32 = 0x02A3;
 
@@ -132,12 +133,23 @@ impl App {
     }
 
     fn hit_test(&mut self, lparam: LPARAM) -> Option<TaskListHit> {
-        let (x, y) = mouse_coordinates(lparam);
-        Renderer::hit_test(
-            self.hwnd,
+        let window_dpi = unsafe {
+            // SAFETY: the overlay HWND is live and the call returns a scalar DPI value.
+            GetDpiForWindow(self.hwnd)
+        };
+        let mut client = RECT::default();
+        unsafe {
+            // SAFETY: `client` is writable for the call and the overlay HWND is live.
+            GetClientRect(self.hwnd, &raw mut client).ok()?;
+        }
+        hit_test_pixels(
             self.session.switcher_mut(),
-            x,
-            y,
+            (
+                client.right.saturating_sub(client.left),
+                client.bottom.saturating_sub(client.top),
+            ),
+            mouse_coordinates(lparam),
+            window_dpi,
             self.settings.appearance.compact_list,
         )
     }

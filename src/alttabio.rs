@@ -22,6 +22,7 @@ pub mod settings;
 pub mod settings_change;
 pub mod settings_form;
 pub mod switcher;
+pub mod task_list_hit;
 pub mod task_refresh;
 pub mod theme;
 pub mod update;
