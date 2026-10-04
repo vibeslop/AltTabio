@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 /// Whether the last attempt of a repeated operation failed.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FailureRun {
     failing: bool,
 }
@@ -26,21 +26,18 @@ impl FailureRun {
 
 /// A `FailureRun` for state that is only reachable through a shared borrow.
 #[derive(Debug, Default)]
-pub struct SharedFailureRun(Cell<FailureRun>);
+pub struct SharedFailureRun(Cell<bool>);
 
 impl SharedFailureRun {
     /// Records a failure and returns whether it starts a run, the one failure worth logging.
     #[must_use]
     pub fn fail(&self) -> bool {
-        let mut run = self.0.get();
-        let started = run.fail();
-        self.0.set(run);
-        started
+        !self.0.replace(true)
     }
 
     /// Ends the current run, so the next failure is logged again.
     pub fn succeed(&self) {
-        self.0.set(FailureRun::default());
+        self.0.set(false);
     }
 }
 
