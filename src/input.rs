@@ -185,6 +185,13 @@ pub struct HookOutcome {
 }
 
 impl HookOutcome {
+    const fn suppressed() -> Self {
+        Self {
+            suppress: true,
+            actions: [None, None],
+        }
+    }
+
     const fn one(suppress: bool, action: InputAction) -> Self {
         Self {
             suppress,
@@ -389,10 +396,7 @@ impl HookState {
         }
 
         if released && self.take_suppressed_owned_key_release(event.key) {
-            return HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            };
+            return HookOutcome::suppressed();
         }
 
         if let Some(outcome) = self.process_command_key(event) {
@@ -408,10 +412,7 @@ impl HookState {
         }
 
         if self.should_suppress_shift(event) {
-            return HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            };
+            return HookOutcome::suppressed();
         }
 
         if let Some(outcome) = self.process_number_shortcut(event, key_was_down, alt_down) {
@@ -424,10 +425,7 @@ impl HookState {
 
         if pressed && self.win_switch_gesture_active {
             self.suppress_owned_key_release(event.key);
-            return HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            };
+            return HookOutcome::suppressed();
         }
 
         HookOutcome::default()
@@ -464,10 +462,7 @@ impl HookState {
         {
             // Until a release or rebase establishes a fresh press, keep the whole old pair
             // suppressed, including repeats after search or a gesture has ended.
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
+            return Some(HookOutcome::suppressed());
         }
         None
     }
@@ -492,10 +487,7 @@ impl HookState {
             owned
         });
         if owned || shift_owned {
-            return HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            };
+            return HookOutcome::suppressed();
         }
         let disabled = HookSettings {
             replace_alt_tab: false,
@@ -605,10 +597,7 @@ impl HookState {
                 Some(ReplayedKeyEvent::released(event.key)),
                 None,
             ];
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
+            return Some(HookOutcome::suppressed());
         }
         if event.transition != KeyTransition::Pressed
             || !settings.replace_win_tab
@@ -621,10 +610,7 @@ impl HookState {
         } else if !self.owned_key_release_pending(event.key) {
             self.pending_windows_keys |= mask;
         }
-        Some(HookOutcome {
-            suppress: true,
-            ..HookOutcome::default()
-        })
+        Some(HookOutcome::suppressed())
     }
 
     fn process_alt_key_transition(
@@ -644,10 +630,7 @@ impl HookState {
                     Some(ReplayedKeyEvent::released(event.key)),
                     None,
                 ];
-                return Some(HookOutcome {
-                    suppress: true,
-                    ..HookOutcome::default()
-                });
+                return Some(HookOutcome::suppressed());
             }
             return None;
         }
@@ -659,18 +642,12 @@ impl HookState {
         }
         if self.alt_switch_gesture_active {
             self.suppress_owned_key_release(event.key);
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
+            return Some(HookOutcome::suppressed());
         }
         if !self.owned_key_release_pending(event.key) {
             self.pending_alt_keys |= mask;
         }
-        Some(HookOutcome {
-            suppress: true,
-            ..HookOutcome::default()
-        })
+        Some(HookOutcome::suppressed())
     }
 
     fn process_switch_start(
@@ -785,10 +762,7 @@ impl HookState {
         }
         self.pending_windows_keys = 0;
         self.replayed_key_events = replayed_key_events;
-        Some(HookOutcome {
-            suppress: true,
-            ..HookOutcome::default()
-        })
+        Some(HookOutcome::suppressed())
     }
 
     fn update_shift_state(&mut self, event: KeyEvent) {
@@ -842,10 +816,7 @@ impl HookState {
             return None;
         }
         if self.owned_key_release_pending(event.key) {
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
+            return Some(HookOutcome::suppressed());
         }
         if !self.switch_gesture_active() {
             return None;
@@ -867,16 +838,10 @@ impl HookState {
         if event.transition == KeyTransition::Released {
             return self
                 .take_suppressed_owned_key_release(event.key)
-                .then_some(HookOutcome {
-                    suppress: true,
-                    ..HookOutcome::default()
-                });
+                .then_some(HookOutcome::suppressed());
         }
         if self.owned_key_release_pending(event.key) {
-            return Some(HookOutcome {
-                suppress: true,
-                ..HookOutcome::default()
-            });
+            return Some(HookOutcome::suppressed());
         }
         if !self.overlay_active {
             return None;
