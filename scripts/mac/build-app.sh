@@ -114,10 +114,10 @@ else
 fi
 if [[ -n "$identity" ]]; then
     codesign --force --sign "$identity" "${codesign_keychain[@]}" \
-        --identifier com.vibeslop.AltTabio "$app"
+        --options runtime --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app with $certificate"
 else
-    codesign --force --sign - --identifier com.vibeslop.AltTabio "$app"
+    codesign --force --sign - --options runtime --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app ad hoc; run scripts/mac/make-signing-cert.sh once to keep permissions across builds"
 fi
 echo "Built $app ($profile, version $version)"

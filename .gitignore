@@ -4,3 +4,6 @@
 !.nojekyll
 !docs/.nojekyll
 target/
+
+__pycache__/
+/security-findings.json

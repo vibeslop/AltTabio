@@ -1,12 +1,15 @@
 use crate::process_info::ProcessInfo;
 use crate::task_icon::TaskIcons;
 use crate::{about_dialog, settings_dialog};
+use alttabio::metadata::{MAX_METADATA_CHARS, MAX_WINDOWS, MAX_WINDOWS_PER_APP};
 use alttabio::settings::Settings;
 use alttabio::switcher::{SwitchTask, WindowCloaking, WindowEligibility, is_switchable_window};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT};
 use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_APP, DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
@@ -51,7 +54,20 @@ pub fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTas
         tasks: Vec::new(),
         icons: TaskIcons::default(),
     };
+    let deadline = Instant::now() + Duration::from_millis(200);
+    let mut counts = HashMap::<u32, usize>::new();
     for hwnd in handles {
+        if result.tasks.len() >= MAX_WINDOWS || Instant::now() >= deadline {
+            break;
+        }
+        let mut pid = 0;
+        // SAFETY: the borrowed HWND came from enumeration and pid is a scalar output.
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&raw mut pid));
+        }
+        if *counts.get(&pid).unwrap_or(&0) >= MAX_WINDOWS_PER_APP {
+            continue;
+        }
         if let Some(task) = create_switch_task(
             hwnd,
             std::process::id(),
@@ -59,6 +75,7 @@ pub fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTas
             result.tasks.len(),
             &mut result.icons,
         ) {
+            *counts.entry(pid).or_default() += 1;
             result.tasks.push(task);
         }
     }
@@ -75,7 +92,9 @@ unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        context.push(hwnd);
+        if context.len() < 4096 {
+            context.push(hwnd);
+        }
     }));
     result.is_ok().into()
 }
@@ -204,6 +223,7 @@ fn window_title(hwnd: HWND) -> String {
     }
     let capacity = usize::try_from(length)
         .unwrap_or_default()
+        .min(MAX_METADATA_CHARS)
         .saturating_add(1);
     let mut buffer = vec![0_u16; capacity];
     let written = unsafe {

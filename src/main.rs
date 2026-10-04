@@ -37,6 +37,8 @@ mod task_icon;
 #[cfg(windows)]
 mod task_query;
 #[cfg(windows)]
+mod task_snapshot;
+#[cfg(windows)]
 mod tray;
 #[cfg(windows)]
 mod win_events;

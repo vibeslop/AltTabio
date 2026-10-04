@@ -57,6 +57,10 @@ impl TaskIcons {
 
 struct OwnedIcon(HICON);
 
+// SAFETY: an extracted HICON is a process-wide GDI resource. This guard has exclusive
+// ownership and moves with its snapshot; DestroyIcon may run on either owning thread.
+unsafe impl Send for OwnedIcon {}
+
 impl Drop for OwnedIcon {
     fn drop(&mut self) {
         // SAFETY: this guard uniquely owns an extracted icon, never a window/class icon.
@@ -151,11 +155,14 @@ fn window_icon(hwnd: HWND) -> isize {
                 WPARAM(size as usize),
                 LPARAM(0),
                 SMTO_BLOCK | SMTO_ABORTIFHUNG,
-                75,
+                10,
                 Some(&raw mut icon),
             )
         };
-        if sent.0 != 0 && icon != 0 {
+        if sent.0 == 0 {
+            break;
+        }
+        if icon != 0 {
             return isize::try_from(icon).unwrap_or_default();
         }
     }

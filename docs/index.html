@@ -301,12 +301,15 @@
       <div class="installs">
         <div class="install" id="install-windows">
           <span class="os">Windows 10 and 11</span>
-          <h3>Download, unzip, run</h3>
+          <h3>Download, verify, run</h3>
           <ol class="steps">
             <li><span>Get the Windows zip from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a>.</span></li>
+            <li><span>Verify the zip with <a href="https://cli.github.com/">GitHub CLI</a> before opening the executable. Use the downloaded version in the command below and continue only if it succeeds.</span></li>
             <li><span>Unzip it into a folder you'll keep. If you turn on start with Windows, pick one only administrators can change, such as Program Files.</span></li>
             <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
           </ol>
+          <div class="cmd"><code>gh attestation verify &quot;AltTabio-&lt;version&gt;-windows-x64.zip&quot; --repo vibeslop/AltTabio --signer-workflow vibeslop/AltTabio/.github/workflows/release.yml --source-ref refs/heads/main</code></div>
+          <p class="note">Older releases without signed provenance cannot pass this check. Build reviewed source instead.</p>
           <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest" style="align-self:flex-start"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
         </div>
         <div class="install install-mac" id="install-mac">

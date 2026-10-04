@@ -11,6 +11,7 @@
 set -eu
 
 repo=vibeslop/AltTabio
+release_certificate=617A82407E9767025EDE4A62A9B990ADEA21F53B
 
 # Reads the GitHub API's release list on stdin and prints the tag of the newest published release
 # that carries a macOS archive, and the archive's URL. Windows and macOS share releases, so the
@@ -45,7 +46,7 @@ certificate() {
     rm -f "$work/certificate0"
     codesign -d --extract-certificates="$work/certificate" "$1" 2>/dev/null || return 0
     [ -s "$work/certificate0" ] || return 0
-    shasum -a 1 <"$work/certificate0" | cut -c1-40
+    shasum -a 1 <"$work/certificate0" | awk '{ print toupper($1) }'
 }
 
 cleanup() {
@@ -91,8 +92,13 @@ main() {
     codesign --verify --deep --strict "$work/AltTabio.app" ||
         fail "the downloaded AltTabio.app fails its signature check; nothing was changed."
     new_certificate=$(certificate "$work/AltTabio.app")
-    [ -n "$new_certificate" ] ||
-        fail "the downloaded AltTabio.app is not signed with a certificate; nothing was changed."
+    [ "$new_certificate" = "$release_certificate" ] ||
+        fail "the downloaded AltTabio.app is not signed with the pinned release certificate; nothing was changed."
+    identifier=$(plutil -extract CFBundleIdentifier raw "$work/AltTabio.app/Contents/Info.plist")
+    [ "$identifier" = com.vibeslop.AltTabio ] || fail "the downloaded bundle has the wrong identifier."
+    executable=$(plutil -extract CFBundleExecutable raw "$work/AltTabio.app/Contents/Info.plist")
+    [ "$executable" = AltTabio ] && [ -f "$work/AltTabio.app/Contents/MacOS/AltTabio" ] ||
+        fail "the downloaded bundle has the wrong executable layout."
 
     # An update replaces the installed copy. A first install goes to /Applications unless this
     # account cannot write there.
@@ -130,10 +136,8 @@ main() {
     fi
 
     updating=false
-    old_certificate=
     if [ -e "$target/AltTabio.app" ]; then
         updating=true
-        old_certificate=$(certificate "$target/AltTabio.app")
         mv "$target/AltTabio.app" "$previous"
     fi
     mv "$staged" "$target/AltTabio.app"
@@ -144,11 +148,6 @@ main() {
 
     if $updating; then
         printf 'Updated AltTabio in %s to %s.\n' "$target" "$version"
-        if [ "$old_certificate" != "$new_certificate" ]; then
-            printf '%s\n' \
-                "The new copy is signed with another certificate than the one it replaced, so" \
-                "macOS asks for Accessibility and Screen Recording again."
-        fi
         return
     fi
     printf 'Installed AltTabio %s in %s. It runs from the menu bar.\n\n' "$version" "$target"

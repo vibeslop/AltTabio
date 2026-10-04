@@ -1,12 +1,14 @@
 use alttabio::settings::{Settings, SettingsDocument};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMPORARY_FILE: AtomicU64 = AtomicU64::new(0);
+const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
+const MAX_SETTINGS_LINES: usize = 512;
 
 pub struct SettingsStore {
     path: PathBuf,
@@ -26,7 +28,7 @@ impl SettingsStore {
 
     /// Loads the file at `path`, with `defaults` for whatever it does not set.
     pub fn load_from(path: PathBuf, defaults: &Settings) -> Result<(Self, Settings), String> {
-        let contents = match std::fs::read_to_string(&path) {
+        let contents = match read_settings(&path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => {
@@ -60,6 +62,7 @@ impl SettingsStore {
                 self.path.display()
             )
         };
+        validate_settings(&rendered).map_err(save_error)?;
         let (temporary_path, mut file) =
             create_temporary_sibling(&self.path).map_err(save_error)?;
         let written = write_and_sync(&mut file, rendered.as_bytes());
@@ -83,6 +86,27 @@ impl SettingsStore {
         self.document = SettingsDocument::parse(&rendered);
         Ok(())
     }
+}
+
+fn read_settings(path: &Path) -> io::Result<String> {
+    let mut contents = String::new();
+    File::open(path)?
+        .take(MAX_SETTINGS_BYTES + 1)
+        .read_to_string(&mut contents)?;
+    validate_settings(&contents)?;
+    Ok(contents)
+}
+
+fn validate_settings(contents: &str) -> io::Result<()> {
+    if contents.len() as u64 > MAX_SETTINGS_BYTES
+        || contents.lines().take(MAX_SETTINGS_LINES + 1).count() > MAX_SETTINGS_LINES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Settings exceed the 64 KiB or 512 line limit",
+        ));
+    }
+    Ok(())
 }
 
 fn create_temporary_sibling(path: &Path) -> io::Result<(PathBuf, File)> {
@@ -119,9 +143,43 @@ fn create_temporary_sibling(path: &Path) -> io::Result<(PathBuf, File)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn oversized_and_excessive_entry_files_are_rejected() -> io::Result<()> {
+        let directory = TestDirectory::new()?;
+        let path = directory.0.join("AltTabio.ini");
+        for contents in [
+            "x".repeat(65 * 1024),
+            "key=value\n".repeat(MAX_SETTINGS_LINES + 1),
+        ] {
+            std::fs::write(&path, contents)?;
+            assert!(SettingsStore::load_from(path.clone(), &Settings::default()).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_save_that_would_exceed_the_load_limit_preserves_the_previous_file() -> io::Result<()> {
+        let directory = TestDirectory::new()?;
+        let path = directory.0.join("AltTabio.ini");
+        let mut contents = String::new();
+        for index in 0..MAX_SETTINGS_LINES {
+            writeln!(contents, "Future{index}=preserved value").map_err(io::Error::other)?;
+        }
+        std::fs::write(&path, &contents)?;
+        let (mut store, mut settings) =
+            SettingsStore::load_from(path.clone(), &Settings::default())
+                .map_err(io::Error::other)?;
+        settings.general.replace_alt_tab = false;
+        assert!(store.save(&settings).is_err());
+        assert_eq!(std::fs::read_to_string(path)?, contents);
+        directory.assert_only_settings_remain()?;
+        Ok(())
+    }
 
     struct TestDirectory(PathBuf);
 

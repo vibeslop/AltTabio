@@ -1,8 +1,9 @@
 //! Task filtering and selection behavior shared by every presentation adapter.
 
 use crate::input::{InputAction, WindowCommand};
+use crate::metadata::{MAX_FILTER_CHARS, MAX_WINDOWS, bounded_text};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct ProcessIdentity {
     pub id: u32,
     pub started_at: u64,
@@ -33,8 +34,8 @@ impl SwitchTask {
             window_handle,
             process_identity: ProcessIdentity::default(),
             icon_handle: 0,
-            title: title.to_owned(),
-            process_name: process_name.to_owned(),
+            title: bounded_text(title),
+            process_name: bounded_text(process_name),
         }
     }
 
@@ -99,6 +100,7 @@ pub fn is_switchable_window(window: &WindowEligibility<'_>) -> bool {
 #[derive(Debug, Default)]
 pub struct Switcher {
     all_tasks: Vec<SwitchTask>,
+    search_fields: Vec<[String; 3]>,
     visible_indices: Vec<usize>,
     selected_visible_index: Option<usize>,
     // A mouse hit pins the rendered range so selecting that hit cannot move it under the cursor.
@@ -167,6 +169,7 @@ impl SwitcherSession {
         Self {
             switcher: Switcher {
                 all_tasks: Vec::new(),
+                search_fields: Vec::new(),
                 visible_indices: Vec::new(),
                 selected_visible_index: None,
                 pinned_visible_start: None,
@@ -375,7 +378,23 @@ impl Switcher {
 
     fn replace_tasks(&mut self, tasks: impl IntoIterator<Item = SwitchTask>) {
         self.all_tasks.clear();
-        self.all_tasks.extend(tasks);
+        self.all_tasks
+            .extend(tasks.into_iter().take(MAX_WINDOWS).map(|mut task| {
+                task.title = bounded_text(&task.title);
+                task.process_name = bounded_text(&task.process_name);
+                task
+            }));
+        self.search_fields = self
+            .all_tasks
+            .iter()
+            .map(|task| {
+                [
+                    task.number.to_string(),
+                    task.title.to_lowercase(),
+                    task.process_name.to_lowercase(),
+                ]
+            })
+            .collect();
         self.rebuild_visible_indices();
     }
 
@@ -386,7 +405,7 @@ impl Switcher {
 
     pub fn set_filter(&mut self, filter: &str) {
         if self.filter != filter {
-            filter.clone_into(&mut self.filter);
+            self.filter = filter.chars().take(MAX_FILTER_CHARS).collect();
             self.apply_filter();
         }
     }
@@ -396,6 +415,9 @@ impl Switcher {
     }
 
     pub fn append_filter_character(&mut self, value: char) {
+        if self.filter.chars().count() >= MAX_FILTER_CHARS {
+            return;
+        }
         self.filter.push(value);
         self.apply_filter();
     }
@@ -562,12 +584,8 @@ impl Switcher {
     fn rebuild_visible_indices(&mut self) {
         let normalized = self.filter.trim().to_lowercase();
         self.visible_indices.clear();
-        for (index, task) in self.all_tasks.iter().enumerate() {
-            if normalized.is_empty()
-                || task.number.to_string().contains(&normalized)
-                || task.title.to_lowercase().contains(&normalized)
-                || task.process_name.to_lowercase().contains(&normalized)
-            {
+        for (index, fields) in self.search_fields.iter().enumerate() {
+            if normalized.is_empty() || fields.iter().any(|field| field.contains(&normalized)) {
                 self.visible_indices.push(index);
             }
         }
@@ -577,6 +595,18 @@ impl Switcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_task_counts_and_search_text_are_bounded() {
+        let mut switcher = Switcher::default();
+        switcher.set_tasks((1..100_000).map(|number| SwitchTask::new(number, 1, "窗口", "App")));
+        assert_eq!(switcher.all_tasks.len(), MAX_WINDOWS);
+        switcher.set_filter(&"窗".repeat(MAX_FILTER_CHARS + 100));
+        switcher.append_filter_character('口');
+        assert_eq!(switcher.filter().chars().count(), MAX_FILTER_CHARS);
+        switcher.set_filter("窗口");
+        assert_eq!(switcher.visible_tasks().count(), MAX_WINDOWS);
+    }
 
     #[test]
     fn context_menu_keeps_its_target_while_keyboard_input_arrives() {
