@@ -1,6 +1,6 @@
 //! The right-click command menu.
 
-use alttabio::input::WindowCommand;
+use alttabio::window_command::WindowCommand;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};

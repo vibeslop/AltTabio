@@ -5,7 +5,7 @@ use crate::macos::commands::{self, AppRef};
 use crate::macos::tracing;
 use crate::macos::window_list::WindowRecord;
 use alttabio::app_switcher::{Action, Effect, Target};
-use alttabio::input::WindowCommand;
+use alttabio::window_command::WindowCommand;
 
 impl App {
     pub(super) fn apply_action(&mut self, action: Action) {

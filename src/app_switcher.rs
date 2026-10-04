@@ -8,8 +8,8 @@
 //! The app in front never starts on the window that already has focus, since switching to it
 //! would do nothing; stepping back onto it lands on its next window instead.
 
-use crate::input::WindowCommand;
 use crate::switcher::ProcessIdentity;
+use crate::window_command::WindowCommand;
 
 /// One window as the adapter lists it, most recently used first.
 #[derive(Clone, Debug, Eq, PartialEq)]

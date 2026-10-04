@@ -2,7 +2,8 @@
 //! and action messages stamped with that generation so the UI can drop actions queued before a
 //! modal or input-desktop boundary.
 
-use crate::input::{InputAction, WindowCommand};
+use crate::input::InputAction;
+use crate::window_command::WindowCommand;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},

@@ -8,9 +8,9 @@ mod view;
 
 use super::screen::{cursor_screen, frame_contains};
 use alttabio::close_button::CloseButtonVisualState;
-use alttabio::input::WindowCommand;
 use alttabio::panel_layout::{CORNER_RADIUS, Layout, WindowState};
 use alttabio::theme::{ResolvedTheme, SwitcherTokens};
+use alttabio::window_command::WindowCommand;
 use draw::rgba;
 use objc2::rc::Retained;
 use objc2::runtime::AnyClass;

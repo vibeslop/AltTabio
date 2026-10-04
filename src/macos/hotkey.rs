@@ -173,7 +173,7 @@ impl HotkeyState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alttabio::input::WindowCommand;
+    use alttabio::window_command::WindowCommand;
 
     fn settings() -> HotkeySettings {
         HotkeySettings {

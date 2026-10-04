@@ -1,7 +1,7 @@
 //! Pointer interaction with the overlay's task list: hover selection and the close button.
 
-use crate::input::WindowCommand;
 use crate::switcher::Switcher;
+use crate::window_command::WindowCommand;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CloseButtonVisualState {

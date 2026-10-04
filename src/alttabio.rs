@@ -24,3 +24,4 @@ pub mod switcher;
 pub mod task_refresh;
 pub mod theme;
 pub mod update;
+pub mod window_command;

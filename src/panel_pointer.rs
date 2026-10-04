@@ -3,8 +3,8 @@
 
 use crate::app_switcher::Action;
 use crate::close_button::CloseButtonVisualState;
-use crate::input::WindowCommand;
 use crate::panel_layout::{Hit, Shown};
+use crate::window_command::WindowCommand;
 
 /// How long the pointer rests on an app's tile before the app is selected, so a pointer that
 /// crosses the strip on its way to a window does not change the app underneath it.

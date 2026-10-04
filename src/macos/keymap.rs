@@ -4,7 +4,7 @@
 //! The command letters are matched by the letter the keyboard layout types, as macOS matches
 //! menu shortcuts, so ⌘ Q quits on the key labeled Q on AZERTY and Dvorak too.
 
-use alttabio::input::WindowCommand;
+use alttabio::window_command::WindowCommand;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacKey {

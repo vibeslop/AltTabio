@@ -4,8 +4,8 @@ use super::App;
 use crate::macos::overlay::ViewEvent;
 use crate::macos::runtime::{run_later, schedule, with_app};
 use alttabio::app_switcher::Action;
-use alttabio::input::WindowCommand;
 use alttabio::panel_pointer::{Dwell, MenuFor, Pointer, Response, TILE_DWELL_SECONDS};
+use alttabio::window_command::WindowCommand;
 use objc2_app_kit::NSEvent;
 
 impl App {

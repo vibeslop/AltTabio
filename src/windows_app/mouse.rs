@@ -1,10 +1,11 @@
 use super::{App, AppHost, high_word_isize, low_word_isize};
 use crate::renderer::{Renderer, TaskListHit};
 use crate::window_commands::show_menu as show_window_command_menu;
-use alttabio::input::{InputAction, WindowCommand};
+use alttabio::input::InputAction;
 use alttabio::overlay_pointer::select_hovered_position;
 use alttabio::switcher::{Switcher, SwitcherEffect};
 use alttabio::task_refresh::ContextMenuCommandOutcome;
+use alttabio::window_command::WindowCommand;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{

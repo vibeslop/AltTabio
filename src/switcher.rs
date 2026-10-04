@@ -1,6 +1,7 @@
 //! Task filtering and selection behavior shared by every presentation adapter.
 
-use crate::input::{InputAction, WindowCommand};
+use crate::input::InputAction;
+use crate::window_command::WindowCommand;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProcessIdentity {
