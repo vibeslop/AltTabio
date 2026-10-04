@@ -10,3 +10,4 @@ pub mod settings;
 pub mod switcher;
 pub mod task_refresh;
 pub mod theme;
+pub mod update;
