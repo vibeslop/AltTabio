@@ -1,19 +1,24 @@
 //! Shared logical-pixel geometry for the task list and preview host.
 
-const BASE_DPI: u16 = 96;
+use crate::dialog_layout::BASE_DPI;
+
 // The overlay already occupies a fixed fraction of its monitor. Capping presentation density keeps
 // its list proportions stable on denser monitors without undoing monitor-local window sizing.
 const MAX_LAYOUT_DPI: u16 = 168;
 
 #[must_use]
 pub fn layout_dpi(window_dpi: u32) -> u16 {
-    let bounded = window_dpi.clamp(u32::from(BASE_DPI), u32::from(MAX_LAYOUT_DPI));
+    let bounded = window_dpi.clamp(BASE_DPI, u32::from(MAX_LAYOUT_DPI));
     u16::try_from(bounded).unwrap_or(MAX_LAYOUT_DPI)
 }
 
 #[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "the base DPI of 96 is represented exactly as f32"
+)]
 pub fn layout_scale(window_dpi: u32) -> f32 {
-    f32::from(layout_dpi(window_dpi)) / f32::from(BASE_DPI)
+    f32::from(layout_dpi(window_dpi)) / BASE_DPI as f32
 }
 
 /// A rectangle in logical pixels. It is `f32` with right and bottom edges, like the `D2D_RECT_F`
