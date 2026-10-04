@@ -10,6 +10,7 @@ pub mod overlay_layout;
 pub mod overlay_pointer;
 pub mod overlay_window;
 pub mod panel_layout;
+pub mod panel_pointer;
 pub mod passthrough;
 pub mod preview_layout;
 pub mod settings;

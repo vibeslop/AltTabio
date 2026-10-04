@@ -2,6 +2,7 @@
 //! it, and, when previews are on, the selected window beside them. Points, top-left origin.
 
 use crate::preview_layout::Rect;
+use crate::switcher::ProcessIdentity;
 
 pub const CORNER_RADIUS: f64 = 24.0;
 pub const PADDING: f64 = 12.0;
@@ -236,6 +237,26 @@ impl Layout {
             return Some(Hit::CloseButton(row));
         }
         Some(Hit::Row(row))
+    }
+}
+
+/// The geometry and scroll positions of the last frame drawn.
+#[derive(Clone, Copy, Debug)]
+pub struct Shown {
+    pub layout: Layout,
+    pub app: Option<ProcessIdentity>,
+    pub tile_start: usize,
+    pub tiles: usize,
+    pub row_start: usize,
+    pub rows: usize,
+    pub selected_row: Option<usize>,
+}
+
+impl Shown {
+    #[must_use]
+    pub fn hit(&self, x: f64, y: f64) -> Option<Hit> {
+        self.layout
+            .hit(self.tiles, self.rows, self.selected_row, x, y)
     }
 }
 

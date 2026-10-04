@@ -23,9 +23,9 @@ use crate::settings_io::SettingsStore;
 use alttabio::app_switcher::{
     Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, WindowHistory, group_by_app,
 };
-use alttabio::close_button::CloseButtonVisualState;
 use alttabio::input::WindowCommand;
-use alttabio::panel_layout::{Hit, Layout, WindowState, more_note, scroll_into_view};
+use alttabio::panel_layout::{Layout, Shown, WindowState, more_note, scroll_into_view};
+use alttabio::panel_pointer::{Dwell, MenuFor, Pointer, Response, TILE_DWELL_SECONDS};
 use alttabio::settings::Settings;
 use alttabio::switcher::ProcessIdentity;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
@@ -47,8 +47,8 @@ use objc2_app_kit::{
     NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
 };
 use objc2_foundation::{
-    NSArray, NSNotification, NSNotificationName, NSObjectProtocol, NSOperationQueue, NSPoint,
-    NSSize, NSString, NSTimer, NSURL,
+    NSArray, NSNotification, NSNotificationName, NSObjectProtocol, NSOperationQueue, NSSize,
+    NSString, NSTimer, NSURL,
 };
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{FrameModel, Overlay, PreviewModel, Row, Tile, ViewEvent};
@@ -75,11 +75,6 @@ const PREVIEWS_KEPT: usize = 8;
 const REVEAL_SECONDS: f64 = 0.12;
 // How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
-// How long the pointer rests on an app's tile before the app is selected, so a pointer that
-// crosses the strip on its way to a window does not change the app underneath it.
-const TILE_DWELL_SECONDS: f64 = 0.08;
-// How far the pointer travels after the panel appears before hovering selects anything.
-const HOVER_ARM_DISTANCE: f64 = 8.0;
 // Activation history kept for ordering the strip; apps activated longer ago than this follow
 // in window order, which is what they would get anyway.
 const RECENT_APPS_KEPT: usize = 64;
@@ -371,24 +366,6 @@ impl RefreshWorker {
     }
 }
 
-#[derive(Default)]
-struct CloseButton {
-    hovered: bool,
-    pressed: bool,
-}
-
-impl CloseButton {
-    fn visual_state(&self) -> CloseButtonVisualState {
-        if self.pressed {
-            CloseButtonVisualState::Pressed
-        } else if self.hovered {
-            CloseButtonVisualState::Hovered
-        } else {
-            CloseButtonVisualState::Normal
-        }
-    }
-}
-
 pub struct App {
     mtm: MainThreadMarker,
     settings: Settings,
@@ -437,15 +414,8 @@ pub struct App {
     // Whether this run asked for Screen Recording. macOS shows its prompt only once anyway;
     // this keeps every later switch from asking again.
     screen_recording_asked: bool,
-    close_button: CloseButton,
-    // The tile or row a click started on; the switch happens when it ends there too.
-    pressed: Option<Hit>,
-    // Where the pointer was when the panel appeared. Hovering selects nothing until the pointer
-    // has moved away from here, so a nudge of the trackpad while ⌘ is down cannot change the
-    // window the release switches to.
-    pointer_origin: Option<NSPoint>,
-    // The tile under the pointer, as an app index, and the timer that selects it after a rest.
-    hovered_tile: Option<usize>,
+    pointer: Pointer,
+    // Selects the app whose tile the pointer rests on, while it waits.
     dwell_timer: Option<Retained<NSTimer>>,
     // Preview mode shows the overlay as soon as the first window list arrives.
     show_when_listed: bool,
@@ -470,25 +440,6 @@ enum Panel {
     Hidden,
     Waiting(Retained<NSTimer>),
     Shown,
-}
-
-/// The geometry and scroll positions of the last frame drawn.
-#[derive(Clone, Copy, Debug)]
-struct Shown {
-    layout: Layout,
-    app: Option<ProcessIdentity>,
-    tile_start: usize,
-    tiles: usize,
-    row_start: usize,
-    rows: usize,
-    selected_row: Option<usize>,
-}
-
-impl Shown {
-    fn hit(&self, x: f64, y: f64) -> Option<Hit> {
-        self.layout
-            .hit(self.tiles, self.rows, self.selected_row, x, y)
-    }
 }
 
 fn record_process(record: &WindowRecord) -> ProcessIdentity {
@@ -544,10 +495,7 @@ impl App {
             session: 0,
             tap_retry_timer: None,
             screen_recording_asked: false,
-            close_button: CloseButton::default(),
-            pressed: None,
-            pointer_origin: None,
-            hovered_tile: None,
+            pointer: Pointer::default(),
             dwell_timer: None,
             show_when_listed: false,
             secure_input_holder: None,
@@ -1020,7 +968,8 @@ impl App {
             overlay.show(self.layout(&overlay).size());
         }
         self.panel = Panel::Shown;
-        self.pointer_origin = Some(NSEvent::mouseLocation());
+        let location = NSEvent::mouseLocation();
+        self.pointer.panel_shown((location.x, location.y));
         self.redraw();
         self.request_preview_capture();
     }
@@ -1059,10 +1008,7 @@ impl App {
     }
 
     fn reset_pointer(&mut self) {
-        self.close_button = CloseButton::default();
-        self.pressed = None;
-        self.pointer_origin = None;
-        self.hovered_tile = None;
+        self.pointer = Pointer::default();
         self.cancel_dwell();
     }
 
@@ -1194,7 +1140,7 @@ impl App {
             rows,
             empty_note,
             more_note,
-            close_state: self.close_button.visual_state(),
+            close_state: self.pointer.close_state(),
             preview,
         });
     }
@@ -1410,22 +1356,62 @@ impl App {
         let Some(shown) = self.shown else {
             return;
         };
+        let selected_app = self.switcher.selected_app_index();
         match event {
-            ViewEvent::MouseMoved(x, y) => self.handle_mouse_moved(shown, shown.hit(x, y)),
-            ViewEvent::MouseDown(x, y) => self.handle_mouse_down(shown, shown.hit(x, y)),
-            ViewEvent::MouseUp(x, y) => self.handle_mouse_up(shown.hit(x, y)),
-            ViewEvent::RightMouseDown(x, y) => {
-                self.handle_right_mouse_down(shown, shown.hit(x, y), x, y);
+            ViewEvent::MouseMoved(x, y) => {
+                let location = NSEvent::mouseLocation();
+                let response = self.pointer.moved(
+                    shown.hit(x, y),
+                    (location.x, location.y),
+                    &shown,
+                    selected_app,
+                );
+                self.apply_pointer(response);
             }
-            ViewEvent::MouseExited => {
-                self.hovered_tile = None;
-                self.cancel_dwell();
-                if self.close_button.hovered {
-                    self.close_button.hovered = false;
-                    self.redraw();
+            ViewEvent::MouseDown(x, y) => {
+                let response = self.pointer.pressed(shown.hit(x, y), &shown, selected_app);
+                self.apply_pointer(response);
+            }
+            ViewEvent::MouseUp(x, y) => {
+                let response = self.pointer.released(shown.hit(x, y));
+                self.apply_pointer(response);
+            }
+            ViewEvent::RightMouseDown(x, y) => {
+                let response = self
+                    .pointer
+                    .right_pressed(shown.hit(x, y), &shown, selected_app);
+                self.apply_pointer(response);
+                if let Some(menu) = response.menu {
+                    self.show_context_menu(menu, x, y);
                 }
             }
+            ViewEvent::MouseExited => {
+                let response = self.pointer.exited();
+                self.apply_pointer(response);
+            }
             ViewEvent::Scroll(step) => self.apply_action(Action::StepWindow(step)),
+        }
+    }
+
+    fn apply_pointer(&mut self, response: Response) {
+        match response.dwell {
+            Dwell::Keep => {}
+            Dwell::Cancel => self.cancel_dwell(),
+            Dwell::Start(app) => {
+                self.cancel_dwell();
+                self.dwell_timer = Some(schedule(TILE_DWELL_SECONDS, move |state| {
+                    state.finish_dwell(app);
+                }));
+            }
+        }
+        if let Some((app, window)) = response.select {
+            self.select(app, window);
+        }
+        if let Some(action) = response.action {
+            self.apply_action(action);
+        }
+        if response.redraw {
+            self.redraw();
         }
     }
 
@@ -1437,50 +1423,11 @@ impl App {
         }
     }
 
-    fn handle_mouse_moved(&mut self, shown: Shown, hit: Option<Hit>) {
-        let hovered = matches!(hit, Some(Hit::CloseButton(_)));
-        let close_changed = hovered != self.close_button.hovered;
-        self.close_button.hovered = hovered;
-        if let Some(origin) = self.pointer_origin {
-            let now = NSEvent::mouseLocation();
-            if (now.x - origin.x).hypot(now.y - origin.y) < HOVER_ARM_DISTANCE {
-                if close_changed {
-                    self.redraw();
-                }
-                return;
-            }
-            self.pointer_origin = None;
-        }
-        let tile = match hit {
-            Some(Hit::Tile(slot)) => Some(shown.tile_start + slot),
-            _ => None,
-        };
-        if tile != self.hovered_tile {
-            self.hovered_tile = tile;
-            self.cancel_dwell();
-            if let Some(app) = tile
-                && Some(app) != self.switcher.selected_app_index()
-            {
-                self.dwell_timer = Some(schedule(TILE_DWELL_SECONDS, move |state| {
-                    state.finish_dwell(app);
-                }));
-            }
-        }
-        let selected_app = self.switcher.selected_app_index().unwrap_or_default();
-        if let Some(Hit::Row(row)) = hit
-            && !self.close_button.pressed
-            && shown.selected_row != Some(row)
-        {
-            self.select(selected_app, Some(shown.row_start + row));
-        } else if close_changed {
-            self.redraw();
-        }
-    }
-
     fn finish_dwell(&mut self, app: usize) {
         self.dwell_timer = None;
-        if self.switcher.is_active() && self.hovered_tile == Some(app) {
-            self.select(app, None);
+        if self.switcher.is_active() {
+            let response = self.pointer.dwell_elapsed(app);
+            self.apply_pointer(response);
         }
     }
 
@@ -1490,54 +1437,8 @@ impl App {
         }
     }
 
-    fn handle_mouse_down(&mut self, shown: Shown, hit: Option<Hit>) {
-        match hit {
-            Some(Hit::CloseButton(_)) => {
-                self.close_button.pressed = true;
-                self.redraw();
-            }
-            Some(Hit::Tile(slot)) => {
-                self.pressed = hit;
-                self.cancel_dwell();
-                self.select(shown.tile_start + slot, None);
-            }
-            Some(Hit::Row(row)) => {
-                self.pressed = hit;
-                let app = self.switcher.selected_app_index().unwrap_or_default();
-                self.select(app, Some(shown.row_start + row));
-            }
-            None => {}
-        }
-    }
-
-    fn handle_mouse_up(&mut self, hit: Option<Hit>) {
-        let pressed = self.pressed.take();
-        if self.close_button.pressed {
-            self.close_button.pressed = false;
-            if matches!(hit, Some(Hit::CloseButton(_))) {
-                self.apply_action(Action::Command(WindowCommand::Close));
-            }
-            self.redraw();
-        } else if hit.is_some() && hit == pressed {
-            self.apply_action(Action::Activate);
-        }
-    }
-
-    fn handle_right_mouse_down(&mut self, shown: Shown, hit: Option<Hit>, x: f64, y: f64) {
-        let on_window = match hit {
-            Some(Hit::Row(row) | Hit::CloseButton(row)) => {
-                let app = self.switcher.selected_app_index().unwrap_or_default();
-                self.select(app, Some(shown.row_start + row));
-                true
-            }
-            Some(Hit::Tile(slot)) => {
-                self.cancel_dwell();
-                self.select(shown.tile_start + slot, None);
-                false
-            }
-            None => return,
-        };
-        let window = on_window && self.switcher.selected_window().is_some();
+    fn show_context_menu(&mut self, menu: MenuFor, x: f64, y: f64) {
+        let window = menu == MenuFor::Window && self.switcher.selected_window().is_some();
         let app_name = self
             .switcher
             .selected_app()
