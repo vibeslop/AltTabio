@@ -176,7 +176,7 @@ impl App {
             rows,
             empty_note: list.empty_note,
             more_note: list.more_note,
-            close_state: self.pointer.close_state(),
+            close_state: self.pointer.close_state(self.switcher.selected_window()),
             preview,
         });
     }
