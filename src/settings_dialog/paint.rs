@@ -145,12 +145,10 @@ fn paint_control_message(hwnd: HWND, state: &DialogState) -> LRESULT {
     } else {
         paint_settings_control(hwnd, dc, state);
     }
-    let ended = unsafe {
+    unsafe {
         // SAFETY: paint was initialized by BeginPaint for this hwnd.
-        EndPaint(hwnd, &raw const paint)
-    };
-    if !ended.as_bool() {
-        eprintln!("Could not finish painting a settings control");
+        // EndPaint is documented to always return nonzero, so there is no failure to handle.
+        let _always_nonzero = EndPaint(hwnd, &raw const paint);
     }
     LRESULT(0)
 }
