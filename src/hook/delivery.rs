@@ -2,18 +2,17 @@
 //! actions wait for the physical Tab to arrive as a registered hotkey, which carries the
 //! permission to take the foreground.
 
-use super::flags::{INTERCEPTION_SUSPENDED, OVERLAY_FLAGS, post_action_message};
 use super::{
     CONTEXT, HOOK_ERROR_POST_ACTION, HOOK_ERROR_REGISTERED_SWITCH, HookContext, WM_HOOK_ACTION,
     WM_HOOK_HOTKEY_ACTION, process_with_context,
 };
+use alttabio::hook_flags::{INTERCEPTION_SUSPENDED, OVERLAY_FLAGS, encode_action};
 use alttabio::input::{HookOutcome, InputAction, KeyTransition};
-use std::sync::atomic::Ordering;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_TAB;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, GetForegroundWindow, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
+    AllowSetForegroundWindow, GetForegroundWindow, KBDLLHOOKSTRUCT, LLKHF_INJECTED, PostMessageW,
 };
 use windows::core::Error;
 
@@ -37,7 +36,7 @@ fn post_context_actions(
     outcome: HookOutcome,
     mut post: impl FnMut(HWND, InputAction) -> bool,
 ) -> bool {
-    if context.flags.recovery_pending.load(Ordering::Acquire)
+    if context.flags.recovery_pending()
         || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
         || context.interception_generation & INTERCEPTION_SUSPENDED != 0
     {
@@ -66,7 +65,7 @@ fn post_context_actions(
         return true;
     }
     for action in outcome.actions() {
-        if context.flags.recovery_pending.load(Ordering::Acquire)
+        if context.flags.recovery_pending()
             || context.flags.load() & !OVERLAY_FLAGS != context.interception_generation
             || context.interception_generation & INTERCEPTION_SUSPENDED != 0
         {
@@ -219,12 +218,22 @@ pub(super) fn dispatch_registered_switch(hotkey_id: Option<usize>) {
     }
 }
 
+fn post_action_message(target: HWND, action: InputAction, generation: usize, message: u32) -> bool {
+    let (wparam, lparam) = encode_action(action, generation);
+    unsafe {
+        // SAFETY: `target` is the UI HWND supplied at hook creation; PostMessageW copies the two
+        // integer payloads and retains no Rust references.
+        PostMessageW(Some(target), message, WPARAM(wparam), LPARAM(lparam))
+    }
+    .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::flags::{HookFlags, OVERLAY_ACTIVE, SEARCH_ACTIVE};
     use crate::hook::keyboard_state::KeyboardState;
     use crate::hook::test_context;
+    use alttabio::hook_flags::{HookFlags, OVERLAY_ACTIVE, SEARCH_ACTIVE};
     use alttabio::input::{HookSettings, HookState, Key, KeyEvent, Modifiers, MouseEvent};
     use std::sync::{Arc, atomic::AtomicBool};
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_LMENU;

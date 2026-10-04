@@ -2,20 +2,20 @@
 //! the pure `HookState` and post the resulting actions to the UI thread.
 
 mod delivery;
-mod flags;
 mod keyboard_state;
 mod recovery;
 mod replay;
 
-use alttabio::input::{
-    HookOutcome, HookSettings, HookState, KeyEvent, KeyTransition, Modifiers, MouseEvent,
-};
-use alttabio::passthrough::PassthroughPolicy;
-use delivery::{dispatch_registered_switch, post_actions, route_registered_switch};
-use flags::{
+use alttabio::hook_flags::{
     HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS,
     SEARCH_ACTIVE,
 };
+use alttabio::input::{
+    HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
+    MouseEvent,
+};
+use alttabio::passthrough::PassthroughPolicy;
+use delivery::{dispatch_registered_switch, post_actions, route_registered_switch};
 use keyboard_state::{KeyboardState, translate_search_character};
 use recovery::{KeyboardRecoveryWatcher, publish_recovery_flags, recover_keyboard_state};
 use replay::{is_own_replayed_input, replay_key_events, replay_mouse_event};
@@ -40,7 +40,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::Error;
 
 pub(crate) use alttabio::input::decode_virtual_key;
-pub use flags::decode_action;
 pub use replay::send_shell_escape;
 
 pub const WM_HOOK_ACTION: u32 = WM_APP + 1;
@@ -72,7 +71,7 @@ impl HookContext {
     fn sync_interception(&mut self) -> usize {
         let flags = self.flags.load();
         let generation = flags & !OVERLAY_FLAGS;
-        let recovering = self.flags.recovery_pending.load(Ordering::Acquire);
+        let recovering = self.flags.recovery_pending();
         let suspended = flags & INTERCEPTION_SUSPENDED != 0 || recovering;
         if generation != self.interception_generation || recovering != self.recovering {
             self.registered_switch = None;
@@ -199,7 +198,7 @@ impl HookThread {
     }
 
     pub fn action_is_current(&self, wparam: WPARAM) -> bool {
-        self.flags.action_is_current(wparam)
+        self.flags.action_is_current(wparam.0)
     }
 
     pub fn set_remote_desktop_passthrough(&self, policy: PassthroughPolicy) -> Result<(), String> {
@@ -237,6 +236,10 @@ impl Drop for HookThread {
             report_join_error(join_handle.join(), "during shutdown");
         }
     }
+}
+
+pub fn decode_action(wparam: WPARAM, lparam: LPARAM) -> Option<InputAction> {
+    alttabio::hook_flags::decode_action(wparam.0, lparam.0)
 }
 
 fn run_hook_thread(
@@ -623,7 +626,7 @@ fn test_context() -> HookContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alttabio::input::{InputAction, Key};
+    use alttabio::input::Key;
     use replay::REPLAYED_INPUT_MARKER;
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_LSHIFT, VK_SHIFT};
 

@@ -1,11 +1,11 @@
 //! Rebuilds modifier state after an input-desktop switch, since the hook never sees the key
 //! changes made on the other desktop.
 
-use super::flags::{HookFlags, next_hook_generation};
 use super::keyboard_state::{MODIFIER_KEYS, timestamp_at_or_after};
 use super::{key_pressed, process_with_context};
+use alttabio::hook_flags::HookFlags;
 use std::cell::{Cell, RefCell};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::StationsAndDesktops::{
     GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
@@ -112,14 +112,9 @@ fn note_desktop_boundary(time: u32) {
     });
     RECOVERY_FLAGS.with(|flags| {
         if let Some(flags) = flags.borrow().as_ref() {
-            flags.recovery_pending.store(true, Ordering::Release);
+            flags.set_recovery_pending(true);
         } else {
-            let _marked = process_with_context(|context| {
-                context
-                    .flags
-                    .recovery_pending
-                    .store(true, Ordering::Release);
-            });
+            let _marked = process_with_context(|context| context.flags.set_recovery_pending(true));
         }
     });
 }
@@ -216,19 +211,9 @@ fn recover_keyboard_state_with(
         context
             .keyboard_state
             .rebase_modifiers(boundary, before, down, &mut context.state);
-        // Invalidate queued actions without overwriting concurrent UI flag changes.
-        let _previous =
-            context
-                .flags
-                .value
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                    Some(next_hook_generation() | (value & 7))
-                });
+        context.flags.advance_generation();
         DESKTOP_BOUNDARY.set(None);
-        context
-            .flags
-            .recovery_pending
-            .store(false, Ordering::Release);
+        context.flags.set_recovery_pending(false);
     });
 }
 
@@ -253,17 +238,14 @@ mod tests {
             );
             assert_eq!(DESKTOP_BOUNDARY.get(), Some(300));
             assert_eq!(
-                process_with_context(|context| context
-                    .flags
-                    .recovery_pending
-                    .load(Ordering::Acquire)),
+                process_with_context(|context| context.flags.recovery_pending()),
                 Some(true)
             );
         }
         recover_keyboard_state_with(400, || Ok(true), || [false; 8]);
         assert_eq!(DESKTOP_BOUNDARY.get(), None);
         assert_eq!(
-            process_with_context(|context| context.flags.recovery_pending.load(Ordering::Acquire)),
+            process_with_context(|context| context.flags.recovery_pending()),
             Some(false)
         );
         CONTEXT.with(|slot| *slot.borrow_mut() = None);
