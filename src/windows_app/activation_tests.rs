@@ -1,6 +1,7 @@
 //! Native activation checks on a private desktop. The user's desktop is never switched.
 
 use super::*;
+use crate::windows_app::null_terminated;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -9,8 +10,9 @@ use windows::Win32::System::StationsAndDesktops::{
     CreateDesktopW, DESKTOP_CONTROL_FLAGS, HDESK, SetThreadDesktop,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
+    CreateWindowExW, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
 };
+use windows::core::{PCWSTR, w};
 
 #[test]
 #[ignore = "runs isolated native desktop fixtures; invoke explicitly"]
@@ -22,7 +24,7 @@ fn native_activation_of_hung_window_does_not_block() {
         .args([
             "--ignored",
             "--exact",
-            "windows_app::activation_tests::native_activation_fixture",
+            "windows_app::activation::activation_tests::native_activation_fixture",
             "--nocapture",
         ])
         .env("ALTTABIO_ACTIVATION_FIXTURE", "1")
