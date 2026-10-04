@@ -97,7 +97,7 @@ macro_rules! named_keys {
         impl Key {
             /// The Windows virtual-key code that delivers this key.
             #[must_use]
-            pub const fn virtual_key(self) -> u16 {
+            pub(crate) const fn virtual_key(self) -> u16 {
                 match self {
                     $( Self::$key => $code, )+
                     Self::Function(number) => FUNCTION_BASE + number as u16,
