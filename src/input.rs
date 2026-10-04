@@ -2,7 +2,7 @@
 
 mod key;
 
-pub use key::{Key, KeyEvent, KeyTransition, Modifiers};
+pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(
@@ -54,7 +54,7 @@ impl ReplayedKeyEvent {
 
     #[must_use]
     pub fn virtual_key(self) -> u16 {
-        virtual_key(self.key)
+        self.key.virtual_key()
     }
 }
 
@@ -1040,37 +1040,6 @@ const fn shift_mask(key: Key) -> Option<u8> {
     }
 }
 
-fn virtual_key(key: Key) -> u16 {
-    match key {
-        Key::Tab => 0x09,
-        Key::Enter => 0x0D,
-        Key::Home => 0x24,
-        Key::End => 0x23,
-        Key::Escape => 0x1B,
-        Key::F4 => 0x73,
-        Key::Function(number) => 0x6F + u16::from(number),
-        Key::Alt => 0x12,
-        Key::LeftAlt => 0xA4,
-        Key::RightAlt => 0xA5,
-        Key::LeftWindows => 0x5B,
-        Key::RightWindows => 0x5C,
-        Key::Control => 0x11,
-        Key::LeftControl => 0xA2,
-        Key::RightControl => 0xA3,
-        Key::LeftShift => 0xA0,
-        Key::RightShift => 0xA1,
-        Key::PrintScreen => 0x2C,
-        Key::Backspace => 0x08,
-        Key::LeftArrow => 0x25,
-        Key::UpArrow => 0x26,
-        Key::RightArrow => 0x27,
-        Key::DownArrow => 0x28,
-        Key::Digit(value) => 0x30 + u16::from(value),
-        Key::NumpadDigit(value) => 0x60 + u16::from(value),
-        Key::Other(value) => value,
-    }
-}
-
 const fn windows_key_mask(key: Key) -> Option<u8> {
     match key {
         Key::LeftWindows => Some(1),
@@ -1090,7 +1059,7 @@ fn windows_keys(mask: u8) -> impl Iterator<Item = Key> {
 }
 
 fn owned_key_slot(key: Key) -> Option<(usize, u64)> {
-    let virtual_key = usize::from(virtual_key(key));
+    let virtual_key = usize::from(key.virtual_key());
     if virtual_key >= 256 {
         return None;
     }
