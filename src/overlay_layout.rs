@@ -79,7 +79,7 @@ impl OverlayLayout {
     }
 
     #[must_use]
-    pub const fn list_top(self) -> f32 {
+    pub(crate) const fn list_top(self) -> f32 {
         self.outer_padding
     }
 
@@ -89,7 +89,7 @@ impl OverlayLayout {
         clippy::cast_sign_loss,
         reason = "the bounded nonnegative list offset maps to a small on-screen row index"
     )]
-    pub fn visible_row_at(self, client_height: f32, y: f32) -> Option<usize> {
+    pub(crate) fn visible_row_at(self, client_height: f32, y: f32) -> Option<usize> {
         let row_offset = y - self.list_top();
         if row_offset < 0.0 {
             return None;
