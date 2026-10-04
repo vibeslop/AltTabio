@@ -1,3 +1,7 @@
+use crate::dialog_host::{
+    self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog, OwnerGuard, dark,
+    high_word, low_word, wide,
+};
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
     DRAW_TEXT_VCENTER, OwnedBrush, OwnedFont, draw_text_with_font, fill_color, frame_color,
@@ -7,49 +11,41 @@ use crate::{
     app_icon,
     native_theme::{DarkModeApi, resolve_current_theme},
 };
+use alttabio::dialog_layout::{BASE_DPI, Point, Size, hairline, scale};
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::theme::ResolvedTheme;
-use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
-use std::mem::{size_of, size_of_val};
+use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use windows::Win32::Foundation::{
-    COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
-    SetLastError, WIN32_ERROR, WPARAM,
-};
-use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_BTNFACE, COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT,
     COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT, DeleteObject, EndPaint, FW_NORMAL,
-    FW_SEMIBOLD, FillRect, GetMonitorInfoW, HBRUSH, HDC, HFONT, HGDIOBJ, HPEN, InvalidateRect,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, PAINTSTRUCT, SetBkColor, SetBkMode,
-    SetTextColor, TRANSPARENT,
+    FW_SEMIBOLD, FillRect, HBRUSH, HDC, HFONT, HGDIOBJ, HPEN, InvalidateRect, PAINTSTRUCT,
+    SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
-};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_GETSTATE, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON,
     BS_GROUPBOX, BS_PUSHBUTTON, CB_ADDSTRING, CB_ERR, CB_SETCURSEL, CBN_SELCHANGE,
-    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, HMENU, IDC_ARROW, IsDialogMessageW, LoadCursorW, MSG, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_ENABLE, WM_ERASEBKGND, WM_KILLFOCUS, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_THEMECHANGED, WNDCLASSEXW,
+    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CreateWindowExW, GetClientRect, HMENU, MoveWindow,
+    SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
+    WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_ENABLE, WM_ERASEBKGND,
+    WM_KILLFOCUS, WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_THEMECHANGED,
     WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
     WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{BOOL, Error, HRESULT, PCWSTR, Result, w};
 
 pub(crate) const WINDOW_CLASS_NAME: &str = "AltTabioRustSettings";
-const WINDOW_CLASS: PCWSTR = w!("AltTabioRustSettings");
-const WINDOW_TITLE: PCWSTR = w!("AltTabio Settings");
-const BASE_DPI: u32 = 96;
+const FRAME: DialogFrame = DialogFrame {
+    name: "settings",
+    class: WINDOW_CLASS_NAME,
+    title: "AltTabio Settings",
+    style: WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0),
+    ex_style: WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0),
+};
 const OPTION_COUNT: usize = 16;
 const GENERAL_OPTION_COUNT: usize = 8;
 const APPEARANCE_OPTION_COUNT: usize = 7;
@@ -61,14 +57,9 @@ const ICON_ID: usize = 201;
 const CLIENT_WIDTH: i32 = 560;
 const CLIENT_HEIGHT: i32 = 747;
 const APPEARANCE_SELECTOR_WIDTH: i32 = 180;
-const WINDOW_STYLE_VALUE: WINDOW_STYLE =
-    WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0);
-const WINDOW_EX_STYLE_VALUE: WINDOW_EX_STYLE =
-    WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0);
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
 const BUTTON_STATE_PUSHED: usize = 0x0004;
 const SOLID_PEN: i32 = 0;
-const WM_DESTROY_DIALOG: u32 = WM_APP + 21;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionGroup {
@@ -266,12 +257,6 @@ const fn icon_from_selector_index(index: usize) -> IconColor {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct Size {
-    width: i32,
-    height: i32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ControlRect {
     x: i32,
     y: i32,
@@ -397,18 +382,13 @@ const fn option_rows<const COUNT: usize>(
     rows
 }
 
-fn scale(value: i32, dpi: u32) -> i32 {
-    let numerator = i64::from(value) * i64::from(dpi) + i64::from(BASE_DPI / 2);
-    i32::try_from(numerator / i64::from(BASE_DPI)).unwrap_or(i32::MAX)
-}
-
 pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
-    let instance = module_instance()?;
+    let instance = dialog_host::module_instance()?;
     register_class(instance)?;
     let dpi = owner_dpi(owner);
     let layout = DialogLayout::for_dpi(dpi);
-    let window_size = adjusted_window_size(layout.client, dpi)?;
-    let window_origin = centered_window_origin(owner, window_size)?;
+    let window_size = FRAME.window_size(layout.client, dpi)?;
+    let window_origin = dialog_host::work_area_near_window(owner)?.centered(window_size);
     let initial_dark = resolve_current_theme(settings.appearance.theme) == ResolvedTheme::Dark;
     let dark_mode_api = match DarkModeApi::load(initial_dark) {
         Ok(api) => Some(api),
@@ -418,107 +398,25 @@ pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
         }
     };
     let _owner_guard = OwnerGuard::disable(owner);
-    let host = Box::new(DialogHost::new(DialogState::new(
-        settings.clone(),
-        dpi,
+    let dialog = ModalDialog::create(
         instance,
-        dark_mode_api,
-    )));
-    let host_pointer = Box::into_raw(host);
-    let window = unsafe {
-        // SAFETY: host_pointer remains allocated through the nested dialog loop and WM_NCCREATE
-        // stores it as window user data without taking ownership.
-        CreateWindowExW(
-            WINDOW_EX_STYLE_VALUE,
-            WINDOW_CLASS,
-            WINDOW_TITLE,
-            WINDOW_STYLE_VALUE,
-            window_origin.x,
-            window_origin.y,
-            window_size.width,
-            window_size.height,
-            settings_window_owner(owner),
-            None,
-            Some(instance),
-            Some(host_pointer.cast()),
-        )
-    };
-    let window = match window {
-        Ok(window) => window,
-        Err(error) => {
-            unsafe {
-                // SAFETY: window creation failed before any HWND retained the unique allocation.
-                drop(Box::from_raw(host_pointer));
-            }
-            return Err(error);
-        }
-    };
-
-    let controls_result = unsafe {
-        // SAFETY: host_pointer remains live for the nested loop. The RefCell guard makes any
-        // synchronous callback re-entry fail closed instead of creating a mutable alias.
-        (*host_pointer)
-            .state
-            .borrow_mut()
-            .create_controls(window, instance, host_pointer)
-    };
-    if let Err(error) = controls_result {
-        let destroy_result = unsafe {
-            // SAFETY: window is live and owned by this UI thread.
-            DestroyWindow(window)
-        };
-        if let Err(destroy_error) = destroy_result {
-            // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
-            eprintln!("Could not destroy the incomplete settings window: {destroy_error}");
-            return Err(error);
-        }
-        unsafe {
-            // SAFETY: successful synchronous destruction cleared the window user data.
-            drop(Box::from_raw(host_pointer));
-        }
-        return Err(error);
-    }
-
-    let foreground = unsafe {
-        // SAFETY: window is fully initialized and owned by this UI thread. ShowWindow reports the
-        // previous visibility, not a failure.
-        let _was_visible = ShowWindow(window, SW_SHOW);
-        SetForegroundWindow(window)
-    };
-    if !foreground.as_bool() {
-        // Windows refuses the foreground while the user works in another process; settings still
-        // shows.
-        eprintln!("Windows kept settings out of the foreground");
-    }
-    let ok_button = unsafe {
-        // SAFETY: host_pointer remains live and setup has released its mutable state borrow.
-        (*host_pointer).state.borrow().controls.ok_button
-    };
-    if let Err(error) = focus(ok_button) {
+        window_origin,
+        window_size,
+        settings_window_owner(owner),
+        DialogState::new(settings.clone(), dpi, instance, dark_mode_api),
+    )?;
+    let window = dialog.window();
+    let host = dialog.host()?;
+    // The mutable borrow makes any synchronous callback re-entry during setup fail closed.
+    host.state_mut()?.create_controls(window, instance, host)?;
+    dialog.show_in_front();
+    let ok_button = host.state_mut()?.controls.ok_button;
+    if let Err(error) = dialog_host::focus(ok_button) {
         eprintln!("Could not focus the settings OK button: {error}");
     }
-    let loop_result = run_dialog_loop(window, host_pointer);
-    if let Err(loop_error) = loop_result {
-        let destroy_result = unsafe {
-            // SAFETY: the nested loop failed while this UI thread still owns the dialog HWND.
-            DestroyWindow(window)
-        };
-        if let Err(destroy_error) = destroy_result {
-            // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
-            eprintln!("Could not destroy settings after its message loop failed: {destroy_error}");
-            return Err(loop_error);
-        }
-        unsafe {
-            // SAFETY: successful synchronous destruction cleared the window user data.
-            drop(Box::from_raw(host_pointer));
-        }
-        return Err(loop_error);
-    }
-    let host = unsafe {
-        // SAFETY: a successful loop exit occurs only after WM_NCDESTROY cleared window user data.
-        Box::from_raw(host_pointer)
+    let Some(state) = dialog.run(Keyboard::DialogNavigation)? else {
+        return Ok(None);
     };
-    let state = host.state.into_inner();
     Ok(state.accepted.then_some(state.settings))
 }
 
@@ -657,17 +555,21 @@ struct DialogState {
     accepted: bool,
 }
 
-struct DialogHost {
-    state: RefCell<DialogState>,
-    done: Cell<bool>,
-}
+impl DialogWindow for DialogState {
+    const FRAME: DialogFrame = FRAME;
 
-impl DialogHost {
-    fn new(state: DialogState) -> Self {
-        Self {
-            state: RefCell::new(state),
-            done: Cell::new(false),
-        }
+    fn attach(&mut self, window: HWND) {
+        self.hwnd = window;
+    }
+
+    fn handle_message(
+        &mut self,
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        handle_settings_message(self, window, message, wparam, lparam)
     }
 }
 
@@ -698,7 +600,7 @@ impl DialogState {
         &mut self,
         parent: HWND,
         instance: HINSTANCE,
-        host: *mut DialogHost,
+        host: &DialogHost<Self>,
     ) -> Result<()> {
         let layout = DialogLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
@@ -949,12 +851,12 @@ impl ThemePalette {
     fn new(dark: bool) -> Self {
         if dark {
             Self {
-                background: rgb(32, 32, 32),
-                text: rgb(240, 240, 240),
+                background: dark::BACKGROUND,
+                text: dark::TEXT,
                 disabled_text: rgb(145, 145, 145),
-                control_surface: rgb(45, 45, 45),
-                pressed_surface: rgb(66, 66, 66),
-                control_border: rgb(125, 125, 125),
+                control_surface: dark::CONTROL_SURFACE,
+                pressed_surface: dark::PRESSED_SURFACE,
+                control_border: dark::CONTROL_BORDER,
                 accent: system_color(COLOR_HIGHLIGHT),
                 accent_text: system_color(COLOR_HIGHLIGHTTEXT),
             }
@@ -982,18 +884,7 @@ fn apply_native_theme_hooks(
     if let Some(api) = dark_mode_api {
         api.allow_for_window(window, dark);
     }
-    let immersive_dark = i32::from(dark);
-    let dwm_result = unsafe {
-        // SAFETY: window is a live top-level HWND and immersive_dark remains valid for the
-        // synchronous DWM attribute call.
-        DwmSetWindowAttribute(
-            window,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            (&raw const immersive_dark).cast(),
-            u32::try_from(size_of_val(&immersive_dark)).unwrap_or(u32::MAX),
-        )
-    };
-    if let Err(error) = dwm_result {
+    if let Err(error) = dialog_host::set_dark_title_bar(window, dark) {
         eprintln!("Could not apply the native settings title-bar theme: {error}");
     }
 
@@ -1199,7 +1090,7 @@ fn create_selector(
         font,
     )?;
     for label in labels {
-        let text = null_terminated(label);
+        let text = wide(label);
         let result = unsafe {
             // SAFETY: selector is live and text remains valid throughout the synchronous insertion.
             SendMessageW(
@@ -1255,16 +1146,19 @@ fn create_button(
     )
 }
 
-fn install_custom_control_painting(controls: &DialogControls, host: *mut DialogHost) -> Result<()> {
+fn install_custom_control_painting(
+    controls: &DialogControls,
+    host: &DialogHost<DialogState>,
+) -> Result<()> {
     for control in controls.custom_paint_targets() {
         let installed = unsafe {
-            // SAFETY: every handle is a live child control and host is the stable Box allocation
-            // retained until after all children receive WM_NCDESTROY.
+            // SAFETY: every handle is a live child control and host is the ModalDialog allocation,
+            // which stays allocated until after all children receive WM_NCDESTROY.
             SetWindowSubclass(
                 control,
                 Some(settings_control_subclass_proc),
                 SETTINGS_CONTROL_SUBCLASS_ID,
-                host as usize,
+                std::ptr::from_ref(host) as usize,
             )
         };
         if !installed.as_bool() {
@@ -1300,11 +1194,9 @@ unsafe extern "system" fn settings_control_subclass_proc(
         }
         let host = unsafe {
             // SAFETY: SetWindowSubclass stored the stable DialogHost pointer for every control.
-            (host_pointer as *const DialogHost).as_ref()
+            (host_pointer as *const DialogHost<DialogState>).as_ref()
         }?;
-        let Ok(state) = host.state.try_borrow() else {
-            return None;
-        };
+        let state = host.state()?;
         match message {
             WM_PAINT => Some(paint_control_message(hwnd, &state)),
             WM_PRINTCLIENT => {
@@ -1408,7 +1300,7 @@ fn paint_group_box(dc: HDC, client: RECT, label: &str, state: &DialogState) -> R
         dc,
         border,
         state.palette.control_border,
-        scale(1, state.dpi).max(1),
+        hairline(state.dpi),
     )?;
 
     let Some(fonts) = state.fonts.as_ref() else {
@@ -1478,7 +1370,7 @@ fn paint_checkbox(
         } else {
             state.palette.control_border
         },
-        scale(1, state.dpi).max(1),
+        hairline(state.dpi),
     )?;
     if checked {
         draw_checkmark(dc, checkbox, state.palette.accent_text, state.dpi)?;
@@ -1551,7 +1443,7 @@ fn paint_push_button(
 
 fn paint_combo_box(dc: HDC, client: RECT, label: &str, state: &DialogState) -> Result<()> {
     fill_color(dc, client, state.palette.control_surface)?;
-    let border = scale(1, state.dpi).max(1);
+    let border = hairline(state.dpi);
     frame_color(dc, client, state.palette.control_border, border)?;
     let button_width = scale(28, state.dpi).min(client.right.saturating_sub(client.left));
     let button_left = client.right.saturating_sub(button_width);
@@ -1597,7 +1489,7 @@ fn paint_combo_box(dc: HDC, client: RECT, label: &str, state: &DialogState) -> R
             },
         ],
         state.palette.text,
-        scale(1, state.dpi).max(1),
+        hairline(state.dpi),
     )
 }
 
@@ -1709,7 +1601,7 @@ fn create_control(
     rect: ControlRect,
     font: HFONT,
 ) -> Result<HWND> {
-    let text = null_terminated(label);
+    let text = wide(label);
     let menu = id.map(|value| HMENU(value as *mut c_void));
     let control = unsafe {
         // SAFETY: class/text buffers remain live for the synchronous creation call; parent and
@@ -1767,66 +1659,10 @@ fn is_checked(control: HWND) -> bool {
     result.0 == 1
 }
 
-fn adjusted_window_size(client: Size, dpi: u32) -> Result<Size> {
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: client.width,
-        bottom: client.height,
-    };
-    unsafe {
-        // SAFETY: rect is writable and both styles are the exact styles used to create the window.
-        AdjustWindowRectExForDpi(
-            &raw mut rect,
-            WINDOW_STYLE_VALUE,
-            false,
-            WINDOW_EX_STYLE_VALUE,
-            dpi,
-        )?;
-    }
-    Ok(Size {
-        width: rect.right.saturating_sub(rect.left),
-        height: rect.bottom.saturating_sub(rect.top),
-    })
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-fn centered_window_origin(owner: HWND, window: Size) -> Result<Point> {
-    let monitor = unsafe {
-        // SAFETY: owner is the live application window and the nearest-monitor fallback guarantees
-        // a monitor for off-screen or hidden owner bounds.
-        MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST)
-    };
-    let mut monitor_info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or(u32::MAX),
-        ..MONITORINFO::default()
-    };
-    unsafe {
-        // SAFETY: monitor identifies the nearest display and monitor_info is a writable structure
-        // with its size field initialized.
-        if !GetMonitorInfoW(monitor, &raw mut monitor_info).as_bool() {
-            return Err(Error::from_thread());
-        }
-    }
-    Ok(centered_in_rect(monitor_info.rcWork, window))
-}
-
-fn centered_in_rect(area: RECT, window: Size) -> Point {
-    let area_width = area.right.saturating_sub(area.left);
-    let area_height = area.bottom.saturating_sub(area.top);
-    Point {
-        x: area
-            .left
-            .saturating_add(area_width.saturating_sub(window.width) / 2),
-        y: area
-            .top
-            .saturating_add(area_height.saturating_sub(window.height) / 2),
-    }
+fn register_class(instance: HINSTANCE) -> Result<()> {
+    let icon = app_icon::load_app(instance, IconColor::Azure)?;
+    let background = HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void);
+    dialog_host::register_class::<DialogState>(instance, icon, background)
 }
 
 fn owner_dpi(owner: HWND) -> u32 {
@@ -1835,113 +1671,6 @@ fn owner_dpi(owner: HWND) -> u32 {
         GetDpiForWindow(owner)
     };
     if dpi == 0 { BASE_DPI } else { dpi }
-}
-
-fn run_dialog_loop(window: HWND, host: *mut DialogHost) -> Result<()> {
-    let mut message = MSG::default();
-    loop {
-        let done = unsafe {
-            // SAFETY: host remains allocated for this nested loop. Cell supports reentrant reads
-            // on the single UI thread without creating a mutable alias.
-            (*host).done.get()
-        };
-        if done {
-            break;
-        }
-        let result = unsafe {
-            // SAFETY: message is writable and this UI thread owns the nested dialog loop.
-            GetMessageW(&raw mut message, None, 0, 0)
-        };
-        if result.0 == -1 {
-            return Err(Error::from_thread());
-        }
-        if result.0 == 0 {
-            let exit_code = i32::try_from(message.wParam.0).unwrap_or_default();
-            unsafe {
-                // SAFETY: this UI thread owns the live dialog HWND. Destruction synchronously clears
-                // the state pointer. WM_QUIT must be preserved even if destruction fails.
-                let destroy_result = DestroyWindow(window);
-                PostQuitMessage(exit_code);
-                destroy_result?;
-            }
-            return Ok(());
-        }
-        let handled = unsafe {
-            // SAFETY: window and message are live on this UI thread for the synchronous call.
-            IsDialogMessageW(window, &raw const message).as_bool()
-        };
-        if !handled {
-            unsafe {
-                // SAFETY: GetMessageW initialized message for this UI thread.
-                let _translated = TranslateMessage(&raw const message);
-                DispatchMessageW(&raw const message);
-            }
-        }
-    }
-    Ok(())
-}
-
-unsafe extern "system" fn settings_window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    let handled = catch_unwind(AssertUnwindSafe(|| {
-        if message == WM_NCCREATE {
-            let create = unsafe {
-                // SAFETY: WM_NCCREATE guarantees lParam points to CREATESTRUCTW for this callback.
-                (lparam.0 as *const CREATESTRUCTW).as_ref()
-            }?;
-            let host = create.lpCreateParams.cast::<DialogHost>();
-            if host.is_null() {
-                return Some(LRESULT(0));
-            }
-            let host_ref = unsafe {
-                // SAFETY: host is the Box allocation passed to CreateWindowExW and remains live.
-                &*host
-            };
-            let Ok(mut state) = host_ref.state.try_borrow_mut() else {
-                return Some(LRESULT(0));
-            };
-            state.hwnd = hwnd;
-            drop(state);
-            unsafe {
-                // SAFETY: host remains live for the complete nested dialog loop.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, host as isize);
-            }
-            return None;
-        }
-        let host = unsafe {
-            // SAFETY: user data is either zero or the live DialogHost pointer installed above.
-            (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut DialogHost).as_ref()
-        }?;
-        if message == WM_DESTROY_DIALOG {
-            let result = unsafe {
-                // SAFETY: the posted message runs on the UI thread that owns hwnd.
-                DestroyWindow(hwnd)
-            };
-            if let Err(error) = result {
-                eprintln!("Could not close the settings window: {error}");
-            }
-            return Some(LRESULT(0));
-        }
-        if message == WM_NCDESTROY {
-            host.done.set(true);
-            unsafe {
-                // SAFETY: clearing user data prevents later messages from observing host.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            }
-            return None;
-        }
-        let Ok(mut state) = host.state.try_borrow_mut() else {
-            return None;
-        };
-        handle_settings_message(&mut state, hwnd, message, wparam, lparam)
-    }))
-    .ok()
-    .flatten();
-    handled.unwrap_or_else(|| default_window_proc(hwnd, message, wparam, lparam))
 }
 
 fn handle_settings_message(
@@ -1954,7 +1683,9 @@ fn handle_settings_message(
     match message {
         WM_COMMAND => handle_command(hwnd, state, wparam),
         WM_DPICHANGED => {
-            handle_dpi_changed(state, hwnd, wparam, lparam);
+            dialog_host::handle_dpi_changed(hwnd, wparam, lparam, FRAME.name, |dpi| {
+                state.update_dpi(dpi)
+            });
             Some(LRESULT(0))
         }
         WM_ERASEBKGND => state
@@ -1980,44 +1711,9 @@ fn handle_settings_message(
     }
 }
 
-fn handle_dpi_changed(state: &mut DialogState, hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
-    let suggested = unsafe {
-        // SAFETY: WM_DPICHANGED guarantees lParam points to a suggested window RECT.
-        (lparam.0 as *const RECT).as_ref()
-    };
-    if let Some(suggested) = suggested {
-        let resize_result = unsafe {
-            // SAFETY: hwnd is live and the suggested rectangle comes from WM_DPICHANGED.
-            SetWindowPos(
-                hwnd,
-                None,
-                suggested.left,
-                suggested.top,
-                suggested.right.saturating_sub(suggested.left),
-                suggested.bottom.saturating_sub(suggested.top),
-                windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
-                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
-            )
-        };
-        if let Err(error) = resize_result {
-            eprintln!("Could not resize settings for its new display scale: {error}");
-        }
-    }
-    let new_dpi = u32::try_from(low_word(wparam.0)).unwrap_or(BASE_DPI);
-    if let Err(error) = state.update_dpi(new_dpi) {
-        eprintln!("Could not lay out settings for its new display scale: {error}");
-    }
-    let invalidated = unsafe {
-        // SAFETY: hwnd is live for the callback and the full dialog must redraw.
-        InvalidateRect(Some(hwnd), None, true)
-    };
-    if !invalidated.as_bool() {
-        eprintln!("Could not redraw settings after its display scale changed");
-    }
-}
-
 fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option<LRESULT> {
-    let command = low_word(wparam.0);
+    let command = usize::from(low_word(wparam.0));
+    let notification = u32::from(high_word(wparam.0));
     if command == OK_ID {
         state.accept();
         request_dialog_close(hwnd);
@@ -2026,14 +1722,14 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
         state.cancel();
         request_dialog_close(hwnd);
         Some(LRESULT(0))
-    } else if command == THEME_ID && high_word(wparam.0) == CBN_SELCHANGE as usize {
+    } else if command == THEME_ID && notification == CBN_SELCHANGE {
         state.apply_selected_theme();
         Some(LRESULT(0))
-    } else if command == ICON_ID && high_word(wparam.0) == CBN_SELCHANGE as usize {
+    } else if command == ICON_ID && notification == CBN_SELCHANGE {
         state.apply_selected_icon();
         Some(LRESULT(0))
     } else if command == SettingOption::RightButtonWheelSwitching.control_id()
-        && high_word(wparam.0) == BN_CLICKED as usize
+        && notification == BN_CLICKED
     {
         state.sync_right_button_release_enabled();
         Some(LRESULT(0))
@@ -2043,11 +1739,7 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
 }
 
 fn request_dialog_close(hwnd: HWND) {
-    let result = unsafe {
-        // SAFETY: hwnd is live and the private message carries no borrowed data.
-        PostMessageW(Some(hwnd), WM_DESTROY_DIALOG, WPARAM(0), LPARAM(0))
-    };
-    if let Err(error) = result {
+    if let Err(error) = dialog_host::request_close(hwnd) {
         eprintln!("Could not request settings closure: {error}");
     }
 }
@@ -2056,7 +1748,7 @@ fn paint_background(hwnd: HWND, dc: HDC, brush: HBRUSH) -> LRESULT {
     let mut client = RECT::default();
     let client_result = unsafe {
         // SAFETY: hwnd and dc are the live handles supplied for WM_ERASEBKGND; client is writable.
-        windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &raw mut client)
+        GetClientRect(hwnd, &raw mut client)
     };
     if let Err(error) = client_result {
         eprintln!("Could not read the settings client area for painting: {error}");
@@ -2103,111 +1795,6 @@ fn style_control_dc(
         eprintln!("Could not set a settings control text color");
     }
     LRESULT(brush.0 as isize)
-}
-
-fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    unsafe {
-        // SAFETY: unhandled messages are forwarded with their original scalar values.
-        DefWindowProcW(hwnd, message, wparam, lparam)
-    }
-}
-
-fn register_class(instance: HINSTANCE) -> Result<()> {
-    let cursor = unsafe {
-        // SAFETY: IDC_ARROW is a predefined shared cursor.
-        LoadCursorW(None, IDC_ARROW)
-    }?;
-    let icon = app_icon::load_app(instance, IconColor::Azure)?;
-    let background = HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void);
-    let class = WNDCLASSEXW {
-        cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).unwrap_or(u32::MAX),
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(settings_window_proc),
-        hInstance: instance,
-        hIcon: icon,
-        hCursor: cursor,
-        hbrBackground: background,
-        lpszClassName: WINDOW_CLASS,
-        hIconSm: icon,
-        ..WNDCLASSEXW::default()
-    };
-    let atom = unsafe {
-        // SAFETY: class and its static class name remain valid for the synchronous call.
-        RegisterClassExW(&raw const class)
-    };
-    if atom != 0
-        || unsafe {
-            // SAFETY: RegisterClassExW just failed and its last-error value is still available.
-            GetLastError()
-        } == ERROR_CLASS_ALREADY_EXISTS
-    {
-        Ok(())
-    } else {
-        Err(Error::from_thread())
-    }
-}
-
-fn module_instance() -> Result<HINSTANCE> {
-    let module = unsafe {
-        // SAFETY: None requests a borrowed handle for this executable module.
-        GetModuleHandleW(None)
-    }?;
-    Ok(HINSTANCE(module.0))
-}
-
-struct OwnerGuard(HWND);
-
-impl OwnerGuard {
-    fn disable(owner: HWND) -> Self {
-        unsafe {
-            // SAFETY: owner is the live application HWND and remains live through the dialog loop.
-            let _was_enabled = EnableWindow(owner, false);
-        }
-        Self(owner)
-    }
-}
-
-impl Drop for OwnerGuard {
-    fn drop(&mut self) {
-        let foreground = unsafe {
-            // SAFETY: owner remains live after the nested dialog closes. EnableWindow reports the
-            // previous state, not a failure.
-            let _was_disabled = EnableWindow(self.0, true);
-            SetForegroundWindow(self.0)
-        };
-        if !foreground.as_bool() {
-            eprintln!("Windows kept AltTabio out of the foreground after settings closed");
-        }
-    }
-}
-
-fn focus(control: HWND) -> Result<()> {
-    let result = unsafe {
-        // SAFETY: control is a live child of this thread's window. Clearing the last error first
-        // tells a failure from a null previous focus.
-        SetLastError(WIN32_ERROR(0));
-        SetFocus(Some(control))
-    };
-    match result {
-        Err(error) if error.code().is_err() => Err(error),
-        _ => Ok(()),
-    }
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Win32 command ids are stored in the low 16 bits of WPARAM"
-)]
-fn low_word(value: usize) -> usize {
-    value & usize::from(u16::MAX)
-}
-
-fn high_word(value: usize) -> usize {
-    value >> 16 & usize::from(u16::MAX)
-}
-
-fn null_terminated(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
 }
 
 #[cfg(test)]
@@ -2286,74 +1873,34 @@ mod tests {
     fn settings_window_requests_app_window_alt_tab_presence() {
         let app_window = windows::Win32::UI::WindowsAndMessaging::WS_EX_APPWINDOW;
 
-        assert_ne!(WINDOW_EX_STYLE_VALUE.0 & app_window.0, 0);
+        assert_ne!(FRAME.ex_style.0 & app_window.0, 0);
     }
 
     #[test]
-    fn settings_window_reports_its_caption() {
-        let instance =
-            module_instance().unwrap_or_else(|error| panic!("could not get test module: {error}"));
-        register_class(instance)
-            .unwrap_or_else(|error| panic!("could not register Settings test window: {error}"));
-        let host = Box::new(DialogHost::new(DialogState::new(
-            Settings::default(),
-            BASE_DPI,
+    fn settings_window_reports_its_caption() -> Result<()> {
+        let instance = dialog_host::module_instance()?;
+        register_class(instance)?;
+        let dialog = ModalDialog::create(
             instance,
+            Point::default(),
+            Size::new(100, 100),
             None,
-        )));
-        let host_pointer = Box::into_raw(host);
-        let created = unsafe {
-            // SAFETY: host_pointer remains allocated until the synchronously destroyed hidden
-            // test window clears its user data.
-            CreateWindowExW(
-                WINDOW_EX_STYLE_VALUE,
-                WINDOW_CLASS,
-                WINDOW_TITLE,
-                WINDOW_STYLE_VALUE,
-                0,
-                0,
-                100,
-                100,
-                None,
-                None,
-                Some(instance),
-                Some(host_pointer.cast()),
-            )
-        };
-        let window = match created {
-            Ok(window) => window,
-            Err(error) => {
-                unsafe {
-                    // SAFETY: failed creation did not retain the unique state allocation.
-                    drop(Box::from_raw(host_pointer));
-                }
-                panic!("could not create Settings test window: {error}");
-            }
-        };
+            DialogState::new(Settings::default(), BASE_DPI, instance, None),
+        )?;
         let mut title = [0_u16; 64];
         let written = unsafe {
-            // SAFETY: window is live and title is writable for the synchronous query.
-            windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(window, &mut title)
+            // SAFETY: the dialog's hidden window is live and title is writable for the
+            // synchronous query.
+            windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(dialog.window(), &mut title)
         };
         let title = String::from_utf16_lossy(
             title
                 .get(..usize::try_from(written).unwrap_or_default())
                 .unwrap_or_default(),
         );
-        let destroyed = unsafe {
-            // SAFETY: window is the live hidden test window owned by this thread.
-            DestroyWindow(window)
-        };
-        if destroyed.is_ok() {
-            unsafe {
-                // SAFETY: synchronous destruction cleared the HWND's state pointer.
-                drop(Box::from_raw(host_pointer));
-            }
-        } else {
-            panic!("could not destroy Settings test window");
-        }
 
         assert_eq!(title, "AltTabio Settings");
+        Ok(())
     }
 
     #[test]
@@ -2560,24 +2107,5 @@ mod tests {
             scaled.cancel_button.bottom(),
             scale(DialogLayout::logical().cancel_button.bottom(), 144)
         );
-    }
-
-    #[test]
-    fn centering_handles_negative_monitor_coordinates() {
-        let origin = centered_in_rect(
-            RECT {
-                left: -1920,
-                top: -120,
-                right: 0,
-                bottom: 960,
-            },
-            Size {
-                width: 560,
-                height: 709,
-            },
-        );
-
-        assert_eq!(origin.x, -1240);
-        assert_eq!(origin.y, 65);
     }
 }

@@ -1,91 +1,47 @@
+use crate::dialog_host::{
+    self, DialogFrame, DialogWindow, Keyboard, ModalDialog, dark, native_rect, point_from_lparam,
+};
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE, DRAW_TEXT_VCENTER, OwnedFont,
     draw_text_with_font, fill_color, frame_color, rgb, system_color,
 };
 use crate::{app_icon, native_theme::DarkModeApi};
+use alttabio::dialog_layout::{MIN_DPI, Point, Rect, Size, hairline, scale};
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
-use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
-use std::mem::size_of;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use windows::Win32::Foundation::{
-    COLORREF, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT,
-    RECT, WPARAM,
-};
-use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_BTNFACE, COLOR_BTNSHADOW, COLOR_HIGHLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT,
-    EndPaint, FW_NORMAL, FW_SEMIBOLD, GetMonitorInfoW, HDC, InvalidateRect,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, PAINTSTRUCT,
+    EndPaint, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, InvalidateRect, PAINTSTRUCT,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VK_ESCAPE, VK_RETURN,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DI_NORMAL, DefWindowProcW,
-    DestroyWindow, DispatchMessageW, DrawIconEx, GWLP_USERDATA, GetClientRect, GetCursorPos,
-    GetMessageW, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_SHOW, SW_SHOWNORMAL, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCCREATE,
-    WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_EX_DLGMODALFRAME,
-    WS_OVERLAPPED, WS_SYSMENU,
+    DI_NORMAL, DrawIconEx, GetClientRect, HICON, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetWindowPos, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_PAINT, WM_PRINTCLIENT, WM_SIZE, WS_CAPTION,
+    WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU,
 };
-use windows::core::{Error, PCWSTR, Result, w};
+use windows::core::{PCWSTR, Result, w};
 
 pub(crate) const WINDOW_CLASS_NAME: &str = "AltTabioRustAbout";
-const WINDOW_CLASS: PCWSTR = w!("AltTabioRustAbout");
-const WINDOW_TITLE: PCWSTR = w!("About AltTabio");
+const FRAME: DialogFrame = DialogFrame {
+    name: "About",
+    class: WINDOW_CLASS_NAME,
+    title: "About AltTabio",
+    style: WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0),
+    ex_style: WS_EX_DLGMODALFRAME,
+};
 const REPOSITORY_URL: &str = "https://github.com/vibeslop/AltTabio";
 const REPOSITORY_LABEL: &str = "github.com/vibeslop/AltTabio";
 const VERSION_LABEL: &str = concat!("Version ", env!("CARGO_PKG_VERSION"));
 const CLIENT_WIDTH: i32 = 430;
 const CLIENT_HEIGHT: i32 = 344;
 const CONTENT_HORIZONTAL_MARGIN: i32 = 94;
-const BASE_DPI: u32 = 96;
-const WINDOW_STYLE_VALUE: WINDOW_STYLE =
-    WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0);
-const WINDOW_EX_STYLE_VALUE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0);
-const WM_DESTROY_DIALOG: u32 = WM_APP + 20;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Rect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-impl Rect {
-    const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    const fn as_native(self) -> RECT {
-        RECT {
-            left: self.x,
-            top: self.y,
-            right: self.x.saturating_add(self.width),
-            bottom: self.y.saturating_add(self.height),
-        }
-    }
-
-    const fn contains(self, point: POINT) -> bool {
-        point.x >= self.x
-            && point.x < self.x.saturating_add(self.width)
-            && point.y >= self.y
-            && point.y < self.y.saturating_add(self.height)
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AboutLayout {
@@ -157,15 +113,15 @@ impl AboutPalette {
     fn new(theme: ResolvedTheme) -> Self {
         match theme {
             ResolvedTheme::Dark => Self {
-                background: rgb(32, 32, 32),
+                background: dark::BACKGROUND,
                 footer: rgb(38, 38, 38),
-                text: rgb(240, 240, 240),
-                title: rgb(240, 240, 240),
+                text: dark::TEXT,
+                title: dark::TEXT,
                 link: rgb(76, 194, 255),
                 separator: rgb(68, 68, 68),
-                button: rgb(45, 45, 45),
-                button_pressed: rgb(66, 66, 66),
-                button_border: rgb(125, 125, 125),
+                button: dark::CONTROL_SURFACE,
+                button_pressed: dark::PRESSED_SURFACE,
+                button_border: dark::CONTROL_BORDER,
             },
             ResolvedTheme::Light => Self {
                 background: system_color(COLOR_WINDOW),
@@ -186,38 +142,15 @@ struct DialogState {
     hwnd: HWND,
     palette: AboutPalette,
     fonts: DialogFonts,
-    icon: windows::Win32::UI::WindowsAndMessaging::HICON,
+    icon: HICON,
     dark_mode_api: Option<DarkModeApi>,
     dpi: u32,
     close_pressed: bool,
     open_repository_requested: bool,
 }
 
-struct DialogHost {
-    state: RefCell<DialogState>,
-    done: Cell<bool>,
-}
-
-impl DialogHost {
-    fn new(state: DialogState) -> Self {
-        Self {
-            state: RefCell::new(state),
-            done: Cell::new(false),
-        }
-    }
-}
-
-enum DialogLoopExit {
-    Closed,
-    Quit(i32),
-}
-
 impl DialogState {
-    fn new(
-        theme: ResolvedTheme,
-        dpi: u32,
-        icon: windows::Win32::UI::WindowsAndMessaging::HICON,
-    ) -> Result<Self> {
+    fn new(theme: ResolvedTheme, dpi: u32, icon: HICON) -> Result<Self> {
         let dark_mode_api = match DarkModeApi::load(theme == ResolvedTheme::Dark) {
             Ok(api) => Some(api),
             Err(error) => {
@@ -264,83 +197,57 @@ impl DialogState {
     }
 }
 
+impl DialogWindow for DialogState {
+    const FRAME: DialogFrame = FRAME;
+
+    fn attach(&mut self, window: HWND) {
+        self.hwnd = window;
+    }
+
+    fn handle_message(
+        &mut self,
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<LRESULT> {
+        handle_about_message(self, window, message, wparam, lparam)
+    }
+}
+
 pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<(), String> {
-    let instance = module_instance().map_err(|error| error.to_string())?;
+    let instance = dialog_host::module_instance().map_err(|error| error.to_string())?;
     let icon = app_icon::load_app(instance, icon_color).map_err(|error| error.to_string())?;
-    register_class(instance, icon).map_err(|error| error.to_string())?;
+    dialog_host::register_class::<DialogState>(instance, icon, HBRUSH::default())
+        .map_err(|error| error.to_string())?;
     let dpi = unsafe {
         // SAFETY: GetDpiForSystem has no pointer or lifetime preconditions.
         GetDpiForSystem()
     }
-    .max(BASE_DPI / 2);
-    let client_width = scale(CLIENT_WIDTH, dpi);
-    let client_height = scale(CLIENT_HEIGHT, dpi);
-    let window_rect = adjusted_window_rect(client_width, client_height, dpi)
-        .map_err(|error| error.to_string())?;
-    let origin = centered_window_origin(window_rect.right, window_rect.bottom)
-        .map_err(|error| error.to_string())?;
-    let host = Box::new(DialogHost::new(
-        DialogState::new(theme, dpi, icon)
-            .map_err(|error| format!("Could not prepare About: {error}"))?,
-    ));
-    let host_pointer = Box::into_raw(host);
-    let window = unsafe {
-        // SAFETY: host_pointer remains allocated through the nested message loop. WM_NCCREATE
-        // stores the pointer as window user data without taking ownership.
-        CreateWindowExW(
-            WINDOW_EX_STYLE_VALUE,
-            WINDOW_CLASS,
-            WINDOW_TITLE,
-            WINDOW_STYLE_VALUE,
-            origin.x,
-            origin.y,
-            window_rect.right,
-            window_rect.bottom,
-            None,
-            None,
-            Some(instance),
-            Some(host_pointer.cast()),
-        )
-    };
-    let window = match window {
-        Ok(window) => window,
-        Err(error) => {
-            unsafe {
-                // SAFETY: window creation failed before any HWND retained the unique allocation.
-                drop(Box::from_raw(host_pointer));
-            }
-            return Err(format!("Could not create the About dialog: {error}"));
-        }
-    };
-    if let Err(error) = app_icon::apply_to_window(window, instance, icon_color) {
-        destroy_incomplete_dialog(window, host_pointer);
-        return Err(format!("Could not apply the selected About icon: {error}"));
+    .max(MIN_DPI);
+    let (origin, window_size) = window_bounds(dpi).map_err(|error| error.to_string())?;
+    let state = DialogState::new(theme, dpi, icon)
+        .map_err(|error| format!("Could not prepare About: {error}"))?;
+    let dialog = ModalDialog::create(instance, origin, window_size, None, state)
+        .map_err(|error| format!("Could not create the About dialog: {error}"))?;
+    let window = dialog.window();
+    app_icon::apply_to_window(window, instance, icon_color)
+        .map_err(|error| format!("Could not apply the selected About icon: {error}"))?;
+    apply_initial_window_dpi(&dialog)
+        .map_err(|error| format!("Could not size About for this display: {error}"))?;
+    {
+        let state = dialog.host().ok().and_then(dialog_host::DialogHost::state);
+        let dark_mode_api = state
+            .as_ref()
+            .and_then(|state| state.dark_mode_api.as_ref());
+        apply_window_theme(window, theme, dark_mode_api);
     }
-    if let Err(error) = apply_initial_window_dpi(window, host_pointer) {
-        destroy_incomplete_dialog(window, host_pointer);
-        return Err(format!("Could not size About for this display: {error}"));
-    }
-    let host = unsafe {
-        // SAFETY: host_pointer remains live until finish_dialog reclaims the allocation.
-        &*host_pointer
-    };
-    if let Ok(state) = host.state.try_borrow() {
-        apply_window_theme(window, theme, state.dark_mode_api.as_ref());
-    } else {
-        apply_window_theme(window, theme, None);
-    }
-    let foreground = unsafe {
-        // SAFETY: the completed About window is owned by this UI thread and was explicitly opened.
-        // ShowWindow reports the previous visibility, not a failure.
-        let _was_visible = ShowWindow(window, SW_SHOW);
-        SetForegroundWindow(window)
-    };
-    if !foreground.as_bool() {
-        // Windows refuses the foreground while the user works in another process; About still shows.
-        eprintln!("Windows kept About out of the foreground");
-    }
+    dialog.show_in_front();
 
-    let Some(state) = finish_dialog(window, host_pointer)? else {
+    let Some(state) = dialog
+        .run(Keyboard::WindowProcedure)
+        .map_err(|error| error.to_string())?
+    else {
         return Ok(());
     };
     if state.open_repository_requested {
@@ -349,192 +256,35 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
     Ok(())
 }
 
-fn destroy_incomplete_dialog(window: HWND, host_pointer: *mut DialogHost) {
-    let destroy_result = unsafe {
-        // SAFETY: window is live and owned by this UI thread.
-        DestroyWindow(window)
-    };
-    match destroy_result {
-        Ok(()) => unsafe {
-            // SAFETY: successful synchronous destruction cleared the window user data.
-            drop(Box::from_raw(host_pointer));
-        },
-        // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
-        Err(error) => eprintln!("Could not destroy the incomplete About window: {error}"),
-    }
+/// The origin and outer size that center About's client area at `dpi` on the cursor's monitor.
+fn window_bounds(dpi: u32) -> Result<(Point, Size)> {
+    let size = FRAME.window_size(Size::new(CLIENT_WIDTH, CLIENT_HEIGHT).scaled(dpi), dpi)?;
+    let origin = dialog_host::work_area_near_cursor()?.centered(size);
+    Ok((origin, size))
 }
 
-fn finish_dialog(
-    window: HWND,
-    host_pointer: *mut DialogHost,
-) -> std::result::Result<Option<Box<DialogState>>, String> {
-    let loop_exit = match run_dialog_loop(host_pointer) {
-        Ok(exit) => exit,
-        Err(error) => {
-            let destroy_result = unsafe {
-                // SAFETY: the nested loop failed while this UI thread still owns the About HWND.
-                DestroyWindow(window)
-            };
-            if let Err(destroy_error) = destroy_result {
-                return Err(format!(
-                    "About message loop failed ({error}) and its window could not close: {destroy_error}"
-                ));
-            }
-            unsafe {
-                // SAFETY: successful synchronous destruction cleared the window user data.
-                drop(Box::from_raw(host_pointer));
-            }
-            return Err(error.to_string());
-        }
-    };
-    if let DialogLoopExit::Quit(exit_code) = loop_exit {
-        let destroy_result = unsafe {
-            // SAFETY: WM_QUIT ended the nested loop while this UI thread still owns the HWND.
-            DestroyWindow(window)
-        };
-        unsafe {
-            // SAFETY: the nested loop consumed WM_QUIT, so the outer app loop still needs it.
-            PostQuitMessage(exit_code);
-        }
-        destroy_result.map_err(|error| {
-            format!("Could not close About while AltTabio was exiting: {error}")
-        })?;
-        unsafe {
-            // SAFETY: successful synchronous destruction cleared the window user data.
-            drop(Box::from_raw(host_pointer));
-        }
-        return Ok(None);
-    }
-    let host = unsafe {
-        // SAFETY: a successful loop exit occurs only after WM_NCDESTROY cleared window user data.
-        Box::from_raw(host_pointer)
-    };
-    Ok(Some(Box::new(host.state.into_inner())))
-}
-
-fn apply_initial_window_dpi(hwnd: HWND, host: *mut DialogHost) -> Result<()> {
+fn apply_initial_window_dpi(dialog: &ModalDialog<DialogState>) -> Result<()> {
+    let window = dialog.window();
     let dpi = unsafe {
-        // SAFETY: hwnd is the live About window whose monitor determines its effective DPI.
-        GetDpiForWindow(hwnd)
+        // SAFETY: window is the live About window whose monitor determines its effective DPI.
+        GetDpiForWindow(window)
     }
-    .max(BASE_DPI / 2);
+    .max(MIN_DPI);
+    // The state borrow ends with this statement, before SetWindowPos dispatches messages.
+    dialog.host()?.state_mut()?.update_dpi(dpi)?;
+    let (origin, size) = window_bounds(dpi)?;
     unsafe {
-        // SAFETY: setup owns the host allocation and no callback borrow is active here. The
-        // mutable reference ends before SetWindowPos can synchronously dispatch messages.
-        (&mut *host).state.get_mut().update_dpi(dpi)?;
-    }
-    let rect = adjusted_window_rect(scale(CLIENT_WIDTH, dpi), scale(CLIENT_HEIGHT, dpi), dpi)?;
-    let origin = centered_window_origin(rect.right, rect.bottom)?;
-    unsafe {
-        // SAFETY: hwnd is live and the computed bounds are within its target monitor work area.
+        // SAFETY: window is live and the computed bounds are within its target monitor work area.
         SetWindowPos(
-            hwnd,
+            window,
             None,
             origin.x,
             origin.y,
-            rect.right,
-            rect.bottom,
-            windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
-                | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
-        )?;
+            size.width,
+            size.height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
     }
-    Ok(())
-}
-
-fn run_dialog_loop(host: *mut DialogHost) -> Result<DialogLoopExit> {
-    loop {
-        let done = unsafe {
-            // SAFETY: show retains the allocation until this nested loop returns. Cell supports
-            // reentrant reads on the single UI thread without creating a mutable alias.
-            (*host).done.get()
-        };
-        if done {
-            return Ok(DialogLoopExit::Closed);
-        }
-        let mut message = MSG::default();
-        let result = unsafe {
-            // SAFETY: message is writable and this UI-thread loop owns dispatch for the dialog.
-            GetMessageW(&raw mut message, None, 0, 0)
-        };
-        if result.0 == -1 {
-            return Err(Error::from_thread());
-        }
-        if result.0 == 0 {
-            return Ok(DialogLoopExit::Quit(
-                i32::try_from(message.wParam.0).unwrap_or_default(),
-            ));
-        }
-        unsafe {
-            // SAFETY: message was initialized by GetMessageW and is dispatched unchanged.
-            let _translated = TranslateMessage(&raw const message);
-            DispatchMessageW(&raw const message);
-        }
-    }
-}
-
-unsafe extern "system" fn about_window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        if message == WM_NCCREATE {
-            let create = unsafe {
-                // SAFETY: WM_NCCREATE supplies a live CREATESTRUCTW pointer in lparam.
-                &*(lparam.0 as *const CREATESTRUCTW)
-            };
-            let host = create.lpCreateParams.cast::<DialogHost>();
-            if host.is_null() {
-                return Some(LRESULT(0));
-            }
-            let host_ref = unsafe {
-                // SAFETY: host is the Box allocation passed to CreateWindowExW and remains live.
-                &*host
-            };
-            let Ok(mut state) = host_ref.state.try_borrow_mut() else {
-                return Some(LRESULT(0));
-            };
-            state.hwnd = hwnd;
-            drop(state);
-            unsafe {
-                // SAFETY: host remains live until the nested message loop has ended.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, host as isize);
-            }
-        }
-        let host = unsafe {
-            // SAFETY: user data is either zero before WM_NCCREATE or the live DialogHost pointer.
-            (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut DialogHost).as_ref()
-        }?;
-        if message == WM_DESTROY_DIALOG {
-            let result = unsafe {
-                // SAFETY: the posted message is handled by the UI thread that owns hwnd.
-                DestroyWindow(hwnd)
-            };
-            if let Err(error) = result {
-                eprintln!("Could not close About: {error}");
-            }
-            return Some(LRESULT(0));
-        }
-        if message == WM_NCDESTROY {
-            host.done.set(true);
-            unsafe {
-                // SAFETY: clearing user data prevents later messages from observing host.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            }
-            return None;
-        }
-        let Ok(mut state) = host.state.try_borrow_mut() else {
-            return None;
-        };
-        handle_about_message(&mut state, hwnd, message, wparam, lparam)
-    }))
-    .ok()
-    .flatten();
-    result.unwrap_or_else(|| unsafe {
-        // SAFETY: unhandled messages retain their original scalar payloads.
-        DefWindowProcW(hwnd, message, wparam, lparam)
-    })
 }
 
 fn handle_about_message(
@@ -562,7 +312,7 @@ fn handle_about_message(
         }
         WM_LBUTTONDOWN => {
             let point = point_from_lparam(lparam);
-            if state.layout().close_button.contains(point) {
+            if state.layout().close_button.contains_point(point) {
                 state.close_pressed = true;
                 unsafe {
                     // SAFETY: hwnd is the live dialog receiving the button press. The result is
@@ -589,7 +339,9 @@ fn handle_about_message(
             Some(LRESULT(0))
         }
         WM_DPICHANGED => {
-            handle_dpi_changed(state, hwnd, wparam, lparam);
+            dialog_host::handle_dpi_changed(hwnd, wparam, lparam, FRAME.name, |dpi| {
+                state.update_dpi(dpi)
+            });
             Some(LRESULT(0))
         }
         WM_CLOSE => {
@@ -600,7 +352,7 @@ fn handle_about_message(
     }
 }
 
-fn handle_left_button_up(state: &mut DialogState, hwnd: HWND, point: POINT) {
+fn handle_left_button_up(state: &mut DialogState, hwnd: HWND, point: Point) {
     if state.close_pressed {
         state.close_pressed = false;
         let released = unsafe {
@@ -610,43 +362,15 @@ fn handle_left_button_up(state: &mut DialogState, hwnd: HWND, point: POINT) {
         if let Err(error) = released {
             eprintln!("Could not release the About mouse capture: {error}");
         }
-        if state.layout().close_button.contains(point) {
+        if state.layout().close_button.contains_point(point) {
             close_dialog(hwnd);
         } else {
             invalidate_dialog(hwnd);
         }
-    } else if state.layout().repository.contains(point) {
+    } else if state.layout().repository.contains_point(point) {
         state.open_repository_requested = true;
         close_dialog(hwnd);
     }
-}
-
-fn handle_dpi_changed(state: &mut DialogState, hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
-    let new_dpi = u32::from(low_word(wparam.0)).max(BASE_DPI / 2);
-    if let Err(error) = state.update_dpi(new_dpi) {
-        eprintln!("Could not update About for its new display scale: {error}");
-    }
-    let suggested = unsafe {
-        // SAFETY: WM_DPICHANGED supplies a live suggested RECT pointer in lparam.
-        &*(lparam.0 as *const RECT)
-    };
-    let result = unsafe {
-        // SAFETY: suggested contains the complete new window rectangle for this HWND.
-        SetWindowPos(
-            hwnd,
-            None,
-            suggested.left,
-            suggested.top,
-            suggested.right.saturating_sub(suggested.left),
-            suggested.bottom.saturating_sub(suggested.top),
-            windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
-                | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
-        )
-    };
-    if let Err(error) = result {
-        eprintln!("Could not resize About for its new display scale: {error}");
-    }
-    invalidate_dialog(hwnd);
 }
 
 fn paint_about(state: &DialogState) {
@@ -677,15 +401,15 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
         left: 0,
         top: 0,
         right: layout.footer.width,
-        bottom: layout.footer.y.saturating_add(layout.footer.height),
+        bottom: layout.footer.bottom(),
     };
     fill_color(dc, client, state.palette.background)?;
-    fill_color(dc, layout.footer.as_native(), state.palette.footer)?;
+    fill_color(dc, native_rect(layout.footer), state.palette.footer)?;
     fill_color(
         dc,
         RECT {
-            bottom: layout.footer.y.saturating_add(scale(1, state.dpi).max(1)),
-            ..layout.footer.as_native()
+            bottom: layout.footer.y.saturating_add(hairline(state.dpi)),
+            ..native_rect(layout.footer)
         },
         state.palette.separator,
     )?;
@@ -706,7 +430,7 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
     draw_text_with_font(
         dc,
         "AltTabio",
-        layout.title.as_native(),
+        native_rect(layout.title),
         state.palette.title,
         DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
         state.fonts.title.0,
@@ -720,7 +444,7 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
         draw_text_with_font(
             dc,
             label,
-            rect.as_native(),
+            native_rect(rect),
             state.palette.text,
             DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
             state.fonts.body.0,
@@ -729,14 +453,14 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
     draw_text_with_font(
         dc,
         REPOSITORY_LABEL,
-        layout.repository.as_native(),
+        native_rect(layout.repository),
         state.palette.link,
         DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
         state.fonts.link.0,
     )?;
     fill_color(
         dc,
-        layout.close_button.as_native(),
+        native_rect(layout.close_button),
         if state.close_pressed {
             state.palette.button_pressed
         } else {
@@ -745,14 +469,14 @@ fn paint_about_content(dc: HDC, state: &DialogState) -> Result<()> {
     )?;
     frame_color(
         dc,
-        layout.close_button.as_native(),
+        native_rect(layout.close_button),
         state.palette.button_border,
-        scale(1, state.dpi).max(1),
+        hairline(state.dpi),
     )?;
     draw_text_with_font(
         dc,
         "Close",
-        layout.close_button.as_native(),
+        native_rect(layout.close_button),
         state.palette.text,
         DRAW_TEXT_CENTER | DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
         state.fonts.body.0,
@@ -765,120 +489,9 @@ fn apply_window_theme(hwnd: HWND, theme: ResolvedTheme, dark_mode_api: Option<&D
         api.set_effective_theme(dark);
         api.allow_for_window(hwnd, dark);
     }
-    let use_dark_mode = i32::from(dark);
-    let result = unsafe {
-        // SAFETY: use_dark_mode is BOOL-compatible and remains live for the synchronous DWM call.
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            (&raw const use_dark_mode).cast(),
-            u32::try_from(size_of::<i32>()).unwrap_or(u32::MAX),
-        )
-    };
-    if let Err(error) = result {
+    if let Err(error) = dialog_host::set_dark_title_bar(hwnd, dark) {
         eprintln!("Could not apply the About title-bar theme: {error}");
     }
-}
-
-fn adjusted_window_rect(client_width: i32, client_height: i32, dpi: u32) -> Result<RECT> {
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: client_width,
-        bottom: client_height,
-    };
-    unsafe {
-        // SAFETY: rect is writable and the style values match the window created by show.
-        AdjustWindowRectExForDpi(
-            &raw mut rect,
-            WINDOW_STYLE_VALUE,
-            false,
-            WINDOW_EX_STYLE_VALUE,
-            dpi,
-        )?;
-    }
-    rect.right = rect.right.saturating_sub(rect.left);
-    rect.bottom = rect.bottom.saturating_sub(rect.top);
-    rect.left = 0;
-    rect.top = 0;
-    Ok(rect)
-}
-
-fn centered_window_origin(width: i32, height: i32) -> Result<POINT> {
-    let mut cursor = POINT::default();
-    unsafe {
-        // SAFETY: cursor is writable for the synchronous read.
-        GetCursorPos(&raw mut cursor)?;
-    }
-    let monitor = unsafe {
-        // SAFETY: cursor is an initialized screen point and the fallback always returns a monitor.
-        MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
-    };
-    let mut info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or(u32::MAX),
-        ..MONITORINFO::default()
-    };
-    let read = unsafe {
-        // SAFETY: monitor is valid and info is a correctly sized writable structure.
-        GetMonitorInfoW(monitor, &raw mut info)
-    };
-    if !read.as_bool() {
-        return Err(Error::from_thread());
-    }
-    let work = info.rcWork;
-    Ok(POINT {
-        x: work
-            .left
-            .saturating_add(work.right.saturating_sub(work.left).saturating_sub(width) / 2),
-        y: work
-            .top
-            .saturating_add(work.bottom.saturating_sub(work.top).saturating_sub(height) / 2),
-    })
-}
-
-fn register_class(
-    instance: HINSTANCE,
-    icon: windows::Win32::UI::WindowsAndMessaging::HICON,
-) -> Result<()> {
-    let cursor = unsafe {
-        // SAFETY: IDC_ARROW is a predefined shared cursor.
-        LoadCursorW(None, IDC_ARROW)
-    }?;
-    let class = WNDCLASSEXW {
-        cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).unwrap_or(u32::MAX),
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(about_window_proc),
-        hInstance: instance,
-        hIcon: icon,
-        hCursor: cursor,
-        lpszClassName: WINDOW_CLASS,
-        hIconSm: icon,
-        ..WNDCLASSEXW::default()
-    };
-    let atom = unsafe {
-        // SAFETY: class points to initialized static callback and class-name data.
-        RegisterClassExW(&raw const class)
-    };
-    if atom != 0 {
-        return Ok(());
-    }
-    let error = unsafe {
-        // SAFETY: called immediately after the failed registration on the same thread.
-        GetLastError()
-    };
-    if error == ERROR_CLASS_ALREADY_EXISTS {
-        Ok(())
-    } else {
-        Err(Error::from(error))
-    }
-}
-
-fn module_instance() -> Result<HINSTANCE> {
-    let module = unsafe {
-        // SAFETY: None requests the current executable module.
-        GetModuleHandleW(None)
-    }?;
-    Ok(HINSTANCE(module.0))
 }
 
 fn invalidate_dialog(hwnd: HWND) {
@@ -892,34 +505,9 @@ fn invalidate_dialog(hwnd: HWND) {
 }
 
 fn close_dialog(hwnd: HWND) {
-    let result = unsafe {
-        // SAFETY: hwnd is live and the private message carries no borrowed data.
-        PostMessageW(Some(hwnd), WM_DESTROY_DIALOG, WPARAM(0), LPARAM(0))
-    };
-    if let Err(error) = result {
+    if let Err(error) = dialog_host::request_close(hwnd) {
         eprintln!("Could not request About closure: {error}");
     }
-}
-
-fn point_from_lparam(lparam: LPARAM) -> POINT {
-    let raw = lparam.0.cast_unsigned();
-    POINT {
-        x: i32::from(low_word(raw).cast_signed()),
-        y: i32::from(high_word(raw).cast_signed()),
-    }
-}
-
-fn low_word(value: usize) -> u16 {
-    u16::try_from(value & 0xffff).unwrap_or_default()
-}
-
-fn high_word(value: usize) -> u16 {
-    u16::try_from(value >> 16 & 0xffff).unwrap_or_default()
-}
-
-fn scale(value: i32, dpi: u32) -> i32 {
-    let numerator = i64::from(value) * i64::from(dpi) + i64::from(BASE_DPI / 2);
-    i32::try_from(numerator / i64::from(BASE_DPI)).unwrap_or(i32::MAX)
 }
 
 struct DialogFonts {
@@ -939,7 +527,7 @@ impl DialogFonts {
 }
 
 fn open_repository() -> std::result::Result<(), String> {
-    let repository_url = wide(REPOSITORY_URL);
+    let repository_url = dialog_host::wide(REPOSITORY_URL);
     let result = unsafe {
         // SAFETY: repository_url remains live and all other string pointers are static or null.
         ShellExecuteW(
@@ -961,13 +549,10 @@ fn open_repository() -> std::result::Result<(), String> {
     }
 }
 
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alttabio::dialog_layout::BASE_DPI;
 
     #[test]
     fn about_content_uses_package_version_and_canonical_repository() {

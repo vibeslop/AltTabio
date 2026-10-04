@@ -8,6 +8,8 @@ mod about_dialog;
 #[cfg(windows)]
 mod app_icon;
 #[cfg(windows)]
+mod dialog_host;
+#[cfg(windows)]
 mod hook;
 #[cfg(target_os = "macos")]
 mod macos;
