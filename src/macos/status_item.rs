@@ -15,6 +15,8 @@ pub enum MenuAction {
     ShowSwitcher,
     OpenSettings,
     ShowAbout,
+    /// Check for Updates, or Relaunch to Update once one is installed.
+    Update,
     Quit,
 }
 
@@ -52,6 +54,11 @@ define_class!(
             (self.ivars().handler)(MenuAction::ShowAbout);
         }
 
+        #[unsafe(method(update:))]
+        fn update(&self, _sender: Option<&AnyObject>) {
+            (self.ivars().handler)(MenuAction::Update);
+        }
+
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
             (self.ivars().handler)(MenuAction::Quit);
@@ -69,10 +76,26 @@ impl MenuTarget {
     }
 }
 
+const CHECK_FOR_UPDATES: &str = "Check for Updates…";
+const RELAUNCH_TO_UPDATE: &str = "Relaunch to Update";
+
 pub struct StatusItem {
     _item: Retained<NSStatusItem>,
     _target: Retained<MenuTarget>,
     _menu: Retained<NSMenu>,
+    update: Retained<NSMenuItem>,
+}
+
+impl StatusItem {
+    /// Names the update command for whether an installed update waits for a relaunch.
+    pub fn set_update_installed(&self, installed: bool) {
+        let title = if installed {
+            RELAUNCH_TO_UPDATE
+        } else {
+            CHECK_FOR_UPDATES
+        };
+        self.update.setTitle(&NSString::from_str(title));
+    }
 }
 
 pub fn install(mtm: MainThreadMarker, handler: Rc<dyn Fn(MenuAction)>) -> StatusItem {
@@ -118,6 +141,8 @@ pub fn install(mtm: MainThreadMarker, handler: Rc<dyn Fn(MenuAction)>) -> Status
         "",
         &target,
     ));
+    let update = menu_item(mtm, CHECK_FOR_UPDATES, Some(sel!(update:)), "", &target);
+    menu.addItem(&update);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     menu.addItem(&menu_item(
         mtm,
@@ -131,6 +156,7 @@ pub fn install(mtm: MainThreadMarker, handler: Rc<dyn Fn(MenuAction)>) -> Status
         _item: item,
         _target: target,
         _menu: menu,
+        update,
     }
 }
 

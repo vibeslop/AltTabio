@@ -16,6 +16,7 @@ mod preview;
 mod settings_window;
 mod single_instance;
 mod status_item;
+mod updater;
 mod window_list;
 
 use crate::settings_io::SettingsStore;
@@ -26,6 +27,7 @@ use alttabio::input::WindowCommand;
 use alttabio::settings::Settings;
 use alttabio::switcher::ProcessIdentity;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
+use alttabio::update::{Checked, Report, Step, Update, Updater, Version};
 use ax::{AppObserver, WindowChange};
 use block2::RcBlock;
 use commands::AppRef;
@@ -82,6 +84,18 @@ const HOVER_ARM_DISTANCE: f64 = 8.0;
 // Activation history kept for ordering the strip; apps activated longer ago than this follow
 // in window order, which is what they would get anyway.
 const RECENT_APPS_KEPT: usize = 64;
+// The first automatic update check waits a minute after the start, so a login does not ask
+// GitHub before the network is up. A failed check tries again in an hour, and any other outcome
+// waits a day.
+const FIRST_UPDATE_CHECK_SECONDS: f64 = 60.0;
+const UPDATE_RETRY_SECONDS: f64 = 60.0 * 60.0;
+const UPDATE_INTERVAL_SECONDS: f64 = 24.0 * 60.0 * 60.0;
+// An automatic update relaunches once the keyboard and pointer have rested this long, so the
+// switcher is never gone at the moment it is wanted.
+const AWAY_SECONDS: f64 = 5.0 * 60.0;
+const AWAY_POLL_SECONDS: f64 = 60.0;
+// A relaunch never takes the switcher away while it is open; it tries again this much later.
+const RELAUNCH_RETRY_SECONDS: f64 = 1.0;
 const GITHUB_URL: &str = "https://github.com/vibeslop/AltTabio";
 
 /// `ALTTABIO_TRACE=1` prints every tap event and switcher action to stderr for debugging.
@@ -439,6 +453,11 @@ pub struct App {
     // The front app named in the last secure-keyboard-input report, so the log says it once per
     // app rather than on every activation.
     secure_input_holder: Option<String>,
+    updater: Updater,
+    // The next automatic update check, while updates are automatic.
+    update_timer: Option<Retained<NSTimer>>,
+    // Looks for the user to step away while an installed update waits for its relaunch.
+    away_timer: Option<Retained<NSTimer>>,
 }
 
 enum Preview {
@@ -533,6 +552,9 @@ impl App {
             dwell_timer: None,
             show_when_listed: false,
             secure_input_holder: None,
+            updater: Updater::default(),
+            update_timer: None,
+            away_timer: None,
         }
     }
 
@@ -553,6 +575,9 @@ impl App {
         if self.preview_mode {
             self.show_when_listed = true;
             return;
+        }
+        if self.settings.general.auto_update {
+            self.schedule_update_check(FIRST_UPDATE_CHECK_SECONDS);
         }
         let trusted = permissions::accessibility_trusted(true);
         if !trusted {
@@ -1559,11 +1584,19 @@ impl App {
 
     fn apply_settings(&mut self, settings: Settings) {
         let previews_turned_on = settings.appearance.preview && !self.settings.appearance.preview;
+        let updates_changed = settings.general.auto_update != self.settings.general.auto_update;
         self.settings = settings;
         self.hotkey_settings = hotkey_settings(&self.settings);
         self.save_settings();
         if previews_turned_on {
             self.ask_for_screen_recording();
+        }
+        if updates_changed {
+            if self.settings.general.auto_update {
+                self.update_check_due();
+            } else if let Some(timer) = self.update_timer.take() {
+                timer.invalidate();
+            }
         }
         if !self.settings.appearance.preview {
             self.preview.clear();
@@ -1622,11 +1655,135 @@ impl App {
         }
     }
 
+    fn schedule_update_check(&mut self, seconds: f64) {
+        if let Some(timer) = self.update_timer.take() {
+            timer.invalidate();
+        }
+        self.update_timer = Some(schedule(seconds, App::update_check_due));
+    }
+
+    fn update_check_due(&mut self) {
+        self.update_timer = None;
+        let step = self.updater.check_due();
+        // A check runs only when nothing else is under way. Whatever is keeps automatic updates
+        // going by the next day: a check reschedules when it ends, and an install that fails
+        // leaves this timer behind.
+        if step == Step::None && self.settings.general.auto_update {
+            self.schedule_update_check(UPDATE_INTERVAL_SECONDS);
+        }
+        self.apply_update_step(step);
+    }
+
+    fn update_requested(&mut self) {
+        let step = self.updater.requested();
+        self.apply_update_step(step);
+    }
+
+    pub fn update_checked(&mut self, result: Result<Checked, String>) {
+        match &result {
+            Err(error) => eprintln!("{error}"),
+            Ok(Checked::Blocked(version, reason)) => {
+                eprintln!(
+                    "AltTabio {version} is available, but this copy cannot install it. {reason}"
+                );
+            }
+            Ok(_) => {}
+        }
+        if self.settings.general.auto_update {
+            self.schedule_update_check(if result.is_err() {
+                UPDATE_RETRY_SECONDS
+            } else {
+                UPDATE_INTERVAL_SECONDS
+            });
+        }
+        let step = self.updater.checked(result);
+        self.apply_update_step(step);
+    }
+
+    fn update_offer_answered(&mut self, update: Update, install: bool) {
+        let step = self.updater.offer_answered(update, install);
+        self.apply_update_step(step);
+    }
+
+    pub fn update_installed(&mut self, result: Result<(), String>) {
+        if let Err(error) = &result {
+            eprintln!("{error}");
+        }
+        let step = self.updater.installed(result);
+        self.apply_update_step(step);
+    }
+
+    fn apply_update_step(&mut self, step: Step) {
+        match step {
+            Step::None => {}
+            Step::Check => updater::check(updater::bundle_path()),
+            Step::Install(update) => updater::install(update, updater::bundle_path()),
+            Step::Offer(update) => {
+                let mtm = self.mtm;
+                run_later(move || {
+                    let install = offer_update(mtm, update.version);
+                    let _ = with_app(|app| app.update_offer_answered(update, install));
+                });
+            }
+            Step::Report(report) => {
+                let mtm = self.mtm;
+                run_later(move || show_update_report(mtm, &report));
+            }
+            // Timers wait out an open menu or alert, so the app never quits from inside one.
+            Step::Relaunch => run_later(|| {
+                let _ = with_app(App::relaunch);
+            }),
+        }
+        let installed = self.updater.installed_version().is_some();
+        if let Some(status_item) = &self.status_item {
+            status_item.set_update_installed(installed);
+        }
+        if installed && self.away_timer.is_none() {
+            self.away_timer = Some(schedule(AWAY_POLL_SECONDS, App::look_for_away));
+        }
+    }
+
+    fn look_for_away(&mut self) {
+        self.away_timer = None;
+        if updater::seconds_since_input() < AWAY_SECONDS {
+            self.away_timer = Some(schedule(AWAY_POLL_SECONDS, App::look_for_away));
+            return;
+        }
+        let step = self.updater.user_away();
+        self.apply_update_step(step);
+    }
+
+    /// Quits and opens the installed update in this copy's place, with the settings window if
+    /// it is up.
+    fn relaunch(&mut self) {
+        if self.switcher.is_active() {
+            let _timer = schedule(RELAUNCH_RETRY_SECONDS, App::relaunch);
+            return;
+        }
+        let open_settings = self
+            .settings_window
+            .as_ref()
+            .is_some_and(SettingsWindow::is_visible);
+        if let Err(error) = updater::relaunch_after_exit(&updater::bundle_path(), open_settings) {
+            eprintln!("{error}; the update takes effect at the next start");
+            return;
+        }
+        self.shutdown();
+        NSApplication::sharedApplication(self.mtm).terminate(None);
+    }
+
     fn shutdown(&mut self) {
         self.event_tap = None;
         self.cancel_dwell();
         self.front_observer = None;
-        if let Some(timer) = self.tap_retry_timer.take() {
+        for timer in [
+            self.tap_retry_timer.take(),
+            self.update_timer.take(),
+            self.away_timer.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             timer.invalidate();
         }
     }
@@ -1644,6 +1801,9 @@ fn handle_menu_action(action: MenuAction) {
             if let Some(mtm) = MainThreadMarker::new() {
                 run_later(move || show_about(mtm));
             }
+        }
+        MenuAction::Update => {
+            let _ = with_app(App::update_requested);
         }
         MenuAction::Quit => {
             let mtm = with_app(|app| {
@@ -1667,11 +1827,7 @@ fn show_about(mtm: MainThreadMarker) {
     )));
     let _ok = alert.addButtonWithTitle(&NSString::from_str("OK"));
     let _github = alert.addButtonWithTitle(&NSString::from_str("GitHub"));
-    #[allow(
-        deprecated,
-        reason = "an accessory app has no other way to bring its alert forward"
-    )]
-    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    bring_alert_forward(mtm);
     // The second button returns NSAlertSecondButtonReturn (1001).
     if alert.runModal() == 1001
         && let Some(url) = NSURL::URLWithString(&NSString::from_str(GITHUB_URL))
@@ -1679,6 +1835,50 @@ fn show_about(mtm: MainThreadMarker) {
     {
         eprintln!("Could not open {GITHUB_URL}");
     }
+}
+
+/// Asks whether to install `version` now.
+fn offer_update(mtm: MainThreadMarker, version: Version) -> bool {
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&format!(
+        "AltTabio {version} is available"
+    )));
+    alert.setInformativeText(&NSString::from_str(concat!(
+        "You have ",
+        env!("CARGO_PKG_VERSION"),
+        ". AltTabio quits and opens again to finish, and keeps its permissions."
+    )));
+    let _install = alert.addButtonWithTitle(&NSString::from_str("Install Update"));
+    let _later = alert.addButtonWithTitle(&NSString::from_str("Not Now"));
+    bring_alert_forward(mtm);
+    // The first button returns NSAlertFirstButtonReturn (1000).
+    alert.runModal() == 1000
+}
+
+fn show_update_report(mtm: MainThreadMarker, report: &Report) {
+    let (message, information) = match report {
+        Report::UpToDate => (
+            "AltTabio is up to date".to_owned(),
+            concat!("Version ", env!("CARGO_PKG_VERSION"), " is the newest.").to_owned(),
+        ),
+        Report::Blocked(version, reason) => {
+            (format!("AltTabio {version} is available"), reason.clone())
+        }
+        Report::Failed(error) => ("AltTabio could not update".to_owned(), error.clone()),
+    };
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&message));
+    alert.setInformativeText(&NSString::from_str(&information));
+    bring_alert_forward(mtm);
+    let _response = alert.runModal();
+}
+
+fn bring_alert_forward(mtm: MainThreadMarker) {
+    #[allow(
+        deprecated,
+        reason = "an accessory app has no other way to bring its alert forward"
+    )]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
 }
 
 fn application_icon(pid: i32) -> Option<Retained<NSImage>> {

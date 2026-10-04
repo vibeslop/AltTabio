@@ -31,6 +31,7 @@ const NOTE_WIDTH: f64 = 280.0;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingKey {
     Autostart,
+    AutoUpdate,
     CommandTab,
     OptionTab,
     CurrentDisplayOnly,
@@ -39,8 +40,9 @@ pub enum SettingKey {
 
 impl SettingKey {
     /// Every key once; the index doubles as the checkbox tag.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Autostart,
+        Self::AutoUpdate,
         Self::CommandTab,
         Self::OptionTab,
         Self::CurrentDisplayOnly,
@@ -50,6 +52,7 @@ impl SettingKey {
     const fn label(self) -> &'static str {
         match self {
             Self::Autostart => "Launch at login",
+            Self::AutoUpdate => "Update automatically",
             Self::CommandTab => "Replace ⌘ Tab",
             Self::OptionTab => "Also open with ⌥ Tab",
             Self::CurrentDisplayOnly => "Only windows on the current display",
@@ -72,6 +75,7 @@ impl SettingKey {
     fn get(self, settings: &Settings) -> bool {
         match self {
             Self::Autostart => settings.general.autostart,
+            Self::AutoUpdate => settings.general.auto_update,
             Self::CommandTab => settings.general.replace_alt_tab,
             Self::OptionTab => settings.general.replace_win_tab,
             Self::CurrentDisplayOnly => settings.monitor.use_current_monitor_filter,
@@ -82,6 +86,7 @@ impl SettingKey {
     fn set(self, settings: &mut Settings, value: bool) {
         match self {
             Self::Autostart => settings.general.autostart = value,
+            Self::AutoUpdate => settings.general.auto_update = value,
             Self::CommandTab => settings.general.replace_alt_tab = value,
             Self::OptionTab => settings.general.replace_win_tab = value,
             Self::CurrentDisplayOnly => settings.monitor.use_current_monitor_filter = value,
@@ -96,6 +101,7 @@ const GROUPS: &[(&str, &[SettingKey])] = &[
         "General",
         &[
             SettingKey::Autostart,
+            SettingKey::AutoUpdate,
             SettingKey::CommandTab,
             SettingKey::OptionTab,
         ],
@@ -349,6 +355,10 @@ impl SettingsWindow {
             controller,
             mtm,
         }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.window.isVisible()
     }
 
     /// Shows the permission rows for what the system reports now.
