@@ -30,7 +30,7 @@ impl AppHost {
                     owner,
                     &format!("Autostart status could not be read. {error}"),
                 );
-                startup::AutostartStatus {
+                AutostartState {
                     enabled: dialog_settings.general.autostart,
                     task_exists: false,
                 }
@@ -105,15 +105,12 @@ impl App {
         }
     }
 
-    fn apply_settings(&mut self, settings: Settings, previous_autostart: startup::AutostartStatus) {
+    fn apply_settings(&mut self, settings: Settings, previous_autostart: AutostartState) {
         let previous_settings = self.settings.clone();
         let change = SettingsChange {
             previous: &previous_settings,
             next: &settings,
-            autostart: AutostartState {
-                enabled: previous_autostart.enabled,
-                task_exists: previous_autostart.task_exists,
-            },
+            autostart: previous_autostart,
             hooks_running: self.hooks.is_some(),
         };
         if let Err(message) = change.apply(self) {

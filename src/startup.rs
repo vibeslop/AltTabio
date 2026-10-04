@@ -1,3 +1,4 @@
+use alttabio::settings_change::AutostartState;
 use std::ffi::OsString;
 use std::io::Write;
 use std::mem::size_of;
@@ -29,20 +30,14 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 mod migration;
 pub(crate) use migration::repair_legacy_task_timeout;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AutostartStatus {
-    pub enabled: bool,
-    pub task_exists: bool,
-}
-
-pub fn status() -> Result<AutostartStatus, String> {
+pub fn status() -> Result<AutostartState, String> {
     let task_query = run(&["/Query", "/TN", "AltTabio", "/XML"])?;
     if task_query.status.success() {
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
         let xml = String::from_utf8(task_query.stdout)
             .map_err(|error| format!("Autostart task XML is not valid UTF-8: {error}"))?;
-        return Ok(AutostartStatus {
+        return Ok(AutostartState {
             enabled: task_targets_executable(&xml, &executable)?,
             task_exists: true,
         });
@@ -53,7 +48,7 @@ pub fn status() -> Result<AutostartStatus, String> {
     // without parsing localized error text.
     let scheduler_query = run(&["/Query", "/FO", "CSV", "/NH"])?;
     if scheduler_query.status.success() {
-        Ok(AutostartStatus {
+        Ok(AutostartState {
             enabled: false,
             task_exists: false,
         })
