@@ -432,11 +432,9 @@ impl Switcher {
                 0
             }
         });
-        let count_signed = isize::try_from(count).unwrap_or(isize::MAX);
-        let current_signed = isize::try_from(current).unwrap_or_default();
-        let delta_signed = isize::try_from(delta).unwrap_or_default();
-        let next = (current_signed + delta_signed).rem_euclid(count_signed);
-        self.selected_visible_index = usize::try_from(next).ok();
+        self.selected_visible_index = step_index(current, delta, count, |current, delta, count| {
+            (current + delta).rem_euclid(count)
+        });
     }
 
     pub fn select_bounded(&mut self, delta: i32) {
@@ -451,13 +449,9 @@ impl Switcher {
         let current = self
             .selected_visible_index
             .unwrap_or(if delta >= 0 { 0 } else { last });
-        let current_signed = isize::try_from(current).unwrap_or_default();
-        let last_signed = isize::try_from(last).unwrap_or(isize::MAX);
-        let delta_signed = isize::try_from(delta).unwrap_or_default();
-        let next = current_signed
-            .saturating_add(delta_signed)
-            .clamp(0, last_signed);
-        self.selected_visible_index = usize::try_from(next).ok();
+        self.selected_visible_index = step_index(current, delta, last, |current, delta, last| {
+            current.saturating_add(delta).clamp(0, last)
+        });
     }
 
     #[must_use]
@@ -548,6 +542,20 @@ impl Switcher {
             }
         }
     }
+}
+
+/// Steps in signed arithmetic, so `apply` can wrap or clamp a step that goes below zero against
+/// `bound` before the result becomes an index again.
+fn step_index(
+    current: usize,
+    delta: i32,
+    bound: usize,
+    apply: impl FnOnce(isize, isize, isize) -> isize,
+) -> Option<usize> {
+    let current = isize::try_from(current).unwrap_or_default();
+    let delta = isize::try_from(delta).unwrap_or_default();
+    let bound = isize::try_from(bound).unwrap_or(isize::MAX);
+    usize::try_from(apply(current, delta, bound)).ok()
 }
 
 #[cfg(test)]
@@ -1121,6 +1129,28 @@ mod tests {
         assert_eq!(switcher.selected_visible_index(), Some(1));
         switcher.select_bounded(1);
         assert_eq!(switcher.selected_visible_index(), Some(1));
+    }
+
+    #[test]
+    fn steps_of_any_size_wrap_or_clamp_into_the_list() {
+        let mut switcher = Switcher::default();
+        switcher.set_tasks([
+            SwitchTask::new(1, 10, "First", "first"),
+            SwitchTask::new(2, 20, "Second", "second"),
+            SwitchTask::new(3, 30, "Third", "third"),
+        ]);
+
+        switcher.select_next(-4);
+        assert_eq!(switcher.selected_visible_index(), Some(2));
+        switcher.select_next(i32::MAX);
+        assert_eq!(switcher.selected_visible_index(), Some(0));
+        switcher.select_next(i32::MIN);
+        assert_eq!(switcher.selected_visible_index(), Some(1));
+
+        switcher.select_bounded(i32::MAX);
+        assert_eq!(switcher.selected_visible_index(), Some(2));
+        switcher.select_bounded(i32::MIN);
+        assert_eq!(switcher.selected_visible_index(), Some(0));
     }
 
     #[test]
