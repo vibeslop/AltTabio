@@ -109,9 +109,13 @@ impl App {
             // SAFETY: `paint` is writable and BeginPaint/EndPaint are paired for this WM_PAINT.
             BeginPaint(self.hwnd, &raw mut paint)
         };
-        if dc.is_invalid() {
+        // Only a successful BeginPaint validates the update region, so after a failure WM_PAINT
+        // keeps arriving until a call succeeds. Logging the first failure of a run is enough.
+        let begin_failed = dc.is_invalid();
+        if begin_failed && !self.begin_paint_failing {
             eprintln!("Could not begin painting the overlay");
         }
+        self.begin_paint_failing = begin_failed;
         let render_options = RenderOptions::from(&self.settings.appearance);
         let switcher = self.session.switcher();
         let selected_target = switcher.selected_task().map(|task| task.window_handle);
