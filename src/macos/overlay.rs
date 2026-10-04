@@ -2,6 +2,7 @@
 //! that draws a strip of app icons, the selected app's windows under it, and, when previews are
 //! on, the selected window beside them.
 
+use super::screen::{cursor_screen, frame_contains};
 use alttabio::close_button::CloseButtonVisualState;
 use alttabio::input::WindowCommand;
 use alttabio::panel_layout::{
@@ -22,8 +23,8 @@ use objc2_app_kit::{
     NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightMedium, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSGlassEffectView, NSGlassEffectViewStyle, NSGraphicsContext,
     NSImage, NSLineBreakMode, NSMenu, NSMenuItem, NSMutableParagraphStyle, NSPanel,
-    NSParagraphStyleAttributeName, NSPopUpMenuWindowLevel, NSScreen, NSStringDrawing,
-    NSTextAlignment, NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
+    NSParagraphStyleAttributeName, NSPopUpMenuWindowLevel, NSStringDrawing, NSTextAlignment,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSVisualEffectBlendingMode,
     NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowAnimationBehavior,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -402,24 +403,10 @@ impl Overlay {
         }
     }
 
-    fn cursor_screen(&self) -> Option<Retained<NSScreen>> {
-        let location = NSEvent::mouseLocation();
-        NSScreen::screens(self.mtm)
-            .iter()
-            .find(|screen| {
-                let frame = screen.frame();
-                location.x >= frame.origin.x
-                    && location.x < frame.origin.x + frame.size.width
-                    && location.y >= frame.origin.y
-                    && location.y < frame.origin.y + frame.size.height
-            })
-            .or_else(|| NSScreen::mainScreen(self.mtm))
-    }
-
     /// The largest panel the cursor's display takes.
     #[must_use]
     pub fn max_size(&self) -> (f64, f64) {
-        self.cursor_screen().map_or((1000.0, 700.0), |screen| {
+        cursor_screen(self.mtm).map_or((1000.0, 700.0), |screen| {
             let area = screen.visibleFrame().size;
             ((area.width * 0.9).round(), (area.height * 0.8).round())
         })
@@ -427,7 +414,7 @@ impl Overlay {
 
     /// Shows the panel at `size`, centered on the cursor's display.
     pub fn show(&self, size: (f64, f64)) {
-        if let Some(screen) = self.cursor_screen() {
+        if let Some(screen) = cursor_screen(self.mtm) {
             let area = screen.visibleFrame();
             let (width, height) = (size.0.min(area.size.width), size.1.min(area.size.height));
             let frame = NSRect::new(
@@ -477,13 +464,7 @@ impl Overlay {
     /// Whether the cursor is over the panel; used to tell an outside click from a row click.
     #[must_use]
     pub fn contains_mouse(&self) -> bool {
-        let location = NSEvent::mouseLocation();
-        let frame = self.panel.frame();
-        self.panel.isVisible()
-            && location.x >= frame.origin.x
-            && location.x < frame.origin.x + frame.size.width
-            && location.y >= frame.origin.y
-            && location.y < frame.origin.y + frame.size.height
+        self.panel.isVisible() && frame_contains(self.panel.frame(), NSEvent::mouseLocation())
     }
 
     pub fn present(&self, model: FrameModel) {

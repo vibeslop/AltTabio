@@ -13,6 +13,7 @@ mod keymap;
 mod overlay;
 mod permissions;
 mod preview;
+mod screen;
 mod settings_window;
 mod single_instance;
 mod status_item;
@@ -44,7 +45,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-    NSApplicationActivationPolicy, NSEvent, NSImage, NSRunningApplication, NSScreen, NSWorkspace,
+    NSApplicationActivationPolicy, NSEvent, NSImage, NSRunningApplication, NSWorkspace,
     NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidActivateApplicationNotification,
     NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidLaunchApplicationNotification,
     NSWorkspaceDidTerminateApplicationNotification, NSWorkspaceDidUnhideApplicationNotification,
@@ -56,6 +57,7 @@ use objc2_foundation::{
 use objc2_screen_capture_kit::SCShareableContent;
 use overlay::{FrameModel, Overlay, PreviewModel, Row, Tile, ViewEvent};
 use preview::{Capture, CaptureRequest, PreviewResult, PreviewSource};
+use screen::cursor_display_bounds;
 use settings_window::{SettingsEvent, SettingsWindow};
 use status_item::{MenuAction, StatusItem};
 use std::cell::RefCell;
@@ -1743,27 +1745,6 @@ fn bring_alert_forward(mtm: MainThreadMarker) {
 
 fn application_icon(pid: i32) -> Option<Retained<NSImage>> {
     NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?.icon()
-}
-
-/// Bounds of the display under the cursor in top-left window-list coordinates.
-fn cursor_display_bounds(mtm: MainThreadMarker) -> Option<[f64; 4]> {
-    let location = objc2_app_kit::NSEvent::mouseLocation();
-    let screens = NSScreen::screens(mtm);
-    let primary_height = screens.iter().next()?.frame().size.height;
-    let screen = screens.iter().find(|screen| {
-        let frame = screen.frame();
-        location.x >= frame.origin.x
-            && location.x < frame.origin.x + frame.size.width
-            && location.y >= frame.origin.y
-            && location.y < frame.origin.y + frame.size.height
-    })?;
-    let frame = screen.frame();
-    Some([
-        frame.origin.x,
-        primary_height - (frame.origin.y + frame.size.height),
-        frame.size.width,
-        frame.size.height,
-    ])
 }
 
 #[allow(
