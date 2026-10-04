@@ -69,7 +69,8 @@ impl Canvas<'_> {
             );
         }
         unsafe {
-            // SAFETY: this ends the BeginDraw above on the same target.
+            // SAFETY: the target is valid on this UI thread, and this ends the BeginDraw above on
+            // it; nothing between them returns early, so every BeginDraw gets its EndDraw.
             target.EndDraw(None, None)
         }
     }
