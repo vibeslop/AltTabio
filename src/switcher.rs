@@ -332,13 +332,8 @@ impl SwitcherSession {
     fn command(&self, command: WindowCommand) -> SwitcherEffect {
         self.switcher
             .selected_task()
-            .map_or(SwitcherEffect::None, |task| {
-                SwitcherEffect::Execute(WindowCommandRequest {
-                    command,
-                    window_handle: task.window_handle,
-                    process_identity: task.process_identity,
-                })
-            })
+            .map(WindowTarget::from_task)
+            .map_or(SwitcherEffect::None, |target| target.command(command))
     }
 }
 
