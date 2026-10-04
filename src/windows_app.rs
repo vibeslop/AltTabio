@@ -24,6 +24,9 @@ use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
 };
 use alttabio::overlay_pointer::{self, CloseButtonInteraction, select_hovered_position};
+use alttabio::overlay_window::{
+    ScreenRect, compositor_border_color, overlay_bounds, overlay_bounds_for_dpi_change,
+};
 use alttabio::passthrough::{PassthroughPolicy, is_remote_desktop_client, window_fills_monitor};
 use alttabio::settings::Settings;
 use alttabio::switcher::{
@@ -33,7 +36,7 @@ use alttabio::task_refresh::{
     ContextMenuCommandOutcome, RefreshDecision, RetryTimer, TaskListRefresh,
     apply_listed_refresh_batch,
 };
-use alttabio::theme::{ResolvedTheme, Rgb8};
+use alttabio::theme::ResolvedTheme;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -1308,7 +1311,10 @@ impl App {
         };
         if let Some(suggested) = suggested {
             let bounds = match monitor_work_area_from_rect(*suggested) {
-                Ok(work_area) => overlay_bounds_for_dpi_change(*suggested, work_area),
+                Ok(work_area) => win32_rect(overlay_bounds_for_dpi_change(
+                    screen_rect(*suggested),
+                    screen_rect(work_area),
+                )),
                 Err(error) => {
                     eprintln!("Could not resolve the monitor for the DPI change: {error}");
                     *suggested
@@ -1905,8 +1911,7 @@ fn position_on_cursor_monitor(hwnd: HWND) -> Result<()> {
     if !success.as_bool() {
         return Err(Error::from_thread());
     }
-    let area = monitor_info.rcWork;
-    let bounds = overlay_bounds(area);
+    let bounds = win32_rect(overlay_bounds(screen_rect(monitor_info.rcWork)));
     unsafe {
         // SAFETY: HWND is live; the calculated dimensions are within the selected work area.
         SetWindowPos(
@@ -1942,28 +1947,21 @@ fn monitor_work_area_from_rect(rectangle: RECT) -> Result<RECT> {
     Ok(monitor_info.rcWork)
 }
 
-const fn overlay_bounds_for_dpi_change(_suggested: RECT, work_area: RECT) -> RECT {
-    // The suggested rectangle preserves the window's old logical size. AltTabio instead owns a
-    // monitor-relative size, so scaling that rectangle can make the overlay fill a high-DPI screen.
-    overlay_bounds(work_area)
+const fn screen_rect(rect: RECT) -> ScreenRect {
+    ScreenRect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    }
 }
 
-const fn overlay_bounds(work_area: RECT) -> RECT {
-    let area_width = work_area.right.saturating_sub(work_area.left);
-    let area_height = work_area.bottom.saturating_sub(work_area.top);
-    let width = area_width.saturating_mul(5) / 8;
-    let height = area_height.saturating_mul(5) / 8;
-    let left = work_area
-        .left
-        .saturating_add(area_width.saturating_sub(width) / 2);
-    let top = work_area
-        .top
-        .saturating_add(area_height.saturating_sub(height) / 2);
+const fn win32_rect(rect: ScreenRect) -> RECT {
     RECT {
-        left,
-        top,
-        right: left.saturating_add(width),
-        bottom: top.saturating_add(height),
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
     }
 }
 
@@ -1977,7 +1975,7 @@ fn key_is_down(virtual_key: u16) -> bool {
 
 fn apply_window_appearance(hwnd: HWND, visible_borders: bool, theme: ResolvedTheme) -> Result<()> {
     let preference = DWMWCP_ROUND;
-    let border_color = compositor_border_color(visible_borders, theme);
+    let border_color = compositor_border_color(visible_borders, theme).unwrap_or(DWMWA_COLOR_NONE);
     let use_dark_mode = i32::from(theme == ResolvedTheme::Dark);
     unsafe {
         // SAFETY: hwnd is the live top-level overlay window and the preference pointer remains
@@ -2004,18 +2002,6 @@ fn apply_window_appearance(hwnd: HWND, visible_borders: bool, theme: ResolvedThe
             u32::try_from(std::mem::size_of_val(&border_color)).unwrap_or(u32::MAX),
         )
     }
-}
-
-const fn compositor_border_color(visible_borders: bool, theme: ResolvedTheme) -> u32 {
-    if visible_borders {
-        colorref(theme.palette().window_border)
-    } else {
-        DWMWA_COLOR_NONE
-    }
-}
-
-const fn colorref(color: Rgb8) -> u32 {
-    color.red as u32 | ((color.green as u32) << 8) | ((color.blue as u32) << 16)
 }
 
 // The renderer still declares its own copy of the library's close-button state.
@@ -2336,71 +2322,6 @@ mod tests {
     }
 
     #[test]
-    fn compositor_border_tracks_the_visible_borders_setting() {
-        assert_eq!(
-            compositor_border_color(true, ResolvedTheme::Dark),
-            0x0064_6161
-        );
-        assert_eq!(
-            compositor_border_color(true, ResolvedTheme::Light),
-            0x009A_9A9A
-        );
-        assert_eq!(
-            compositor_border_color(false, ResolvedTheme::Dark),
-            DWMWA_COLOR_NONE
-        );
-    }
-
-    #[test]
-    fn colorref_preserves_windows_bgr_storage_order() {
-        assert_eq!(colorref(Rgb8::new(0x12, 0x34, 0x56)), 0x0056_3412);
-    }
-
-    #[test]
-    fn dpi_change_keeps_overlay_relative_to_positive_secondary_monitor() {
-        let suggested = RECT {
-            left: 1_920,
-            top: 0,
-            right: 3_945,
-            bottom: 1_350,
-        };
-        let work_area = RECT {
-            left: 1_920,
-            top: 0,
-            right: 4_480,
-            bottom: 1_400,
-        };
-
-        assert_eq!(
-            overlay_bounds_for_dpi_change(suggested, work_area),
-            RECT {
-                left: 2_400,
-                top: 262,
-                right: 4_000,
-                bottom: 1_137,
-            }
-        );
-    }
-
-    #[test]
-    fn portrait_topology_uses_current_work_area_instead_of_landscape_bounds() {
-        assert_eq!(
-            overlay_bounds(RECT {
-                left: 0,
-                top: 0,
-                right: 1_080,
-                bottom: 1_920,
-            }),
-            RECT {
-                left: 202,
-                top: 360,
-                right: 877,
-                bottom: 1_560,
-            }
-        );
-    }
-
-    #[test]
     fn activation_targets_the_visible_last_active_owned_popup() {
         let owner = HWND(100usize as *mut c_void);
         let popup = HWND(200usize as *mut c_void);
@@ -2416,31 +2337,5 @@ mod tests {
         assert_eq!(activation_target(owner, popup, false), owner);
         assert_eq!(activation_target(owner, HWND::default(), true), owner);
         assert_eq!(activation_target(owner, owner, true), owner);
-    }
-
-    #[test]
-    fn dpi_change_keeps_overlay_relative_to_negative_monitor_origin() {
-        let suggested = RECT {
-            left: -2_560,
-            top: -120,
-            right: -535,
-            bottom: 1_230,
-        };
-        let work_area = RECT {
-            left: -2_560,
-            top: -120,
-            right: 0,
-            bottom: 1_280,
-        };
-
-        assert_eq!(
-            overlay_bounds_for_dpi_change(suggested, work_area),
-            RECT {
-                left: -2_080,
-                top: 142,
-                right: -480,
-                bottom: 1_017,
-            }
-        );
     }
 }

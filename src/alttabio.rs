@@ -5,6 +5,7 @@ pub mod deferred_switch;
 pub mod input;
 pub mod overlay_layout;
 pub mod overlay_pointer;
+pub mod overlay_window;
 pub mod passthrough;
 pub mod preview_layout;
 pub mod settings;
