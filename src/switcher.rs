@@ -1,4 +1,5 @@
-//! Task filtering and selection behavior shared by every presentation adapter.
+//! The Windows switcher's task list: which top-level windows qualify, how typed search narrows
+//! them, and where the selection goes. macOS groups windows under their apps in `app_switcher`.
 
 use crate::input::InputAction;
 use crate::process_identity::ProcessIdentity;
