@@ -313,29 +313,11 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
         }
     };
     if let Err(error) = app_icon::apply_to_window(window, instance, icon_color) {
-        let destroy_result = unsafe {
-            // SAFETY: window is live and owned by this UI thread.
-            DestroyWindow(window)
-        };
-        if destroy_result.is_ok() {
-            unsafe {
-                // SAFETY: successful synchronous destruction cleared the window user data.
-                drop(Box::from_raw(host_pointer));
-            }
-        }
+        destroy_incomplete_dialog(window, host_pointer);
         return Err(format!("Could not apply the selected About icon: {error}"));
     }
     if let Err(error) = apply_initial_window_dpi(window, host_pointer) {
-        let destroy_result = unsafe {
-            // SAFETY: window is live and owned by this UI thread.
-            DestroyWindow(window)
-        };
-        if destroy_result.is_ok() {
-            unsafe {
-                // SAFETY: successful synchronous destruction cleared the window user data.
-                drop(Box::from_raw(host_pointer));
-            }
-        }
+        destroy_incomplete_dialog(window, host_pointer);
         return Err(format!("Could not size About for this display: {error}"));
     }
     let host = unsafe {
@@ -347,10 +329,15 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
     } else {
         apply_window_theme(window, theme, None);
     }
-    unsafe {
+    let foreground = unsafe {
         // SAFETY: the completed About window is owned by this UI thread and was explicitly opened.
+        // ShowWindow reports the previous visibility, not a failure.
         let _was_visible = ShowWindow(window, SW_SHOW);
-        let _foreground = SetForegroundWindow(window);
+        SetForegroundWindow(window)
+    };
+    if !foreground.as_bool() {
+        // Windows refuses the foreground while the user works in another process; About still shows.
+        eprintln!("Windows kept About out of the foreground");
     }
 
     let Some(state) = finish_dialog(window, host_pointer)? else {
@@ -360,6 +347,21 @@ pub fn show(theme: ResolvedTheme, icon_color: IconColor) -> std::result::Result<
         open_repository()?;
     }
     Ok(())
+}
+
+fn destroy_incomplete_dialog(window: HWND, host_pointer: *mut DialogHost) {
+    let destroy_result = unsafe {
+        // SAFETY: window is live and owned by this UI thread.
+        DestroyWindow(window)
+    };
+    match destroy_result {
+        Ok(()) => unsafe {
+            // SAFETY: successful synchronous destruction cleared the window user data.
+            drop(Box::from_raw(host_pointer));
+        },
+        // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
+        Err(error) => eprintln!("Could not destroy the incomplete About window: {error}"),
+    }
 }
 
 fn finish_dialog(
@@ -563,8 +565,9 @@ fn handle_about_message(
             if state.layout().close_button.contains(point) {
                 state.close_pressed = true;
                 unsafe {
-                    // SAFETY: hwnd is the live dialog receiving the button press.
-                    SetCapture(hwnd);
+                    // SAFETY: hwnd is the live dialog receiving the button press. The result is
+                    // the previous capture window, not a failure.
+                    let _previous_capture = SetCapture(hwnd);
                 }
                 invalidate_dialog(hwnd);
             }
@@ -600,9 +603,12 @@ fn handle_about_message(
 fn handle_left_button_up(state: &mut DialogState, hwnd: HWND, point: POINT) {
     if state.close_pressed {
         state.close_pressed = false;
-        unsafe {
+        let released = unsafe {
             // SAFETY: this UI thread owns any capture taken on button down.
-            let _released = ReleaseCapture();
+            ReleaseCapture()
+        };
+        if let Err(error) = released {
+            eprintln!("Could not release the About mouse capture: {error}");
         }
         if state.layout().close_button.contains(point) {
             close_dialog(hwnd);
