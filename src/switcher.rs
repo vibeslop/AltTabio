@@ -232,10 +232,6 @@ impl SwitcherSession {
         self.visible = false;
     }
 
-    pub fn restore_visible(&mut self) {
-        self.visible = true;
-    }
-
     #[must_use]
     pub const fn search_active(&self) -> bool {
         self.visible && self.settings.typed_search
@@ -367,11 +363,6 @@ impl Switcher {
         self.all_tasks.clear();
         self.all_tasks.extend(tasks);
         self.rebuild_visible_indices();
-    }
-
-    #[must_use]
-    pub fn filter(&self) -> &str {
-        &self.filter
     }
 
     pub fn set_filter(&mut self, filter: &str) {
@@ -871,7 +862,6 @@ mod tests {
             SwitchTask::new(3, 30, "Other", "browser"),
         ]);
 
-        assert_eq!(session.switcher().filter(), "k");
         assert_eq!(session.switcher().visible_task_count(), 2);
         assert_eq!(
             session
@@ -1025,7 +1015,7 @@ mod tests {
             None,
         );
 
-        assert!(session.switcher().filter().is_empty());
+        // Neither new task matches the old "z".
         assert_eq!(session.switcher().visible_task_count(), 2);
         assert_eq!(
             session
@@ -1204,16 +1194,30 @@ mod tests {
     #[test]
     fn typed_filter_query_can_be_edited_one_character_at_a_time() {
         let mut switcher = Switcher::default();
-        switcher.set_tasks(tasks());
+        switcher.set_tasks([
+            SwitchTask::new(1, 10, "Project - Zed", "zed"),
+            SwitchTask::new(2, 20, "Documentation", "firefox"),
+            SwitchTask::new(3, 30, "Terminal", "wezterm"),
+        ]);
         switcher.append_filter_character('d');
         switcher.append_filter_character('o');
-        assert_eq!(switcher.visible_task_count(), 1);
-        assert_eq!(switcher.filter(), "do");
+        assert_eq!(
+            switcher
+                .visible_tasks()
+                .map(|task| task.window_handle)
+                .collect::<Vec<_>>(),
+            vec![20]
+        );
 
         switcher.backspace_filter();
 
-        assert_eq!(switcher.filter(), "d");
-        assert_eq!(switcher.visible_task_count(), 2);
+        assert_eq!(
+            switcher
+                .visible_tasks()
+                .map(|task| task.window_handle)
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
     }
 
     #[test]
