@@ -19,6 +19,7 @@ use crate::win_events::{
 use crate::window_commands::{
     execute as execute_window_command, show_menu as show_window_command_menu,
 };
+use alttabio::activation::activation_target;
 use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll, SwitchResume};
 use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
@@ -2065,14 +2066,6 @@ fn activate_window(owner: HWND) -> bool {
         } == target
 }
 
-fn activation_target(owner: HWND, popup: HWND, popup_is_visible: bool) -> HWND {
-    if popup != HWND::default() && popup != owner && popup_is_visible {
-        popup
-    } else {
-        owner
-    }
-}
-
 fn hook_settings(settings: &Settings) -> HookSettings {
     HookSettings {
         replace_alt_tab: settings.general.replace_alt_tab,
@@ -2319,23 +2312,5 @@ mod tests {
             close_target_for_hit(&switcher, Some(TaskListHit::Task(1))),
             None
         );
-    }
-
-    #[test]
-    fn activation_targets_the_visible_last_active_owned_popup() {
-        let owner = HWND(100usize as *mut c_void);
-        let popup = HWND(200usize as *mut c_void);
-
-        assert_eq!(activation_target(owner, popup, true), popup);
-    }
-
-    #[test]
-    fn activation_keeps_the_owner_for_an_unusable_popup() {
-        let owner = HWND(100usize as *mut c_void);
-        let popup = HWND(200usize as *mut c_void);
-
-        assert_eq!(activation_target(owner, popup, false), owner);
-        assert_eq!(activation_target(owner, HWND::default(), true), owner);
-        assert_eq!(activation_target(owner, owner, true), owner);
     }
 }
