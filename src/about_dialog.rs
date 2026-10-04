@@ -337,12 +337,10 @@ fn paint_about(state: &DialogState) {
     if let Err(error) = paint_about_content(dc, state) {
         eprintln!("Could not paint About: {error}");
     }
-    let ended = unsafe {
+    unsafe {
         // SAFETY: paint was initialized by BeginPaint for this hwnd.
-        EndPaint(state.hwnd, &raw const paint)
-    };
-    if !ended.as_bool() {
-        eprintln!("Could not finish painting About");
+        // EndPaint is documented to always return nonzero, so there is no failure to handle.
+        let _always_nonzero = EndPaint(state.hwnd, &raw const paint);
     }
 }
 
