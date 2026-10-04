@@ -335,6 +335,52 @@ mod tests {
     }
 
     #[test]
+    fn pending_recovery_or_suspension_registers_no_hotkey() {
+        for recovering in [true, false] {
+            let mut context = test_context();
+            context.target = HWND(10_usize as *mut core::ffi::c_void);
+            let outcome = context.state.process_key(
+                KeyEvent::pressed(
+                    Key::Tab,
+                    Modifiers {
+                        alt: true,
+                        ..Modifiers::default()
+                    },
+                ),
+                context.settings,
+            );
+            assert!(routes_tab_through_hotkey(
+                Key::Tab,
+                KeyTransition::Pressed,
+                false,
+                outcome
+            ));
+            if recovering {
+                context.flags.set_recovery_pending(true);
+            } else {
+                // Synchronized while suspended, so the generation still matches the flags.
+                context.flags.suspend(true);
+                assert_eq!(context.sync_interception(), 0);
+            }
+            let data = KBDLLHOOKSTRUCT {
+                vkCode: u32::from(VK_TAB.0),
+                ..KBDLLHOOKSTRUCT::default()
+            };
+            let routed = route_registered_switch_with(
+                &mut context,
+                outcome,
+                &data,
+                KeyTransition::Pressed,
+                HWND::default,
+                |_| panic!("A stale generation must not register a hotkey"),
+            );
+            assert_eq!(routed, outcome);
+            assert!(context.registered_switch.is_none());
+            assert!(!context.registered_tab_down);
+        }
+    }
+
+    #[test]
     fn unavailable_hotkey_keeps_tab_owned_and_reports_the_failure() {
         let mut context = test_context();
         context.target = HWND(10_usize as *mut core::ffi::c_void);
