@@ -9,6 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 pub(crate) const WM_HOOK_ACTION: u32 = WM_APP + 1;
 pub(crate) const WM_HOOK_HOTKEY_ACTION: u32 = WM_APP + 21;
 
+// Sent by the Shell on behalf of the tray icon.
 pub(crate) const WM_TRAY_CALLBACK: u32 = WM_APP + 2;
 
 // Posted by the window-event callbacks.
