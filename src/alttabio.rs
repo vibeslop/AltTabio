@@ -2,12 +2,14 @@
 
 pub mod activation;
 pub mod app_switcher;
+pub mod close_button;
 pub mod deferred_switch;
 pub mod input;
 pub mod modal_state;
 pub mod overlay_layout;
 pub mod overlay_pointer;
 pub mod overlay_window;
+pub mod panel_layout;
 pub mod passthrough;
 pub mod preview_layout;
 pub mod settings;

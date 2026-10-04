@@ -23,7 +23,9 @@ use crate::settings_io::SettingsStore;
 use alttabio::app_switcher::{
     Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, WindowHistory, group_by_app,
 };
+use alttabio::close_button::CloseButtonVisualState;
 use alttabio::input::WindowCommand;
+use alttabio::panel_layout::{Hit, Layout, WindowState, more_note, scroll_into_view};
 use alttabio::settings::Settings;
 use alttabio::switcher::ProcessIdentity;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens, resolve};
@@ -49,10 +51,7 @@ use objc2_foundation::{
     NSSize, NSString, NSTimer, NSURL,
 };
 use objc2_screen_capture_kit::SCShareableContent;
-use overlay::{
-    CloseButtonVisualState, FrameModel, Hit, Layout, Overlay, PreviewModel, Row, Tile, ViewEvent,
-    WindowState, more_note, scroll_into_view,
-};
+use overlay::{FrameModel, Overlay, PreviewModel, Row, Tile, ViewEvent};
 use preview::{Capture, CaptureRequest, PreviewResult, PreviewSource};
 use settings_window::{SettingsEvent, SettingsWindow};
 use status_item::{MenuAction, StatusItem};

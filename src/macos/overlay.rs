@@ -2,7 +2,14 @@
 //! that draws a strip of app icons, the selected app's windows under it, and, when previews are
 //! on, the selected window beside them.
 
+use alttabio::close_button::CloseButtonVisualState;
 use alttabio::input::WindowCommand;
+use alttabio::panel_layout::{
+    CLOSE_SIZE, CORNER_RADIUS, ICON_SHARE, Layout, NAME_HEIGHT, NUMBER_WIDTH, PADDING,
+    PLATE_RADIUS, PREVIEW_INSET, ROW_HEIGHT, STATE_GAP, TEXT_INSET, WindowState, close_button_rect,
+    image_area,
+};
+use alttabio::preview_layout::{Rect, Size, fit};
 use alttabio::theme::{ResolvedTheme, Rgb8, Rgba, SwitcherTokens};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -26,36 +33,6 @@ use objc2_foundation::{
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-const CORNER_RADIUS: f64 = 24.0;
-const PADDING: f64 = 12.0;
-/// Plates and the preview well sit one padding inside the panel, so their corners follow the
-/// panel's with the padding taken off.
-const PLATE_RADIUS: f64 = CORNER_RADIUS - PADDING;
-const TILE_MAX: f64 = 64.0;
-/// Many apps shrink the tiles down to this before the strip starts scrolling.
-const TILE_MIN: f64 = 44.0;
-/// The icon's share of its tile; the rest is the selection plate showing around it.
-const ICON_SHARE: f64 = 0.75;
-/// The row under the strip that names the selected app.
-const NAME_HEIGHT: f64 = 22.0;
-const LIST_GAP: f64 = 6.0;
-const ROW_HEIGHT: f64 = 36.0;
-/// The list grows to this many rows; longer window lists scroll.
-const MAX_ROWS: usize = 8;
-const MIN_CONTENT_WIDTH: f64 = 456.0;
-/// Row text lines up with the visible edge of a full-size icon above it: 8pt of tile around the
-/// icon plus the transparent margin macOS app icons carry inside their image, about a tenth of it.
-const TEXT_INSET: f64 = 12.0;
-/// The column of window numbers before the titles.
-const NUMBER_WIDTH: f64 = 20.0;
-const CLOSE_SIZE: f64 = 24.0;
-const STATE_GAP: f64 = 12.0;
-const PREVIEW_WIDTH: f64 = 400.0;
-const PREVIEW_MIN_HEIGHT: f64 = 250.0;
-const PREVIEW_GAP: f64 = 12.0;
-/// The capture sits this far inside the preview well, rounded to the well's radius minus it.
-const PREVIEW_INSET: f64 = 8.0;
-const LIST_WIDTH_BESIDE_PREVIEW: f64 = 340.0;
 /// Scrolled points on a trackpad per selection step; a mouse wheel notch is always one step.
 const SCROLL_STEP: f64 = 24.0;
 
@@ -68,287 +45,6 @@ pub enum ViewEvent {
     MouseExited,
     /// Positive steps move down the window list.
     Scroll(i32),
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CloseButtonVisualState {
-    #[default]
-    Normal,
-    Hovered,
-    Pressed,
-}
-
-/// Where a window is when it is not plainly on the current desktop.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum WindowState {
-    #[default]
-    Normal,
-    Minimized,
-    Hidden,
-    OtherDesktop,
-}
-
-impl WindowState {
-    const fn label(self) -> Option<&'static str> {
-        match self {
-            Self::Normal => None,
-            Self::Minimized => Some("Minimized"),
-            Self::Hidden => Some("Hidden"),
-            Self::OtherDesktop => Some("Other desktop"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Hit {
-    Tile(usize),
-    Row(usize),
-    CloseButton(usize),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect {
-    pub left: f64,
-    pub top: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-impl Rect {
-    fn contains(self, x: f64, y: f64) -> bool {
-        x >= self.left && x < self.left + self.width && y >= self.top && y < self.top + self.height
-    }
-
-    fn right(self) -> f64 {
-        self.left + self.width
-    }
-
-    fn ns(self) -> NSRect {
-        NSRect::new(
-            NSPoint::new(self.left, self.top),
-            NSSize::new(self.width, self.height),
-        )
-    }
-}
-
-/// The panel's geometry for one session: its size, the tile edge, and how many tiles and rows
-/// it holds. Points, top-left origin.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Layout {
-    pub width: f64,
-    pub height: f64,
-    tile: f64,
-    /// How many tiles the strip shows at once.
-    pub tile_slots: usize,
-    /// How many window rows the list shows at once.
-    pub row_slots: usize,
-    preview: bool,
-}
-
-impl Layout {
-    /// The panel for `apps` apps whose longest window list has `windows` entries, no larger than
-    /// `bounds`. The strip sets the width and the longest list the height, so neither changes
-    /// while the selection moves.
-    #[must_use]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "app and row counts are small, and the floored quotients are positive"
-    )]
-    pub fn new(apps: usize, windows: usize, preview: bool, bounds: (f64, f64)) -> Self {
-        let apps = apps.max(1);
-        let minimum = if preview {
-            LIST_WIDTH_BESIDE_PREVIEW + PREVIEW_GAP + PREVIEW_WIDTH
-        } else {
-            MIN_CONTENT_WIDTH
-        };
-        let maximum = (bounds.0 - PADDING * 2.0).max(minimum);
-        let content = (apps as f64 * TILE_MAX).clamp(minimum, maximum);
-        let tile = (content / apps as f64).clamp(TILE_MIN, TILE_MAX).floor();
-        let tile_slots = ((content / tile).floor() as usize).clamp(1, apps);
-        let list = windows.clamp(1, MAX_ROWS) as f64 * ROW_HEIGHT;
-        let list = if preview {
-            list.max(PREVIEW_MIN_HEIGHT)
-        } else {
-            list
-        };
-        let above = PADDING + tile + NAME_HEIGHT + LIST_GAP;
-        let height = (above + list + PADDING).min(bounds.1.max(above + ROW_HEIGHT + PADDING));
-        let row_slots = (((height - above - PADDING) / ROW_HEIGHT).floor() as usize).max(1);
-        Self {
-            width: (content + PADDING * 2.0).round(),
-            height: height.round(),
-            tile,
-            tile_slots,
-            row_slots,
-            preview,
-        }
-    }
-
-    #[must_use]
-    pub const fn size(&self) -> (f64, f64) {
-        (self.width, self.height)
-    }
-
-    fn content_width(&self) -> f64 {
-        self.width - PADDING * 2.0
-    }
-
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "tile slots are small on-screen counts"
-    )]
-    fn tile_rect(&self, slot: usize) -> Rect {
-        Rect {
-            left: PADDING + slot as f64 * self.tile,
-            top: PADDING,
-            width: self.tile,
-            height: self.tile,
-        }
-    }
-
-    fn name_top(&self) -> f64 {
-        PADDING + self.tile
-    }
-
-    fn list_rect(&self) -> Rect {
-        let top = self.name_top() + NAME_HEIGHT + LIST_GAP;
-        let width = if self.preview {
-            self.content_width() - PREVIEW_GAP - PREVIEW_WIDTH
-        } else {
-            self.content_width()
-        };
-        Rect {
-            left: PADDING,
-            top,
-            width,
-            height: (self.height - PADDING - top).max(0.0),
-        }
-    }
-
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "row indices are small on-screen counts"
-    )]
-    fn row_rect(&self, row: usize) -> Rect {
-        let list = self.list_rect();
-        Rect {
-            top: list.top + row as f64 * ROW_HEIGHT,
-            height: ROW_HEIGHT,
-            ..list
-        }
-    }
-
-    /// The size a capture fills inside the preview well, for sizing the captures.
-    #[must_use]
-    pub fn preview_size(&self) -> Option<(f64, f64)> {
-        self.preview_rect().map(|well| {
-            let area = image_area(well);
-            (area.width, area.height)
-        })
-    }
-
-    fn preview_rect(&self) -> Option<Rect> {
-        self.preview.then(|| {
-            let list = self.list_rect();
-            Rect {
-                left: list.right() + PREVIEW_GAP,
-                width: PREVIEW_WIDTH,
-                ..list
-            }
-        })
-    }
-
-    /// Where the pointer is, given how many tiles and rows are drawn and which row carries the
-    /// close button.
-    #[must_use]
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the offsets are checked nonnegative and map to small slot and row indices"
-    )]
-    pub fn hit(
-        &self,
-        tiles: usize,
-        rows: usize,
-        close_row: Option<usize>,
-        x: f64,
-        y: f64,
-    ) -> Option<Hit> {
-        let strip = Rect {
-            left: PADDING,
-            top: PADDING,
-            width: self.content_width(),
-            height: self.tile,
-        };
-        if strip.contains(x, y) {
-            let slot = ((x - PADDING) / self.tile) as usize;
-            return (slot < tiles).then_some(Hit::Tile(slot));
-        }
-        let list = self.list_rect();
-        if !list.contains(x, y) {
-            return None;
-        }
-        let row = ((y - list.top) / ROW_HEIGHT) as usize;
-        if row >= rows {
-            return None;
-        }
-        if close_row == Some(row) && close_button_rect(self.row_rect(row)).contains(x, y) {
-            return Some(Hit::CloseButton(row));
-        }
-        Some(Hit::Row(row))
-    }
-}
-
-/// Where a capture goes inside the preview well.
-fn image_area(well: Rect) -> Rect {
-    Rect {
-        left: well.left + PREVIEW_INSET,
-        top: well.top + PREVIEW_INSET,
-        width: (well.width - PREVIEW_INSET * 2.0).max(0.0),
-        height: (well.height - PREVIEW_INSET * 2.0).max(0.0),
-    }
-}
-
-fn close_button_rect(row: Rect) -> Rect {
-    let inset = (row.height - CLOSE_SIZE) / 2.0;
-    Rect {
-        left: row.right() - inset - CLOSE_SIZE,
-        top: row.top + inset,
-        width: CLOSE_SIZE,
-        height: CLOSE_SIZE,
-    }
-}
-
-/// The first of `shown` entries to draw out of `total` so that `selected` is in view, moving
-/// the previous start only as far as needed. A pointer resting on a row therefore never makes
-/// the list scroll under it.
-#[must_use]
-pub fn scroll_into_view(start: usize, selected: usize, total: usize, shown: usize) -> usize {
-    let start = start.min(total.saturating_sub(shown));
-    if selected < start {
-        selected
-    } else if shown > 0 && selected >= start + shown {
-        selected + 1 - shown
-    } else {
-        start
-    }
-}
-
-/// The note in the slot under `shown` rows drawn from `start` out of `total`. It sits below the
-/// rows, so it counts the windows below them; once the list has scrolled to its end, every
-/// hidden window is above.
-#[must_use]
-pub fn more_note(total: usize, start: usize, shown: usize) -> Option<String> {
-    let below = total.saturating_sub(start + shown);
-    if below > 0 {
-        Some(format!("{below} more"))
-    } else if start > 0 {
-        Some(format!("{start} more above"))
-    } else {
-        None
-    }
 }
 
 pub struct Tile {
@@ -957,13 +653,13 @@ fn draw_text(text: &str, bounds: Rect, font: &NSFont, color: &NSColor, alignment
     };
     unsafe {
         // SAFETY: drawing happens inside drawRect: with a current graphics context.
-        string.drawInRect_withAttributes(centered.ns(), Some(&attributes));
+        string.drawInRect_withAttributes(ns_rect(centered), Some(&attributes));
     }
 }
 
 fn fill_rounded(rect: Rect, radius: f64, color: &NSColor) {
     color.setFill();
-    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect.ns(), radius, radius).fill();
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(ns_rect(rect), radius, radius).fill();
 }
 
 /// Strokes a 1pt ring just inside `rect`, the way an inset outline sits on an image.
@@ -976,7 +672,7 @@ fn ring_rounded(rect: Rect, radius: f64, color: &NSColor) {
     };
     color.setStroke();
     let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-        inset.ns(),
+        ns_rect(inset),
         (radius - 0.5).max(0.0),
         (radius - 0.5).max(0.0),
     );
@@ -984,20 +680,17 @@ fn ring_rounded(rect: Rect, radius: f64, color: &NSColor) {
     path.stroke();
 }
 
+fn ns_rect(rect: Rect) -> NSRect {
+    NSRect::new(
+        NSPoint::new(rect.left, rect.top),
+        NSSize::new(rect.width, rect.height),
+    )
+}
+
 /// Where `size` lands when aspect-fitted and centered in `bounds`.
 fn fitted(size: NSSize, bounds: Rect) -> Option<Rect> {
-    if size.width <= 0.0 || size.height <= 0.0 || bounds.width <= 0.0 || bounds.height <= 0.0 {
-        return None;
-    }
-    let scale = (bounds.width / size.width).min(bounds.height / size.height);
-    let width = size.width * scale;
-    let height = size.height * scale;
-    Some(Rect {
-        left: bounds.left + (bounds.width - width) / 2.0,
-        top: bounds.top + (bounds.height - height) / 2.0,
-        width,
-        height,
-    })
+    let rect = fit(bounds, Size::new(size.width, size.height));
+    (!rect.is_empty()).then_some(rect)
 }
 
 /// Draws `image` aspect-fitted into `bounds` and returns where it landed.
@@ -1006,7 +699,7 @@ fn draw_image_fit(image: &NSImage, bounds: Rect) -> Option<Rect> {
     unsafe {
         // SAFETY: drawing happens inside drawRect: with a current graphics context.
         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
-            rect.ns(),
+            ns_rect(rect),
             NSRect::ZERO,
             NSCompositingOperation::SourceOver,
             1.0,
@@ -1191,7 +884,7 @@ fn draw_preview(preview: &PreviewModel, area: Rect, fonts: &Fonts, colors: &Colo
         if let Some(rect) = fitted(image.size(), image_area(area)) {
             let radius = PLATE_RADIUS - PREVIEW_INSET;
             NSGraphicsContext::saveGraphicsState_class();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect.ns(), radius, radius)
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(ns_rect(rect), radius, radius)
                 .addClip();
             let _ = draw_image_fit(image, rect);
             NSGraphicsContext::restoreGraphicsState_class();
@@ -1218,60 +911,6 @@ mod tests {
     use super::*;
 
     const SCREEN: (f64, f64) = (1512.0, 900.0);
-
-    #[test]
-    fn the_strip_sets_the_width_and_the_longest_list_the_height() {
-        let few = Layout::new(3, 2, false, SCREEN);
-        assert!((few.width - (MIN_CONTENT_WIDTH + PADDING * 2.0)).abs() < f64::EPSILON);
-        assert_eq!(few.row_slots, 2);
-        assert_eq!(few.tile_slots, 3);
-
-        let many = Layout::new(12, 30, false, SCREEN);
-        assert!((many.width - (12.0 * TILE_MAX + PADDING * 2.0)).abs() < f64::EPSILON);
-        assert_eq!(many.row_slots, MAX_ROWS);
-        assert!(many.height > few.height);
-    }
-
-    #[test]
-    fn crowded_strips_shrink_their_tiles_and_then_scroll() {
-        let crowded = Layout::new(24, 1, false, (1000.0, 700.0));
-        assert!(crowded.width <= 1000.0);
-        assert!(crowded.tile < TILE_MAX && crowded.tile >= TILE_MIN);
-        assert!(crowded.tile_slots < 24);
-    }
-
-    #[test]
-    fn a_short_display_limits_the_rows() {
-        let short = Layout::new(2, 20, false, (1000.0, 300.0));
-        assert!(short.height <= 300.0);
-        assert!(short.row_slots < MAX_ROWS);
-        assert!(short.row_slots >= 1);
-    }
-
-    #[test]
-    fn the_preview_sits_beside_the_list_and_sets_a_minimum_height() {
-        let layout = Layout::new(2, 1, true, SCREEN);
-        let list = layout.list_rect();
-        let preview = layout.preview_rect();
-
-        assert!(list.height >= PREVIEW_MIN_HEIGHT);
-        assert_eq!(
-            preview.map(|area| (area.left, area.top, area.height)),
-            Some((list.right() + PREVIEW_GAP, list.top, list.height))
-        );
-        assert!(Layout::new(2, 1, false, SCREEN).preview_rect().is_none());
-    }
-
-    #[test]
-    fn captures_are_sized_to_the_area_inside_the_well() {
-        let layout = Layout::new(2, 1, true, SCREEN);
-        let well = layout.preview_rect().map(|well| (well.width, well.height));
-
-        assert_eq!(
-            layout.preview_size(),
-            well.map(|(width, height)| (width - PREVIEW_INSET * 2.0, height - PREVIEW_INSET * 2.0))
-        );
-    }
 
     fn frame(title: &str) -> FrameModel {
         FrameModel {
@@ -1302,55 +941,6 @@ mod tests {
     fn a_frame_with_the_same_content_is_equal_and_a_new_title_is_not() {
         assert!(frame("Doc") == frame("Doc"));
         assert!(frame("Doc") != frame("Sheet"));
-    }
-
-    #[test]
-    fn hits_find_tiles_rows_and_the_close_button() {
-        let layout = Layout::new(3, 4, false, SCREEN);
-        let second_tile = layout.tile_rect(1);
-        assert_eq!(
-            layout.hit(3, 4, None, second_tile.left + 1.0, second_tile.top + 1.0),
-            Some(Hit::Tile(1))
-        );
-        let row = layout.row_rect(2);
-        assert_eq!(
-            layout.hit(3, 4, None, row.left + 5.0, row.top + 5.0),
-            Some(Hit::Row(2))
-        );
-        let close = close_button_rect(row);
-        assert_eq!(
-            layout.hit(3, 4, Some(2), close.left + 2.0, close.top + 2.0),
-            Some(Hit::CloseButton(2))
-        );
-        assert_eq!(
-            layout.hit(3, 4, Some(1), close.left + 2.0, close.top + 2.0),
-            Some(Hit::Row(2))
-        );
-        // Slots past the drawn tiles and rows, and the name line, are not targets.
-        let fourth_tile = layout.tile_rect(3);
-        assert_eq!(
-            layout.hit(3, 4, None, fourth_tile.left + 1.0, fourth_tile.top + 1.0),
-            None
-        );
-        assert_eq!(layout.hit(3, 2, None, row.left + 5.0, row.top + 5.0), None);
-        assert_eq!(layout.hit(3, 4, None, 100.0, layout.name_top() + 2.0), None);
-    }
-
-    #[test]
-    fn scrolling_into_view_moves_only_as_far_as_needed() {
-        assert_eq!(scroll_into_view(0, 3, 10, 5), 0);
-        assert_eq!(scroll_into_view(0, 5, 10, 5), 1);
-        assert_eq!(scroll_into_view(4, 2, 10, 5), 2);
-        assert_eq!(scroll_into_view(8, 9, 10, 5), 5);
-        assert_eq!(scroll_into_view(3, 1, 2, 5), 0);
-    }
-
-    #[test]
-    fn the_more_note_counts_the_windows_on_the_side_they_are_hidden() {
-        assert_eq!(more_note(10, 0, 7).as_deref(), Some("3 more"));
-        assert_eq!(more_note(10, 2, 7).as_deref(), Some("1 more"));
-        assert_eq!(more_note(10, 3, 7).as_deref(), Some("3 more above"));
-        assert_eq!(more_note(5, 0, 5), None);
     }
 
     #[test]
