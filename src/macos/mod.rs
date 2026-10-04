@@ -238,14 +238,19 @@ fn show_fatal_error(mtm: MainThreadMarker, message: &str) {
     let _response = alert.runModal();
 }
 
-fn print_window_list() {
-    let listing = window_list::enumerate(
+/// Every window on every display, asked for once from the command line.
+fn list_all_windows() -> Listing {
+    window_list::enumerate(
         EnumerationOptions {
             current_pid: current_pid(),
             display_bounds: None,
         },
         &mut Unresponsive::default(),
-    );
+    )
+}
+
+fn print_window_list() {
+    let listing = list_all_windows();
     println!(
         "{:>8}  {:>6}  {:<5} {:<24} TITLE",
         "ID", "PID", "STATE", "APP"
@@ -285,14 +290,7 @@ fn activate_from_command_line(argument: Option<&OsString>) {
         eprintln!("Usage: AltTabio --activate <window id from --list>");
         return;
     };
-    let records = window_list::enumerate(
-        EnumerationOptions {
-            current_pid: current_pid(),
-            display_bounds: None,
-        },
-        &mut Unresponsive::default(),
-    )
-    .windows;
+    let records = list_all_windows().windows;
     let Some(record) = records.iter().find(|record| record.window_id == window_id) else {
         eprintln!("Window {window_id} was not found");
         return;
