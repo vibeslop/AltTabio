@@ -52,6 +52,13 @@ impl Rect {
         self.width <= 0.0 || self.height <= 0.0
     }
 
+    /// Whether the point is inside, counting the left and top edges but not the right and
+    /// bottom ones, so a point on the edge two touching rects share is in only one of them.
+    #[must_use]
+    pub const fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.left && x < self.right() && y >= self.top && y < self.bottom()
+    }
+
     #[must_use]
     pub fn intersection(self, other: Self) -> Self {
         let left = self.left.max(other.left);
@@ -195,6 +202,17 @@ mod tests {
             );
             assert_eq!(placement.window_destination, expected);
         }
+    }
+
+    #[test]
+    fn rect_contains_its_left_and_top_edges_but_not_its_right_and_bottom() {
+        let rect = Rect::new(10.0, 20.0, 30.0, 40.0);
+        assert!(rect.contains(10.0, 20.0));
+        assert!(rect.contains(39.5, 59.5));
+        assert!(!rect.contains(40.0, 30.0));
+        assert!(!rect.contains(20.0, 60.0));
+        assert!(!rect.contains(9.5, 30.0));
+        assert!(!rect.contains(20.0, 19.5));
     }
 
     #[test]

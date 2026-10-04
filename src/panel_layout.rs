@@ -224,19 +224,19 @@ impl Layout {
             width: self.content_width(),
             height: self.tile,
         };
-        if contains(strip, x, y) {
+        if strip.contains(x, y) {
             let slot = ((x - PADDING) / self.tile) as usize;
             return (slot < tiles).then_some(Hit::Tile(slot));
         }
         let list = self.list_rect();
-        if !contains(list, x, y) {
+        if !list.contains(x, y) {
             return None;
         }
         let row = ((y - list.top) / ROW_HEIGHT) as usize;
         if row >= rows {
             return None;
         }
-        if close_row == Some(row) && contains(close_button_rect(self.row_rect(row)), x, y) {
+        if close_row == Some(row) && close_button_rect(self.row_rect(row)).contains(x, y) {
             return Some(Hit::CloseButton(row));
         }
         Some(Hit::Row(row))
@@ -327,10 +327,6 @@ impl Shown {
         self.layout
             .hit(self.tiles, self.rows, self.selected_row, x, y)
     }
-}
-
-fn contains(rect: Rect, x: f64, y: f64) -> bool {
-    x >= rect.left && x < rect.right() && y >= rect.top && y < rect.bottom()
 }
 
 /// Where a capture goes inside the preview well.
