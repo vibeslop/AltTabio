@@ -2,7 +2,7 @@ use super::App;
 use super::activation::request_foreground;
 use super::display::position_on_cursor_monitor;
 use crate::preview::DwmPreview;
-use crate::renderer::{RenderOptions, Renderer};
+use crate::renderer::RenderOptions;
 use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows};
 use std::ffi::c_void;
 use windows::Win32::Foundation::HWND;
@@ -129,7 +129,8 @@ impl App {
         }
         // Direct2D draws through its own window target; only the GDI icons need the paint DC.
         if !dc.is_invalid() {
-            Renderer::draw_icons(self.hwnd, dc, switcher, render_options);
+            self.renderer
+                .draw_icons(self.hwnd, dc, switcher, render_options);
         }
         unsafe {
             // SAFETY: this balances the BeginPaint call above for the same PAINTSTRUCT.
