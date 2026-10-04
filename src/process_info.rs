@@ -1,4 +1,4 @@
-use alttabio::switcher::ProcessIdentity;
+use alttabio::process_identity::ProcessIdentity;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;

@@ -1,5 +1,5 @@
 use crate::process_info::{executable_path, process_started_at};
-use alttabio::switcher::ProcessIdentity;
+use alttabio::process_identity::ProcessIdentity;
 use alttabio::window_command::WindowCommand;
 use std::ffi::c_void;
 use std::mem::size_of;

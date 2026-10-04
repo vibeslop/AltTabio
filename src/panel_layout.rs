@@ -3,7 +3,7 @@
 
 use crate::app_switcher::AppEntry;
 use crate::preview_layout::Rect;
-use crate::switcher::ProcessIdentity;
+use crate::process_identity::ProcessIdentity;
 
 pub const CORNER_RADIUS: f64 = 24.0;
 pub const PADDING: f64 = 12.0;

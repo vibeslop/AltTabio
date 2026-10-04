@@ -1,20 +1,8 @@
 //! Task filtering and selection behavior shared by every presentation adapter.
 
 use crate::input::InputAction;
+use crate::process_identity::ProcessIdentity;
 use crate::window_command::WindowCommand;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ProcessIdentity {
-    pub id: u32,
-    pub started_at: u64,
-}
-
-impl ProcessIdentity {
-    #[must_use]
-    pub const fn new(id: u32, started_at: u64) -> Self {
-        Self { id, started_at }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwitchTask {

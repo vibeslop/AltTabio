@@ -2,7 +2,7 @@
 //! Accessibility and `AppKit`.
 
 use super::window_list::{WindowRecord, launch_time};
-use alttabio::switcher::ProcessIdentity;
+use alttabio::process_identity::ProcessIdentity;
 use alttabio::window_command::WindowCommand;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};

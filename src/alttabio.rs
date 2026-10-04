@@ -17,6 +17,7 @@ pub mod panel_layout;
 pub mod panel_pointer;
 pub mod passthrough;
 pub mod preview_layout;
+pub mod process_identity;
 pub mod settings;
 pub mod settings_change;
 pub mod settings_form;

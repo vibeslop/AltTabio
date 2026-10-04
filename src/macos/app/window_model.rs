@@ -8,7 +8,7 @@ use crate::macos::runtime::{schedule, with_app};
 use crate::macos::screen::cursor_display_bounds;
 use crate::macos::window_list::{self, EnumerationOptions, Listing, WindowRecord, merge_order};
 use alttabio::app_switcher::{AppEntry, WindowEntry, group_by_app};
-use alttabio::switcher::ProcessIdentity;
+use alttabio::process_identity::ProcessIdentity;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2_app_kit::{
