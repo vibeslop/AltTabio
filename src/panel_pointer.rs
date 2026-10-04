@@ -260,7 +260,7 @@ const fn close_target(hit: Option<Hit>, selected_window: Option<isize>) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panel_layout::Layout;
+    use crate::panel_layout::{Layout, ListRows, close_button_rect};
 
     const AT_REST: (f64, f64) = (100.0, 100.0);
     const AWAY: (f64, f64) = (100.0, 100.0 + HOVER_ARM_DISTANCE);
@@ -651,6 +651,46 @@ mod tests {
                 CloseButtonVisualState::Hovered
             );
         }
+    }
+
+    #[test]
+    fn the_frame_after_a_close_finds_the_pointer_on_the_next_windows_button() {
+        // Built as `redraw` builds it: the panel keeps the height of the longest list it showed,
+        // and only the selected window's row carries the close button.
+        let layout = Layout::new(1, 3, false, (1512.0, 900.0));
+        let frame = |windows: usize, selected: usize| {
+            let list = ListRows::new(0, Some(selected), windows, layout.row_slots);
+            Shown {
+                layout,
+                app: None,
+                tile_start: 0,
+                tiles: 1,
+                row_start: list.start,
+                rows: list.count,
+                selected_row: list.selected_row,
+            }
+        };
+        let button = close_button_rect(layout.row_rect(1));
+        let (x, y) = (
+            button.left + button.width / 2.0,
+            button.top + button.height / 2.0,
+        );
+
+        let mut pointer = Pointer::default();
+        let before = frame(3, 1);
+        let _ = pointer.pressed(before.hit(x, y), &before, Some(0), Some(10));
+        assert_eq!(
+            pointer.released(before.hit(x, y), Some(10)).action,
+            Some(Action::Command(WindowCommand::Close))
+        );
+
+        // The next window takes the closed one's row, under the pointer that has not moved.
+        let after = frame(2, 1);
+        pointer.relocated(after.hit(x, y), Some(11));
+        assert_eq!(
+            pointer.close_state(Some(11)),
+            CloseButtonVisualState::Hovered
+        );
     }
 
     #[test]

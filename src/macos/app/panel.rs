@@ -170,8 +170,7 @@ impl App {
             selected_row: list.selected_row,
         };
         self.shown = Some(shown);
-        // A close, a key, or a scroll moves the close button onto or off a pointer that sends
-        // no event, so the frame finds what the resting pointer is on before it draws the button.
+        // Hit-test this frame, not the last one, before close_state draws its button.
         let selected_window = self.switcher.selected_window();
         let hit = overlay.mouse_point().and_then(|(x, y)| shown.hit(x, y));
         self.pointer.relocated(hit, selected_window);
