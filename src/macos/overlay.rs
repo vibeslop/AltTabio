@@ -635,8 +635,11 @@ impl Overlay {
             panel.setReleasedWhenClosed(false);
         }
         panel.setLevel(NSPopUpMenuWindowLevel);
+        // FullScreenAuxiliary alone left the switcher invisible over another app's fullscreen
+        // space; joining that space takes CanJoinAllApplications.
         panel.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::CanJoinAllApplications
                 | NSWindowCollectionBehavior::Stationary
                 | NSWindowCollectionBehavior::FullScreenAuxiliary
                 | NSWindowCollectionBehavior::IgnoresCycle,
