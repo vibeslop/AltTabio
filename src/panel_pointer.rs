@@ -1,5 +1,6 @@
 //! The pointer on the macOS switcher panel. The adapter resolves each event to a `Hit` against
-//! the last frame drawn and applies the `Response`; the rest on a tile is a timer it runs.
+//! the last frame drawn and applies the `Response`, and resolves the resting pointer against
+//! each frame before drawing it; the rest on a tile is a timer it runs.
 
 use crate::app_switcher::Action;
 use crate::close_button::CloseButtonVisualState;
@@ -44,8 +45,8 @@ pub enum MenuFor {
 #[derive(Debug, Default)]
 pub struct Pointer {
     // The window whose close button the pointer is on. The button belongs to whichever window is
-    // selected, so a key or a scroll that moves the selection leaves the next window's button
-    // unlit until the pointer moves onto it.
+    // selected, so each frame re-reads what the resting pointer is on: the window that slides
+    // into the pointer's row after a close lights up, and one a key selects a row away does not.
     close_hovered: Option<isize>,
     // The window whose close button the press started on. The release closes it only if it is
     // still selected, so a dwell, a key, or a refresh that slides the next window into its row
@@ -127,6 +128,14 @@ impl Pointer {
             _ => response.redraw = close_changed,
         }
         response
+    }
+
+    /// The frame about to draw puts `hit` under the resting pointer while the window
+    /// `selected_window` is selected. Only the close button follows it: a close, a key, or a
+    /// scroll moves the button onto or off a pointer that sends no event, while selecting, the
+    /// rest on a tile, and arming answer to the pointer's own moves.
+    pub fn relocated(&mut self, hit: Option<Hit>, selected_window: Option<isize>) {
+        self.close_hovered = close_target(hit, selected_window);
     }
 
     /// The rest that `Dwell::Start(app)` began is over.
@@ -598,6 +607,123 @@ mod tests {
         let _ = pointer.pressed(Some(Hit::CloseButton(1)), &frame, Some(0), Some(10));
         assert_eq!(
             pointer.released(Some(Hit::CloseButton(1)), Some(10)).action,
+            Some(Action::Command(WindowCommand::Close))
+        );
+    }
+
+    #[test]
+    fn the_window_that_slides_under_the_pointer_after_a_close_lights_up() {
+        let mut pointer = Pointer::default();
+        let frame = shown(0, 0, Some(0));
+
+        // Each close lets the next window take the row under the resting pointer.
+        for (closed, next) in [(10, 11), (11, 12)] {
+            let _ = pointer.pressed(Some(Hit::CloseButton(0)), &frame, Some(0), Some(closed));
+            assert_eq!(
+                pointer
+                    .released(Some(Hit::CloseButton(0)), Some(closed))
+                    .action,
+                Some(Action::Command(WindowCommand::Close))
+            );
+            pointer.relocated(Some(Hit::CloseButton(0)), Some(next));
+            assert_eq!(
+                pointer.close_state(Some(next)),
+                CloseButtonVisualState::Hovered
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_button_stepped_away_from_and_back_shows_pressed_again() {
+        let mut pointer = Pointer::default();
+        let _ = pointer.pressed(
+            Some(Hit::CloseButton(0)),
+            &shown(0, 0, Some(0)),
+            Some(0),
+            WINDOW,
+        );
+
+        // ↓ selects the next window, and its frame finds the pointer on a row with no button.
+        let next = Some(11);
+        pointer.relocated(Some(Hit::Row(0)), next);
+        assert_eq!(pointer.close_state(next), CloseButtonVisualState::Normal);
+        let nudged = (AWAY.0 + 1.0, AWAY.1);
+        let _ = pointer.moved(
+            Some(Hit::Row(0)),
+            nudged,
+            &shown(0, 0, Some(1)),
+            Some(0),
+            next,
+        );
+
+        // ↑ brings the held button back under the pointer.
+        pointer.relocated(Some(Hit::CloseButton(0)), WINDOW);
+        assert_eq!(pointer.close_state(WINDOW), CloseButtonVisualState::Pressed);
+        assert_eq!(
+            pointer.released(Some(Hit::CloseButton(0)), WINDOW).action,
+            Some(Action::Command(WindowCommand::Close))
+        );
+    }
+
+    #[test]
+    fn a_frame_with_the_pointer_off_the_button_lets_go_of_its_hover() {
+        let mut pointer = Pointer::default();
+        let _ = pointer.moved(
+            Some(Hit::CloseButton(0)),
+            AWAY,
+            &shown(0, 0, Some(0)),
+            Some(0),
+            WINDOW,
+        );
+
+        pointer.relocated(None, WINDOW);
+        assert_eq!(pointer.close_state(WINDOW), CloseButtonVisualState::Normal);
+    }
+
+    #[test]
+    fn a_frame_leaves_hovering_and_rests_to_the_pointers_moves() {
+        let mut pointer = Pointer::default();
+        let frame = shown(0, 0, Some(0));
+        pointer.panel_shown(AT_REST);
+
+        // A frame that finds the pointer on another row selects nothing and arms nothing.
+        pointer.relocated(Some(Hit::Row(1)), WINDOW);
+        let nudged = (AT_REST.0 + 3.0, AT_REST.1 + 3.0);
+        assert_eq!(
+            pointer.moved(Some(Hit::Row(1)), nudged, &frame, Some(0), WINDOW),
+            Response::default()
+        );
+
+        // The rest on a tile still runs out on its app,
+        let _ = pointer.moved(Some(Hit::Tile(1)), AWAY, &frame, Some(0), WINDOW);
+        pointer.relocated(None, WINDOW);
+        assert_eq!(pointer.dwell_elapsed(1), select(1, None));
+        // and a tile a frame finds under the pointer has no rest until the pointer moves onto it.
+        pointer.relocated(Some(Hit::Tile(2)), WINDOW);
+        assert_eq!(
+            pointer
+                .moved(Some(Hit::Tile(2)), AWAY, &frame, Some(0), WINDOW)
+                .dwell,
+            Dwell::Start(2)
+        );
+    }
+
+    #[test]
+    fn a_frame_leaves_presses_to_the_pointers_moves() {
+        let mut pointer = Pointer::default();
+        let frame = shown(0, 0, Some(0));
+
+        let _ = pointer.pressed(Some(Hit::Row(1)), &frame, Some(0), WINDOW);
+        pointer.relocated(None, WINDOW);
+        assert_eq!(
+            pointer.released(Some(Hit::Row(1)), WINDOW).action,
+            Some(Action::Activate)
+        );
+
+        let _ = pointer.pressed(Some(Hit::CloseButton(0)), &frame, Some(0), WINDOW);
+        pointer.relocated(None, WINDOW);
+        assert_eq!(
+            pointer.released(Some(Hit::CloseButton(0)), WINDOW).action,
             Some(Action::Command(WindowCommand::Close))
         );
     }

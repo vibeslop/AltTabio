@@ -160,7 +160,7 @@ impl App {
             .preview
             .then(|| self.preview_model());
 
-        self.shown = Some(Shown {
+        let shown = Shown {
             layout,
             app: selected_process,
             tile_start: self.tile_start,
@@ -168,7 +168,13 @@ impl App {
             row_start: self.row_start,
             rows: rows.len(),
             selected_row: list.selected_row,
-        });
+        };
+        self.shown = Some(shown);
+        // A close, a key, or a scroll moves the close button onto or off a pointer that sends
+        // no event, so the frame finds what the resting pointer is on before it draws the button.
+        let selected_window = self.switcher.selected_window();
+        let hit = overlay.mouse_point().and_then(|(x, y)| shown.hit(x, y));
+        self.pointer.relocated(hit, selected_window);
         overlay.present(FrameModel {
             layout,
             tokens: SwitcherTokens::new(self.resolved_theme()),
@@ -176,7 +182,7 @@ impl App {
             rows,
             empty_note: list.empty_note,
             more_note: list.more_note,
-            close_state: self.pointer.close_state(self.switcher.selected_window()),
+            close_state: self.pointer.close_state(selected_window),
             preview,
         });
     }

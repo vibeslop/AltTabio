@@ -255,6 +255,20 @@ impl Overlay {
         self.panel.isVisible() && frame_contains(self.panel.frame(), NSEvent::mouseLocation())
     }
 
+    /// Where the cursor rests in the view's coordinates, as the view reports a mouse event, or
+    /// `None` while the panel is hidden or the cursor is off it.
+    #[must_use]
+    pub fn mouse_point(&self) -> Option<(f64, f64)> {
+        let location = NSEvent::mouseLocation();
+        if !self.panel.isVisible() || !frame_contains(self.panel.frame(), location) {
+            return None;
+        }
+        let point = self
+            .view
+            .convertPoint_fromView(self.panel.convertPointFromScreen(location), None);
+        Some((point.x, point.y))
+    }
+
     pub fn present(&self, model: FrameModel) {
         let mut shown = self.view.ivars().model.borrow_mut();
         // A refresh that changes nothing on screen, such as the list arriving while the panel
