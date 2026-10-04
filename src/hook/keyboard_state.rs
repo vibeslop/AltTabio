@@ -11,7 +11,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT;
 
 pub(super) struct KeyboardState {
-    pub(super) keys: [u8; 256],
+    keys: [u8; 256],
     forwarded_toggle_keys: u8,
     pub(super) modifier_observations: [ModifierObservation; 8],
 }
@@ -167,6 +167,18 @@ impl KeyboardState {
             keys[usize::from(key.0)] = 0;
         }
         keys
+    }
+}
+
+#[cfg(test)]
+impl KeyboardState {
+    /// The observed state of `key`: 0x80 while it is down, bit 0 while its toggle is on.
+    pub(super) fn key_state(&self, key: VIRTUAL_KEY) -> u8 {
+        self.keys[usize::from(key.0)]
+    }
+
+    pub(super) fn set_key_state(&mut self, key: VIRTUAL_KEY, state: u8) {
+        self.keys[usize::from(key.0)] = state;
     }
 }
 

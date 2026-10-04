@@ -661,9 +661,7 @@ mod tests {
             );
             assert_eq!(result, LRESULT(1));
             assert_eq!(
-                process_with_context(|context| context.keyboard_state.keys
-                    [usize::from(VK_CAPITAL.0)]
-                    & 1),
+                process_with_context(|context| context.keyboard_state.key_state(VK_CAPITAL) & 1),
                 Some(0)
             );
         }
@@ -681,9 +679,7 @@ mod tests {
             LRESULT(1)
         );
         assert_eq!(
-            process_with_context(
-                |context| context.keyboard_state.keys[usize::from(VK_CAPITAL.0)] & 1
-            ),
+            process_with_context(|context| context.keyboard_state.key_state(VK_CAPITAL) & 1),
             Some(0)
         );
         for _repeat in 0..2 {
@@ -692,9 +688,7 @@ mod tests {
                 LRESULT(0)
             );
             assert_eq!(
-                process_with_context(|context| context.keyboard_state.keys
-                    [usize::from(VK_CAPITAL.0)]
-                    & 1),
+                process_with_context(|context| context.keyboard_state.key_state(VK_CAPITAL) & 1),
                 Some(1)
             );
         }
@@ -764,11 +758,11 @@ mod tests {
             panic!("missing test context")
         };
         assert_eq!(context.sync_interception(), SEARCH_ACTIVE);
-        assert_eq!(context.keyboard_state.keys[usize::from(VK_SHIFT.0)], 0x80);
-        assert_eq!(context.keyboard_state.keys[usize::from(VK_CAPITAL.0)], 0x81);
+        assert_eq!(context.keyboard_state.key_state(VK_SHIFT), 0x80);
+        assert_eq!(context.keyboard_state.key_state(VK_CAPITAL), 0x81);
         let mut expected = KeyboardState::default();
-        expected.keys[usize::from(VK_SHIFT.0)] = 0x80;
-        expected.keys[usize::from(VK_CAPITAL.0)] = 1;
+        expected.set_key_state(VK_SHIFT, 0x80);
+        expected.set_key_state(VK_CAPITAL, 1);
         let data = KBDLLHOOKSTRUCT {
             vkCode: u32::from(b'A'),
             ..KBDLLHOOKSTRUCT::default()
