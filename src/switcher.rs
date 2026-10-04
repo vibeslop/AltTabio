@@ -191,6 +191,10 @@ impl SwitcherSession {
         &self.switcher
     }
 
+    /// The overlay's pointer code works on the list itself: hit-testing pins the rendered range,
+    /// and hover and right-click select a row. Neither feeds the session's visibility or menu
+    /// target, so going around the session cannot leave it out of step. The callers live in the
+    /// Windows binary, so this cannot be narrower than `pub`.
     #[must_use]
     pub const fn switcher_mut(&mut self) -> &mut Switcher {
         &mut self.switcher
