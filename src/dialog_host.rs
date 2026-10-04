@@ -377,9 +377,14 @@ unsafe extern "system" fn dialog_window_proc<S: DialogWindow>(
                 .ok()?
                 .handle_message(hwnd, message, wparam, lparam),
         }
-    }))
-    .ok()
-    .flatten();
+    }));
+    let handled = match handled {
+        Ok(handled) => handled,
+        // A panic while attaching may leave the window without its host. DefWindowProcW would
+        // still accept creation, and the modal loop would never learn that such a window closed.
+        Err(_) if message == WM_NCCREATE => Some(LRESULT(0)),
+        Err(_) => None,
+    };
     handled.unwrap_or_else(|| unsafe {
         // SAFETY: unhandled messages are forwarded with their original scalar values.
         DefWindowProcW(hwnd, message, wparam, lparam)
