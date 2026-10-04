@@ -35,6 +35,9 @@ pub struct Renderer {
     compact_text: TextFormats,
     theme: ResolvedTheme,
     resources: Option<RenderResources>,
+    // DirectWrite takes UTF-16, so every title, app name and number is re-encoded on each paint;
+    // one buffer reused for all of them keeps painting from allocating.
+    utf16: Vec<u16>,
 }
 
 struct TextFormats {
@@ -152,6 +155,7 @@ impl Renderer {
             compact_text,
             theme,
             resources: None,
+            utf16: Vec::new(),
         })
     }
 
@@ -219,14 +223,18 @@ impl Renderer {
             GetDpiForWindow(hwnd)
         };
         let scale = layout_scale(window_dpi);
-        let draw_result = draw_switcher(
+        let canvas = Canvas {
             resources,
             text,
+            layout: for_compact_list(options.compact_list),
+            options,
+            scale,
+            close_button_state,
+        };
+        let draw_result = canvas.draw_switcher(
             switcher,
             preview_frame.map(|rect| PreviewFrame { rect, scale }),
-            scale,
-            options,
-            close_button_state,
+            &mut self.utf16,
         );
         if draw_result.is_err() {
             self.resources = None;
@@ -405,66 +413,8 @@ fn create_brush(
     }
 }
 
-fn draw_switcher(
-    resources: &RenderResources,
-    text: &TextFormats,
-    switcher: &Switcher,
-    preview_frame: Option<PreviewFrame>,
-    scale: f32,
-    options: RenderOptions,
-    close_button_state: CloseButtonVisualState,
-) -> Result<()> {
-    let target = &resources.target;
-    let size = unsafe {
-        // SAFETY: the target is valid for this UI-thread paint operation.
-        target.GetSize()
-    };
-    let canvas = Canvas {
-        resources,
-        text,
-        layout: for_compact_list(options.compact_list),
-        options,
-        scale,
-        close_button_state,
-    };
-    let layout = canvas.layout;
-    let list_width = layout.list_width(size.width, scale);
-    let visible_rows = layout.visible_row_count(size.height);
-    let start = switcher.visible_range(visible_rows).start;
-    let selected_handle = switcher.selected_task().map(|task| task.window_handle);
-
-    unsafe {
-        // SAFETY: the target is valid on this UI thread and the color outlives the call.
-        target.BeginDraw();
-        target.Clear(Some(&raw const resources.background_color));
-    }
-    if options.visible_borders {
-        canvas.draw_window_border(size);
-    }
-    if let Some(frame) = preview_frame {
-        canvas.draw_preview_frame(frame);
-    }
-    canvas.draw_divider(list_width, size.height);
-    for (visible_position, task) in switcher
-        .positioned_visible_tasks()
-        .skip(start)
-        .take(visible_rows)
-    {
-        let visible_index = visible_position.saturating_sub(1);
-        canvas.draw_row(
-            layout.row_bounds(visible_index - start, list_width),
-            selected_handle == Some(task.window_handle),
-            visible_position,
-            task,
-        );
-    }
-    unsafe {
-        // SAFETY: this ends the BeginDraw above on the same target.
-        target.EndDraw(None, None)
-    }
-}
-
-/// What every part of one paint draws with, between `BeginDraw` and `EndDraw`.
+/// What one paint draws with. The parts it draws run only between the `BeginDraw` and `EndDraw`
+/// of `draw_switcher`.
 struct Canvas<'a> {
     resources: &'a RenderResources,
     text: &'a TextFormats,
@@ -475,6 +425,55 @@ struct Canvas<'a> {
 }
 
 impl Canvas<'_> {
+    fn draw_switcher(
+        &self,
+        switcher: &Switcher,
+        preview_frame: Option<PreviewFrame>,
+        utf16: &mut Vec<u16>,
+    ) -> Result<()> {
+        let target = &self.resources.target;
+        let size = unsafe {
+            // SAFETY: the target is valid for this UI-thread paint operation.
+            target.GetSize()
+        };
+        let layout = self.layout;
+        let list_width = layout.list_width(size.width, self.scale);
+        let visible_rows = layout.visible_row_count(size.height);
+        let start = switcher.visible_range(visible_rows).start;
+        let selected_handle = switcher.selected_task().map(|task| task.window_handle);
+
+        unsafe {
+            // SAFETY: the target is valid on this UI thread and the color outlives the call.
+            target.BeginDraw();
+            target.Clear(Some(&raw const self.resources.background_color));
+        }
+        if self.options.visible_borders {
+            self.draw_window_border(size);
+        }
+        if let Some(frame) = preview_frame {
+            self.draw_preview_frame(frame);
+        }
+        self.draw_divider(list_width, size.height);
+        for (visible_position, task) in switcher
+            .positioned_visible_tasks()
+            .skip(start)
+            .take(visible_rows)
+        {
+            let visible_index = visible_position.saturating_sub(1);
+            self.draw_row(
+                layout.row_bounds(visible_index - start, list_width),
+                selected_handle == Some(task.window_handle),
+                visible_position,
+                task,
+                utf16,
+            );
+        }
+        unsafe {
+            // SAFETY: this ends the BeginDraw above on the same target.
+            target.EndDraw(None, None)
+        }
+    }
+
     fn draw_window_border(&self, size: D2D_SIZE_F) {
         let frame = window_frame_geometry(size.width, size.height, self.scale);
         let rect = rounded_rect(frame.rect, frame.radius);
@@ -544,6 +543,7 @@ impl Canvas<'_> {
         selected: bool,
         visible_position: usize,
         task: &SwitchTask,
+        utf16: &mut Vec<u16>,
     ) {
         let layout = self.layout;
         let options = self.options;
@@ -559,14 +559,9 @@ impl Canvas<'_> {
             }
         }
 
-        let number = visible_position
-            .to_string()
-            .encode_utf16()
-            .collect::<Vec<_>>();
-        let title = task.title.encode_utf16().collect::<Vec<_>>();
         if options.show_numbers {
             self.draw_text(
-                &number,
+                encode_number(utf16, visible_position),
                 &self.text.number,
                 LogicalRect {
                     right: bounds.left + layout.number_width,
@@ -584,7 +579,7 @@ impl Canvas<'_> {
             options.compact_list,
         );
         self.draw_text(
-            &title,
+            encode(utf16, &task.title),
             &self.text.title,
             LogicalRect {
                 left,
@@ -595,9 +590,8 @@ impl Canvas<'_> {
             &self.resources.primary_brush,
         );
         if let Some((top, bottom)) = text_layout.app_name {
-            let app_name = task.process_name.encode_utf16().collect::<Vec<_>>();
             self.draw_text(
-                &app_name,
+                encode(utf16, &task.process_name),
                 &self.text.detail,
                 LogicalRect {
                     left,
@@ -668,6 +662,27 @@ impl Canvas<'_> {
             );
         }
     }
+}
+
+fn encode<'a>(buffer: &'a mut Vec<u16>, text: &str) -> &'a [u16] {
+    buffer.clear();
+    buffer.extend(text.encode_utf16());
+    buffer
+}
+
+fn encode_number(buffer: &mut Vec<u16>, number: usize) -> &[u16] {
+    buffer.clear();
+    let mut rest = number;
+    loop {
+        let digit = u16::try_from(rest % 10).unwrap_or_default();
+        buffer.push(u16::from(b'0') + digit);
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    buffer.reverse();
+    buffer
 }
 
 const fn d2d_rect(rect: LogicalRect) -> D2D_RECT_F {
@@ -777,6 +792,23 @@ mod tests {
         assert_close(background.g, 44.0 / 255.0);
         assert_close(background.b, 47.0 / 255.0);
         assert_close(background.a, 1.0);
+    }
+
+    #[test]
+    fn row_text_reuses_one_buffer() {
+        let mut buffer = Vec::new();
+
+        for (number, expected) in [(0, "0"), (7, "7"), (10, "10"), (123, "123")] {
+            assert_eq!(
+                encode_number(&mut buffer, number),
+                expected.encode_utf16().collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(
+            encode(&mut buffer, "Größe 📁"),
+            "Größe 📁".encode_utf16().collect::<Vec<_>>()
+        );
+        assert_eq!(encode(&mut buffer, ""), []);
     }
 
     fn assert_close(actual: f32, expected: f32) {
