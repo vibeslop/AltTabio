@@ -42,8 +42,11 @@ use windows::core::Error;
 pub(crate) use alttabio::input::decode_virtual_key;
 pub use replay::send_shell_escape;
 
+// Thread messages for the hook thread's own queue, kept together so a test can check that they
+// are distinct. The app window never receives them, so they may reuse numbers from `app_messages`.
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
+const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
 const HOOK_ERROR_POST_ACTION: u8 = 2;
@@ -793,5 +796,22 @@ mod tests {
 
         assert_eq!(result, next_result);
         assert!(reset);
+    }
+
+    #[test]
+    fn hook_thread_messages_are_distinct() {
+        let messages = [
+            WM_RESET_GESTURES,
+            WM_REPORT_HOOK_ERRORS,
+            WM_RECONCILE_KEYBOARD,
+        ];
+
+        assert_eq!(
+            messages
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            messages.len()
+        );
     }
 }

@@ -2,7 +2,7 @@
 //! changes made on the other desktop.
 
 use super::keyboard_state::{MODIFIER_KEYS, timestamp_at_or_after};
-use super::{key_pressed, process_with_context};
+use super::{WM_RECONCILE_KEYBOARD, key_pressed, process_with_context};
 use alttabio::hook_flags::HookFlags;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -14,11 +14,9 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_DESKTOPSWITCH, KillTimer, MSG, PostThreadMessageW, SetTimer,
-    WINEVENT_OUTOFCONTEXT, WM_APP, WM_TIMER,
+    WINEVENT_OUTOFCONTEXT, WM_TIMER,
 };
 use windows::core::{BOOL, Error};
-
-const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 thread_local! {
     // Independent publication lets reentrant desktop callbacks gate delivery during state borrows.
