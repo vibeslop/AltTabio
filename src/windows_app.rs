@@ -24,6 +24,7 @@ use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll, SwitchResume
 use alttabio::input::{
     HookSettings, InputAction, OverlayKeyEvent, WindowCommand, overlay_key_action,
 };
+use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::{self, CloseButtonInteraction, select_hovered_position};
 use alttabio::overlay_window::{
     ScreenRect, compositor_border_color, overlay_bounds, overlay_bounds_for_dpi_change,
@@ -527,8 +528,7 @@ impl App {
         }
         match message {
             WM_HOOK_ACTION | crate::hook::WM_HOOK_HOTKEY_ACTION => {
-                if hook_actions_enabled(self.settings_dialog_open, self.about_dialog_open)
-                    && !self.session.context_menu_open()
+                if !self.modal_state().any_open()
                     && self
                         .hooks
                         .as_ref()
@@ -658,7 +658,7 @@ impl App {
     }
 
     fn prepare_settings_dialog(&mut self) -> Option<(HWND, Settings)> {
-        if self.settings_dialog_open || self.about_dialog_open {
+        if self.modal_state().dialog_open() {
             return None;
         }
         self.hide_overlay();
@@ -668,7 +668,7 @@ impl App {
     }
 
     fn prepare_about_dialog(&mut self) -> Option<(ResolvedTheme, alttabio::settings::IconColor)> {
-        if self.about_dialog_open || self.settings_dialog_open {
+        if self.modal_state().dialog_open() {
             return None;
         }
         self.hide_overlay();
@@ -1268,11 +1268,7 @@ impl App {
     }
 
     fn prepare_task_context_menu(&mut self, lparam: LPARAM) -> Option<HWND> {
-        if !self.is_visible()
-            || self.settings_dialog_open
-            || self.about_dialog_open
-            || self.session.context_menu_open()
-        {
+        if !self.is_visible() || self.modal_state().any_open() {
             return None;
         }
         let hit = self.hit_test(lparam)?;
@@ -1538,8 +1534,7 @@ impl App {
         let Some(hooks) = self.hooks.as_ref() else {
             return;
         };
-        let suspended =
-            self.settings_dialog_open || self.about_dialog_open || self.session.context_menu_open();
+        let suspended = self.modal_state().any_open();
         if suspended {
             hooks.set_interception_suspended(true);
         }
@@ -1575,6 +1570,14 @@ impl App {
 
     fn is_visible(&self) -> bool {
         self.session.is_visible()
+    }
+
+    const fn modal_state(&self) -> ModalState {
+        ModalState {
+            settings_dialog: self.settings_dialog_open,
+            about_dialog: self.about_dialog_open,
+            context_menu: self.session.context_menu_open(),
+        }
     }
 }
 
@@ -1729,10 +1732,6 @@ const fn busy_overlay_message_action(message: u32, wparam: WPARAM) -> BusyOverla
     } else {
         BusyOverlayMessage::DeferToDefault
     }
-}
-
-const fn hook_actions_enabled(settings_dialog_open: bool, about_dialog_open: bool) -> bool {
-    !settings_dialog_open && !about_dialog_open
 }
 
 fn show_error_for_window(owner: HWND, message: &str) {
@@ -2264,13 +2263,6 @@ mod tests {
         );
         assert_eq!(failed_hooks, None);
         assert!(!failure_synchronized);
-    }
-
-    #[test]
-    fn modal_dialogs_gate_hook_actions() {
-        assert!(hook_actions_enabled(false, false));
-        assert!(!hook_actions_enabled(true, false));
-        assert!(!hook_actions_enabled(false, true));
     }
 
     #[test]
