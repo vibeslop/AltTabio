@@ -154,6 +154,56 @@ pub fn decode_virtual_key(virtual_key: u32) -> Key {
     }
 }
 
+/// Keys by virtual-key code. A key whose code is 256 or above is never a member.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct KeySet([u64; 4]);
+
+impl KeySet {
+    fn bit(key: Key) -> Option<(usize, u64)> {
+        let code = usize::from(key.virtual_key());
+        (code < 256).then(|| (code / 64, 1 << (code % 64)))
+    }
+
+    pub(super) fn can_hold(key: Key) -> bool {
+        Self::bit(key).is_some()
+    }
+
+    pub(super) fn contains(&self, key: Key) -> bool {
+        Self::bit(key)
+            .is_some_and(|(word, mask)| self.0.get(word).is_some_and(|bits| bits & mask != 0))
+    }
+
+    pub(super) fn insert(&mut self, key: Key) {
+        self.set(key, true);
+    }
+
+    /// Removes the key and reports whether it was a member.
+    pub(super) fn remove(&mut self, key: Key) -> bool {
+        let member = self.contains(key);
+        self.set(key, false);
+        member
+    }
+
+    pub(super) fn set(&mut self, key: Key, member: bool) {
+        let Some((word, mask)) = Self::bit(key) else {
+            return;
+        };
+        if let Some(bits) = self.0.get_mut(word) {
+            if member {
+                *bits |= mask;
+            } else {
+                *bits &= !mask;
+            }
+        }
+    }
+
+    pub(super) fn insert_all(&mut self, other: Self) {
+        for (bits, other) in self.0.iter_mut().zip(other.0) {
+            *bits |= other;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +238,61 @@ mod tests {
         for code in [0x30_u16, 0x60, 0x70, 0x79] {
             assert_eq!(decode_virtual_key(u32::from(code)), Key::Other(code));
         }
+    }
+
+    #[test]
+    fn key_set_tracks_each_key_apart_across_every_word() {
+        let keys = [
+            Key::Backspace,
+            Key::Tab,
+            Key::Digit(9),
+            Key::LeftWindows,
+            Key::Other(0x7F),
+            Key::LeftShift,
+            Key::Other(0xFF),
+        ];
+        let mut set = KeySet::default();
+        for (index, key) in keys.into_iter().enumerate() {
+            set.insert(key);
+            for (checked_index, checked) in keys.into_iter().enumerate() {
+                assert_eq!(set.contains(checked), checked_index <= index, "{checked:?}");
+            }
+        }
+        assert!(set.remove(Key::Tab));
+        assert!(!set.remove(Key::Tab));
+        assert!(!set.contains(Key::Tab));
+        assert!(set.contains(Key::Backspace));
+        set.set(Key::Tab, true);
+        assert!(set.contains(Key::Tab));
+        set.set(Key::Tab, false);
+        assert!(!set.contains(Key::Tab));
+    }
+
+    #[test]
+    fn key_set_never_holds_codes_past_the_keyboard_state_table() {
+        let mut set = KeySet::default();
+        for key in [Key::Other(0x100), Key::Other(u16::MAX), Key::Function(0xFF)] {
+            assert!(!KeySet::can_hold(key));
+            set.insert(key);
+            assert!(!set.contains(key));
+            assert!(!set.remove(key));
+        }
+        assert_eq!(set, KeySet::default());
+        assert!(KeySet::can_hold(Key::Other(0xFF)));
+    }
+
+    #[test]
+    fn key_set_union_keeps_members_of_both_sets() {
+        let mut held = KeySet::default();
+        held.insert(Key::Tab);
+        let mut pressed = KeySet::default();
+        pressed.insert(Key::LeftAlt);
+        pressed.insert(Key::Other(0xFF));
+        held.insert_all(pressed);
+        for key in [Key::Tab, Key::LeftAlt, Key::Other(0xFF)] {
+            assert!(held.contains(key), "{key:?}");
+        }
+        assert!(!held.contains(Key::Escape));
     }
 
     #[cfg(windows)]

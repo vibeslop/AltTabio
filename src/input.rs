@@ -2,6 +2,7 @@
 
 mod key;
 
+use key::KeySet;
 pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -206,9 +207,9 @@ impl HookOutcome {
 #[derive(Debug, Default)]
 pub struct HookState {
     shift_keys: u8,
-    pressed_owned_keys: [u64; 4],
+    pressed_owned_keys: KeySet,
     suppressed_shift_keys: u8,
-    suppressed_owned_key_releases: [u64; 4],
+    suppressed_owned_key_releases: KeySet,
     pending_alt_keys: u8,
     pending_windows_keys: u8,
     replayed_key_events: [Option<ReplayedKeyEvent>; 3],
@@ -224,7 +225,7 @@ pub struct HookState {
 struct InterceptionState {
     suspended: bool,
     // Keys held across a modal boundary stay with their original recipient until release.
-    passthrough_keys: [u64; 4],
+    passthrough_keys: KeySet,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -245,14 +246,9 @@ impl HookState {
     }
 
     fn cancel_held_gestures(&mut self) {
-        for (passthrough, pressed) in self
-            .interception
+        self.interception
             .passthrough_keys
-            .iter_mut()
-            .zip(self.pressed_owned_keys)
-        {
-            *passthrough |= pressed;
-        }
+            .insert_all(self.pressed_owned_keys);
         self.reset_gestures();
         if self.right_button == RightButtonState::WheelGesture {
             self.right_button = RightButtonState::CancelledWheelGesture;
@@ -290,13 +286,7 @@ impl HookState {
         } else if pending_alt || pending_windows {
             self.suppress_owned_key_release(key);
         }
-        if let Some((word, mask)) = owned_key_slot(key) {
-            if pressed {
-                self.interception.passthrough_keys[word] |= mask;
-            } else {
-                self.interception.passthrough_keys[word] &= !mask;
-            }
-        }
+        self.interception.passthrough_keys.set(key, pressed);
     }
 
     pub fn reset_gestures(&mut self) {
@@ -483,19 +473,12 @@ impl HookState {
     }
 
     fn key_passes_until_release(&self, key: Key) -> bool {
-        owned_key_slot(key)
-            .is_some_and(|(word, mask)| self.interception.passthrough_keys[word] & mask != 0)
+        self.interception.passthrough_keys.contains(key)
     }
 
     fn process_unintercepted_key(&mut self, event: KeyEvent) -> HookOutcome {
         let pressed = event.transition == KeyTransition::Pressed;
-        if let Some((word, mask)) = owned_key_slot(event.key) {
-            if pressed {
-                self.interception.passthrough_keys[word] |= mask;
-            } else {
-                self.interception.passthrough_keys[word] &= !mask;
-            }
-        }
+        self.interception.passthrough_keys.set(event.key, pressed);
         let owned = if pressed {
             self.owned_key_release_pending(event.key)
         } else {
@@ -919,8 +902,8 @@ impl HookState {
     }
 
     fn process_search_key(&mut self, event: KeyEvent, search_active: bool) -> Option<HookOutcome> {
-        let _slot = owned_key_slot(event.key)?;
-        if event.transition == KeyTransition::Released {
+        // Typing a key whose release cannot be owned would leak that release to the foreground.
+        if !KeySet::can_hold(event.key) || event.transition == KeyTransition::Released {
             return None;
         }
         if !search_active || event.modifiers.left_windows || event.modifiers.right_windows {
@@ -939,35 +922,16 @@ impl HookState {
     }
 
     fn suppress_owned_key_release(&mut self, key: Key) {
-        let Some((word_index, mask)) = owned_key_slot(key) else {
-            return;
-        };
-        if let Some(word) = self.suppressed_owned_key_releases.get_mut(word_index) {
-            *word |= mask;
-        }
+        self.suppressed_owned_key_releases.insert(key);
     }
 
     fn update_owned_key_state(&mut self, event: KeyEvent) {
-        let Some((word_index, mask)) = owned_key_slot(event.key) else {
-            return;
-        };
-        let Some(word) = self.pressed_owned_keys.get_mut(word_index) else {
-            return;
-        };
-        if event.transition == KeyTransition::Pressed {
-            *word |= mask;
-        } else {
-            *word &= !mask;
-        }
+        self.pressed_owned_keys
+            .set(event.key, event.transition == KeyTransition::Pressed);
     }
 
     fn owned_key_is_down(&self, key: Key) -> bool {
-        let Some((word_index, mask)) = owned_key_slot(key) else {
-            return false;
-        };
-        self.pressed_owned_keys
-            .get(word_index)
-            .is_some_and(|word| word & mask != 0)
+        self.pressed_owned_keys.contains(key)
     }
 
     fn any_alt_key_down(&self) -> bool {
@@ -977,24 +941,11 @@ impl HookState {
     }
 
     fn take_suppressed_owned_key_release(&mut self, key: Key) -> bool {
-        let Some((word_index, mask)) = owned_key_slot(key) else {
-            return false;
-        };
-        let Some(word) = self.suppressed_owned_key_releases.get_mut(word_index) else {
-            return false;
-        };
-        let suppressed = *word & mask != 0;
-        *word &= !mask;
-        suppressed
+        self.suppressed_owned_key_releases.remove(key)
     }
 
     fn owned_key_release_pending(&self, key: Key) -> bool {
-        let Some((word_index, mask)) = owned_key_slot(key) else {
-            return false;
-        };
-        self.suppressed_owned_key_releases
-            .get(word_index)
-            .is_some_and(|word| word & mask != 0)
+        self.suppressed_owned_key_releases.contains(key)
     }
 
     const fn shift_down(&self) -> bool {
@@ -1056,14 +1007,6 @@ fn windows_keys(mask: u8) -> impl Iterator<Item = Key> {
     [(1, Key::LeftWindows), (2, Key::RightWindows)]
         .into_iter()
         .filter_map(move |(key_mask, key)| (mask & key_mask != 0).then_some(key))
-}
-
-fn owned_key_slot(key: Key) -> Option<(usize, u64)> {
-    let virtual_key = usize::from(key.virtual_key());
-    if virtual_key >= 256 {
-        return None;
-    }
-    Some((virtual_key / 64, 1_u64 << (virtual_key % 64)))
 }
 
 #[cfg(test)]
