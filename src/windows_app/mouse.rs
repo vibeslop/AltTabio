@@ -1,8 +1,8 @@
 use super::{App, AppHost, high_word_isize, low_word_isize};
 use crate::window_commands::show_menu as show_window_command_menu;
 use alttabio::input::InputAction;
-use alttabio::overlay_pointer::select_hovered_position;
-use alttabio::switcher::{Switcher, SwitcherEffect};
+use alttabio::overlay_pointer::{close_target_for_hit, select_hovered_position};
+use alttabio::switcher::SwitcherEffect;
 use alttabio::task_list_hit::{TaskListHit, hit_test_pixels};
 use alttabio::task_refresh::ContextMenuCommandOutcome;
 use alttabio::window_command::WindowCommand;
@@ -203,40 +203,4 @@ fn mouse_coordinates(lparam: LPARAM) -> (i32, i32) {
     let x = low_word_isize(lparam.0).cast_signed();
     let y = high_word_isize(lparam.0).cast_signed();
     (i32::from(x), i32::from(y))
-}
-
-fn close_target_for_hit(switcher: &Switcher, hit: Option<TaskListHit>) -> Option<isize> {
-    let TaskListHit::CloseButton(position) = hit? else {
-        return None;
-    };
-    let selected_position = switcher.selected_visible_index()?.checked_add(1)?;
-    (position == selected_position).then_some(switcher.selected_task()?.window_handle)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alttabio::switcher::SwitchTask;
-
-    #[test]
-    fn close_hit_resolves_only_for_the_current_selected_window() {
-        let mut switcher = Switcher::default();
-        switcher.set_tasks(vec![
-            SwitchTask::new(1, 10, "First", "first"),
-            SwitchTask::new(2, 20, "Second", "second"),
-        ]);
-
-        assert_eq!(
-            close_target_for_hit(&switcher, Some(TaskListHit::CloseButton(1))),
-            Some(10)
-        );
-        assert_eq!(
-            close_target_for_hit(&switcher, Some(TaskListHit::CloseButton(2))),
-            None
-        );
-        assert_eq!(
-            close_target_for_hit(&switcher, Some(TaskListHit::Task(1))),
-            None
-        );
-    }
 }

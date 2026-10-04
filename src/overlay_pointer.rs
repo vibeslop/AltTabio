@@ -2,6 +2,7 @@
 
 use crate::close_button::CloseButtonVisualState;
 use crate::switcher::Switcher;
+use crate::task_list_hit::TaskListHit;
 use crate::window_command::WindowCommand;
 
 /// Targets are window handles, so a press stays bound to the window it started on even if the
@@ -70,10 +71,41 @@ pub fn select_hovered_position(switcher: &mut Switcher, position: usize) -> bool
     switcher.select_visible_position(position) && switcher.selected_visible_index() != previous
 }
 
+#[must_use]
+pub fn close_target_for_hit(switcher: &Switcher, hit: Option<TaskListHit>) -> Option<isize> {
+    let TaskListHit::CloseButton(position) = hit? else {
+        return None;
+    };
+    let selected_position = switcher.selected_visible_index()?.checked_add(1)?;
+    (position == selected_position).then_some(switcher.selected_task()?.window_handle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::switcher::SwitchTask;
+
+    #[test]
+    fn close_hit_resolves_only_for_the_current_selected_window() {
+        let mut switcher = Switcher::default();
+        switcher.set_tasks(vec![
+            SwitchTask::new(1, 10, "First", "first"),
+            SwitchTask::new(2, 20, "Second", "second"),
+        ]);
+
+        assert_eq!(
+            close_target_for_hit(&switcher, Some(TaskListHit::CloseButton(1))),
+            Some(10)
+        );
+        assert_eq!(
+            close_target_for_hit(&switcher, Some(TaskListHit::CloseButton(2))),
+            None
+        );
+        assert_eq!(
+            close_target_for_hit(&switcher, Some(TaskListHit::Task(1))),
+            None
+        );
+    }
 
     #[test]
     fn hover_selection_requests_redraw_only_when_the_item_changes() {
