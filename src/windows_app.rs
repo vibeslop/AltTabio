@@ -30,9 +30,8 @@ use alttabio::overlay_window::{
 };
 use alttabio::passthrough::{PassthroughPolicy, is_remote_desktop_client, window_fills_monitor};
 use alttabio::settings::Settings;
-use alttabio::switcher::{
-    Switcher, SwitcherEffect, SwitcherSession, SwitcherSessionSettings, WindowCommandRequest,
-};
+use alttabio::settings_change::{hook_settings, switcher_session_settings};
+use alttabio::switcher::{Switcher, SwitcherEffect, SwitcherSession, WindowCommandRequest};
 use alttabio::task_refresh::{
     ContextMenuCommandOutcome, RefreshDecision, RetryTimer, TaskListRefresh,
     apply_listed_refresh_batch,
@@ -2064,24 +2063,6 @@ fn activate_window(owner: HWND) -> bool {
             // SAFETY: GetForegroundWindow has no preconditions and returns a borrowed window.
             GetForegroundWindow()
         } == target
-}
-
-fn hook_settings(settings: &Settings) -> HookSettings {
-    HookSettings {
-        replace_alt_tab: settings.general.replace_alt_tab,
-        replace_win_tab: settings.general.replace_win_tab,
-        right_button_wheel_switching: settings.general.right_button_wheel_switching,
-        typed_search: settings.general.typed_search,
-        search_active: false,
-    }
-}
-
-const fn switcher_session_settings(settings: &Settings) -> SwitcherSessionSettings {
-    SwitcherSessionSettings {
-        typed_search: settings.general.typed_search,
-        release_alt_switches: settings.general.release_alt_switches,
-        release_right_button_switches: settings.general.release_right_button_switches,
-    }
 }
 
 const fn key_was_previously_down(lparam: LPARAM) -> bool {
