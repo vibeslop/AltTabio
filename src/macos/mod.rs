@@ -638,49 +638,42 @@ impl App {
     }
 
     fn observe_workspace(&mut self) {
-        let center = NSWorkspace::sharedWorkspace().notificationCenter();
-        let names: [&NSNotificationName; 6] = unsafe {
+        let (activated, refreshing) = unsafe {
             // SAFETY: the notification name constants are static strings exported by AppKit.
-            [
+            (
                 NSWorkspaceDidActivateApplicationNotification,
-                NSWorkspaceDidLaunchApplicationNotification,
-                NSWorkspaceDidTerminateApplicationNotification,
-                NSWorkspaceDidHideApplicationNotification,
-                NSWorkspaceDidUnhideApplicationNotification,
-                NSWorkspaceActiveSpaceDidChangeNotification,
-            ]
+                [
+                    NSWorkspaceDidActivateApplicationNotification,
+                    NSWorkspaceDidLaunchApplicationNotification,
+                    NSWorkspaceDidTerminateApplicationNotification,
+                    NSWorkspaceDidHideApplicationNotification,
+                    NSWorkspaceDidUnhideApplicationNotification,
+                    NSWorkspaceActiveSpaceDidChangeNotification,
+                ],
+            )
         };
-        for name in names {
-            let block = RcBlock::new(|_notification: NonNull<NSNotification>| {
-                let _ = with_app(App::request_refresh);
-            });
-            let token = unsafe {
-                // SAFETY: the main operation queue delivers the block on the main thread, where
-                // `with_app` expects to run.
-                center.addObserverForName_object_queue_usingBlock(
+        for name in refreshing {
+            self.observe(name, Self::request_refresh);
+        }
+        self.observe(activated, Self::front_app_changed);
+    }
+
+    /// Runs `work` whenever the workspace posts `name`.
+    fn observe(&mut self, name: &NSNotificationName, work: fn(&mut Self)) {
+        let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
+            let _ = with_app(work);
+        });
+        let token = unsafe {
+            // SAFETY: the main operation queue delivers the block on the main thread, where
+            // `with_app` expects to run.
+            NSWorkspace::sharedWorkspace()
+                .notificationCenter()
+                .addObserverForName_object_queue_usingBlock(
                     Some(name),
                     None,
                     Some(&NSOperationQueue::mainQueue()),
                     &block,
                 )
-            };
-            self.observers.push(token);
-        }
-        let activated = unsafe {
-            // SAFETY: the notification name constant is a static string exported by AppKit.
-            NSWorkspaceDidActivateApplicationNotification
-        };
-        let block = RcBlock::new(|_notification: NonNull<NSNotification>| {
-            let _ = with_app(App::front_app_changed);
-        });
-        let token = unsafe {
-            // SAFETY: as above, the block runs on the main thread.
-            center.addObserverForName_object_queue_usingBlock(
-                Some(activated),
-                None,
-                Some(&NSOperationQueue::mainQueue()),
-                &block,
-            )
         };
         self.observers.push(token);
     }
