@@ -1,7 +1,7 @@
 //! Narrow Accessibility (`AXUIElement`) wrappers used for window enumeration and control, and
 //! the observer that follows the front app's windows.
 
-use super::post_to_app;
+use super::runtime::post_to_app;
 use objc2_application_services::{AXError, AXObserver, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFRetained, CFRunLoop, CFRunLoopSource, CFString, CFType, Type,

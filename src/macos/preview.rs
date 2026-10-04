@@ -5,7 +5,7 @@
 //! milliseconds after the selection moves. Capturing the selected window again every 150 ms kept
 //! the window server and `replayd` busy for a picture that barely changes while the panel shows.
 
-use super::{MainThreadValue, post_to_app};
+use super::runtime::{MainThreadValue, post_to_app};
 use block2::RcBlock;
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;

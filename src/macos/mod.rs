@@ -32,7 +32,6 @@ use app::App;
 use cli::{activate_from_command_line, print_window_list};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use runtime::{MainThreadValue, post_to_app};
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::path::PathBuf;

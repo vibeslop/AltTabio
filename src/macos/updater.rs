@@ -3,7 +3,7 @@
 //! pinned release certificate. All of it blocks, so each job runs on a thread of its own and
 //! reports back through `post_to_app`.
 
-use super::post_to_app;
+use super::runtime::post_to_app;
 use alttabio::update::{Asset, Checked, Release, Update, Version, newest_update};
 use objc2::DowncastTarget;
 use objc2::rc::{Retained, autoreleasepool};
