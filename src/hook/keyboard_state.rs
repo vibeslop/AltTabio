@@ -27,6 +27,13 @@ pub(super) const MODIFIER_KEYS: [VIRTUAL_KEY; 8] = [
     VK_RWIN,
 ];
 
+/// Each unsided code reads as down while either side is, as in the system's own keyboard state.
+const SIDED_MODIFIERS: [(VIRTUAL_KEY, VIRTUAL_KEY, VIRTUAL_KEY); 3] = [
+    (VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
+    (VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
+    (VK_MENU, VK_LMENU, VK_RMENU),
+];
+
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 pub(super) struct ModifierObservation {
     time: Option<u32>,
@@ -109,13 +116,8 @@ impl KeyboardState {
             self.keys[usize::from(key.0)] = if down[index] { 0x80 } else { 0 };
             state.rebase_modifier(decode_virtual_key(u32::from(key.0)), down[index]);
         }
-        for (aggregate, left, right) in [
-            (VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
-            (VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
-            (VK_MENU, VK_LMENU, VK_RMENU),
-        ] {
-            self.keys[usize::from(aggregate.0)] =
-                (self.keys[usize::from(left.0)] | self.keys[usize::from(right.0)]) & 0x80;
+        for (aggregate, left, right) in SIDED_MODIFIERS {
+            self.combine_sides(aggregate, left, right);
         }
     }
 
@@ -128,16 +130,16 @@ impl KeyboardState {
         };
         let pressed = transition == KeyTransition::Pressed;
         *state = (*state & 1) | if pressed { 0x80 } else { 0 };
-        for (aggregate, left, right) in [
-            (VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
-            (VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
-            (VK_MENU, VK_LMENU, VK_RMENU),
-        ] {
+        for (aggregate, left, right) in SIDED_MODIFIERS {
             if virtual_key == u32::from(left.0) || virtual_key == u32::from(right.0) {
-                self.keys[usize::from(aggregate.0)] =
-                    (self.keys[usize::from(left.0)] | self.keys[usize::from(right.0)]) & 0x80;
+                self.combine_sides(aggregate, left, right);
             }
         }
+    }
+
+    fn combine_sides(&mut self, aggregate: VIRTUAL_KEY, left: VIRTUAL_KEY, right: VIRTUAL_KEY) {
+        self.keys[usize::from(aggregate.0)] =
+            (self.keys[usize::from(left.0)] | self.keys[usize::from(right.0)]) & 0x80;
     }
 
     pub(super) fn commit_forwarded(&mut self, virtual_key: u32, transition: KeyTransition) {
