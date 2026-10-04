@@ -1,7 +1,8 @@
 //! Win32 helpers that hold no application state: the module handle, monitors, message words,
-//! window user data, and wide strings.
+//! window user data, wide strings, and the COM apartment.
 
 use alttabio::dialog_layout::{Point, Rect};
+use std::marker::PhantomData;
 use std::mem::size_of;
 use windows::Win32::Foundation::{
     ERROR_SUCCESS, HINSTANCE, HWND, LPARAM, POINT, RECT, SetLastError,
@@ -10,6 +11,7 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
     MonitorFromWindow,
 };
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, GetCursorPos, SetWindowLongPtrW};
 use windows::core::{Error, Result};
@@ -130,6 +132,35 @@ pub(crate) fn set_window_user_data(window: HWND, value: isize) -> Result<()> {
 
 pub(crate) fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain([0]).collect()
+}
+
+/// The calling thread's membership in a single-threaded COM apartment, left on drop.
+pub(crate) struct ComApartment {
+    // COM must be uninitialized on the thread that initialized it, so the guard is not `Send`.
+    _thread: PhantomData<*const ()>,
+}
+
+impl ComApartment {
+    pub(crate) fn initialize() -> Result<Self> {
+        unsafe {
+            // SAFETY: the reserved pointer is null. Every success, including S_FALSE for a thread
+            // already in the apartment, is balanced when the returned guard drops.
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        }
+        Ok(Self {
+            _thread: PhantomData,
+        })
+    }
+}
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        unsafe {
+            // SAFETY: the guard exists only after a successful initialization and cannot leave
+            // the thread that performed it.
+            CoUninitialize();
+        }
+    }
 }
 
 #[cfg(test)]

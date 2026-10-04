@@ -120,30 +120,9 @@ fn repair_definition(definition: &ITaskDefinition, executable: &Path) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::win32::ComApartment;
     use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Security::DACL_SECURITY_INFORMATION;
-    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
-
-    struct Apartment;
-
-    impl Apartment {
-        fn initialize() -> Result<Self> {
-            unsafe {
-                // SAFETY: this test thread balances every successful initialization in Drop.
-                CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
-            }
-            Ok(Self)
-        }
-    }
-
-    impl Drop for Apartment {
-        fn drop(&mut self) {
-            unsafe {
-                // SAFETY: this guard drops on the same test thread that initialized COM.
-                CoUninitialize();
-            }
-        }
-    }
 
     fn definition(
         service: &ITaskService,
@@ -177,7 +156,7 @@ mod tests {
 
     #[test]
     fn legacy_definition_changes_only_the_runtime_limit() -> Result<()> {
-        let _apartment = Apartment::initialize()?;
+        let _apartment = ComApartment::initialize()?;
         let service = connect_scheduler()?;
         let executable = Path::new(r"C:\Apps & Tools\中文\AltTabio.exe");
         let definition = definition(&service, executable, "PT72H")?;
@@ -190,7 +169,7 @@ mod tests {
 
     #[test]
     fn unlimited_and_custom_limits_are_untouched() -> Result<()> {
-        let _apartment = Apartment::initialize()?;
+        let _apartment = ComApartment::initialize()?;
         let service = connect_scheduler()?;
         let executable = Path::new(r"C:\Program Files\AltTabio\AltTabio.exe");
         for limit in ["PT0S", "PT1H"] {
@@ -204,7 +183,7 @@ mod tests {
 
     #[test]
     fn a_task_for_another_installation_is_untouched() -> Result<()> {
-        let _apartment = Apartment::initialize()?;
+        let _apartment = ComApartment::initialize()?;
         let service = connect_scheduler()?;
         let definition = definition(&service, Path::new(r"C:\Old\AltTabio.exe"), "PT72H")?;
         let before = xml(&definition)?;
@@ -219,7 +198,7 @@ mod tests {
     #[test]
     fn extra_actions_and_password_logon_are_untouched() -> Result<()> {
         use windows::Win32::System::TaskScheduler::TASK_LOGON_PASSWORD;
-        let _apartment = Apartment::initialize()?;
+        let _apartment = ComApartment::initialize()?;
         let service = connect_scheduler()?;
         let executable = Path::new(r"C:\Program Files\AltTabio\AltTabio.exe");
         let extra_action = definition(&service, executable, "PT72H")?;
@@ -259,7 +238,7 @@ mod tests {
                 }
             }
         }
-        let _apartment = Apartment::initialize()?;
+        let _apartment = ComApartment::initialize()?;
         let service = connect_scheduler()?;
         let executable = std::env::current_exe()
             .map_err(|error| windows::core::Error::new(E_FAIL, error.to_string()))?;

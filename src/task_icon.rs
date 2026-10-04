@@ -172,40 +172,19 @@ fn window_icon(hwnd: HWND) -> isize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::win32::ComApartment;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
     use windows::Win32::UI::WindowsAndMessaging::{
         CopyIcon, CreateWindowExW, DestroyWindow, IDI_APPLICATION, LoadIconW, SendMessageW,
         WINDOW_EX_STYLE, WM_SETICON, WS_POPUP,
     };
     use windows::core::{Result, w};
 
-    struct TestApartment;
-
-    impl TestApartment {
-        fn new() -> Result<Self> {
-            // SAFETY: this test thread balances each successful initialization in Drop.
-            unsafe {
-                CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
-            }
-            Ok(Self)
-        }
-    }
-
-    impl Drop for TestApartment {
-        fn drop(&mut self) {
-            // SAFETY: the guard remains on the thread whose COM initialization it owns.
-            unsafe {
-                CoUninitialize();
-            }
-        }
-    }
-
-    struct TestWindow(HWND, TestApartment);
+    struct TestWindow(HWND, ComApartment);
 
     impl TestWindow {
         fn new() -> Result<Self> {
-            let apartment = TestApartment::new()?;
+            let apartment = ComApartment::initialize()?;
             // SAFETY: STATIC is a built-in class, buffers are static, and this thread owns the
             // hidden test window until TestWindow::drop. No custom callback is installed.
             unsafe {
@@ -317,7 +296,7 @@ mod tests {
     #[test]
     #[ignore = "requires an open Windows Security window"]
     fn running_security_has_task_icon() -> Result<()> {
-        let _apartment = TestApartment::new()?;
+        let _apartment = ComApartment::initialize()?;
         let tasks = crate::task_query::enumerate_switchable_windows(
             &alttabio::settings::Settings::default(),
         )?;

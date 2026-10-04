@@ -23,7 +23,7 @@ use crate::startup;
 use crate::task_icon::TaskIcons;
 use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
-use crate::win32::{module_instance, wide};
+use crate::win32::{ComApartment, module_instance, wide};
 use alttabio::failure_run::FailureRun;
 use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
@@ -37,7 +37,6 @@ use shell_dismissal::PendingShellDismissal;
 use std::cell::RefCell;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, WPARAM};
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW,
     GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_OK,
@@ -169,28 +168,6 @@ pub fn run(
 
 pub fn show_fatal_error(message: &str) {
     show_error_box(None, message);
-}
-
-struct ComApartment;
-
-impl ComApartment {
-    fn initialize() -> Result<Self> {
-        unsafe {
-            // SAFETY: the reserved pointer is null and this UI thread balances successful
-            // initialization in ComApartment::drop.
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
-        }
-        Ok(Self)
-    }
-}
-
-impl Drop for ComApartment {
-    fn drop(&mut self) {
-        unsafe {
-            // SAFETY: this guard is dropped on the same thread that successfully initialized COM.
-            CoUninitialize();
-        }
-    }
 }
 
 #[allow(
