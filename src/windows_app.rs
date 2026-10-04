@@ -555,35 +555,7 @@ impl App {
                     if message == crate::hook::WM_HOOK_HOTKEY_ACTION
                         && matches!(action, InputAction::Switch(_))
                     {
-                        // The actual Tab was delivered as a registered hotkey. Taking focus
-                        // now dismisses the shell naturally, without injecting Escape first.
-                        let pending = self.pending_shell.take();
-                        if pending.is_some() {
-                            self.kill_shell_dismissal_timer();
-                        }
-                        let pending = pending.filter(|pending| {
-                            let current = self
-                                .hooks
-                                .as_ref()
-                                .is_some_and(|hooks| hooks.action_is_current(pending.origin));
-                            if !current {
-                                // A new physical gesture must not replay actions from before
-                                // a desktop or modal boundary, or inherit its selection.
-                                self.session.hide();
-                            }
-                            current
-                        });
-                        DeferredSwitch::resume_with_hotkey(
-                            pending.map(|pending| pending.input),
-                            action,
-                            |step| match step {
-                                SwitchResume::FocusOverlay => self.focus_overlay(),
-                                SwitchResume::Replay(action) => {
-                                    self.apply_input_action_with_reset(action, false);
-                                }
-                                SwitchResume::Input(action) => self.apply_input_action(action),
-                            },
-                        );
+                        self.resume_shell_switch_with_hotkey(action);
                     } else {
                         self.handle_hook_input(action, wparam);
                     }
@@ -877,6 +849,34 @@ impl App {
             return;
         }
         self.preview_shell_switch();
+    }
+
+    fn resume_shell_switch_with_hotkey(&mut self, action: InputAction) {
+        // The actual Tab was delivered as a registered hotkey. Taking focus now dismisses the
+        // shell naturally, without injecting Escape first.
+        let pending = self.pending_shell.take();
+        if pending.is_some() {
+            self.kill_shell_dismissal_timer();
+        }
+        let pending = pending.filter(|pending| {
+            let current = self
+                .hooks
+                .as_ref()
+                .is_some_and(|hooks| hooks.action_is_current(pending.origin));
+            if !current {
+                // A new physical gesture must not replay actions from before a desktop or modal
+                // boundary, or inherit its selection.
+                self.session.hide();
+            }
+            current
+        });
+        DeferredSwitch::resume_with_hotkey(pending.map(|pending| pending.input), action, |step| {
+            match step {
+                SwitchResume::FocusOverlay => self.focus_overlay(),
+                SwitchResume::Replay(action) => self.apply_input_action_with_reset(action, false),
+                SwitchResume::Input(action) => self.apply_input_action(action),
+            }
+        });
     }
 
     fn preview_shell_switch(&mut self) {
