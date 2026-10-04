@@ -1,4 +1,5 @@
-use super::{App, AppHost, high_word_isize, low_word_isize};
+use super::{App, AppHost};
+use crate::win32::point_from_lparam;
 use crate::window_commands::show_menu as show_window_command_menu;
 use alttabio::input::InputAction;
 use alttabio::overlay_pointer::{close_target_for_hit, select_hovered_position};
@@ -212,7 +213,6 @@ impl App {
 }
 
 fn mouse_coordinates(lparam: LPARAM) -> (i32, i32) {
-    let x = low_word_isize(lparam.0).cast_signed();
-    let y = high_word_isize(lparam.0).cast_signed();
-    (i32::from(x), i32::from(y))
+    let point = point_from_lparam(lparam);
+    (point.x, point.y)
 }

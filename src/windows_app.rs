@@ -415,22 +415,3 @@ fn run_message_loop() -> Result<()> {
         }
     }
 }
-
-// Only mouse.rs splits LPARAM through these; elsewhere the words come from `crate::win32`.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "Win32 packs two unsigned 16-bit values into LPARAM and WPARAM words"
-)]
-const fn low_word_isize(value: isize) -> u16 {
-    value as u16
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "Win32 packs two unsigned 16-bit values into LPARAM and WPARAM words"
-)]
-const fn high_word_isize(value: isize) -> u16 {
-    (value >> 16) as u16
-}
