@@ -255,20 +255,8 @@ impl Renderer {
         let height = client.bottom.saturating_sub(client.top) as f32 / scale;
         let layout = for_compact_list(options.compact_list);
         let visible_rows = layout.visible_row_count(height);
-        let list_top = layout.list_top();
         let start = switcher.visible_range(visible_rows).start;
-        let icon_size = if options.large_icons {
-            layout.large_icon_size
-        } else {
-            layout.small_icon_size
-        };
-        let leading_width = if options.show_numbers {
-            layout.number_width
-        } else {
-            0.0
-        };
-        let icon_left =
-            layout.outer_padding + leading_width + ((layout.icon_slot_width - icon_size) / 2.0);
+        let icon_pixels = (layout.icon_size(options.large_icons) * scale).round() as i32;
 
         for (visible_position, task) in switcher
             .positioned_visible_tasks()
@@ -279,20 +267,22 @@ impl Renderer {
             if task.icon_handle == 0 {
                 continue;
             }
-            let row = visible_index - start;
-            let top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-            let icon_top = top + ((layout.row_height - icon_size) / 2.0);
+            let bounds = layout.icon_bounds(
+                visible_index - start,
+                options.show_numbers,
+                options.large_icons,
+            );
             let icon = HICON(task.icon_handle as *mut c_void);
             let result = unsafe {
                 // SAFETY: hdc is the current BeginPaint DC, the HICON is borrowed from a live
                 // window/class snapshot, and all pixel dimensions are positive and on-screen.
                 DrawIconEx(
                     hdc,
-                    (icon_left * scale).round() as i32,
-                    (icon_top * scale).round() as i32,
+                    (bounds.left * scale).round() as i32,
+                    (bounds.top * scale).round() as i32,
                     icon,
-                    (icon_size * scale).round() as i32,
-                    (icon_size * scale).round() as i32,
+                    icon_pixels,
+                    icon_pixels,
                     0,
                     None,
                     DI_NORMAL,
@@ -455,7 +445,6 @@ fn draw_switcher(
     let layout = for_compact_list(options.compact_list);
     let list_width = layout.list_width(size.width, scale);
     let visible_rows = layout.visible_row_count(size.height);
-    let list_top = layout.list_top();
     let start = switcher.visible_range(visible_rows).start;
     let selected_handle = switcher.selected_task().map(|task| task.window_handle);
 
@@ -515,14 +504,7 @@ fn draw_switcher(
             .take(visible_rows)
         {
             let visible_index = visible_position.saturating_sub(1);
-            let row = visible_index - start;
-            let top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-            let bounds = LogicalRect {
-                left: layout.outer_padding,
-                top,
-                right: list_width,
-                bottom: top + layout.row_height,
-            };
+            let bounds = layout.row_bounds(visible_index - start, list_width);
             if selected_handle == Some(task.window_handle) {
                 target.FillRoundedRectangle(
                     &rounded_rect(bounds, layout.selection_radius),
@@ -553,14 +535,7 @@ fn draw_switcher(
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
             }
-            let content_left = bounds.left
-                + if options.show_numbers {
-                    layout.number_width
-                } else {
-                    0.0
-                }
-                + layout.icon_slot_width
-                + layout.icon_text_gap;
+            let content_left = layout.text_left(options.show_numbers);
             let text_layout = task_text_vertical_layout(
                 bounds.top,
                 bounds.bottom,

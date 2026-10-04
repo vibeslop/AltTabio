@@ -1,6 +1,6 @@
 //! Which row of the overlay's task list, or which close button, a point lands on.
 
-use crate::overlay_layout::{LogicalRect, for_compact_list, layout_scale};
+use crate::overlay_layout::{for_compact_list, layout_scale};
 use crate::switcher::Switcher;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,12 +43,6 @@ pub fn hit_test_pixels(
     )
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    reason = "logical coordinates are bounded to the small on-screen task list"
-)]
 fn hit_test_at_scale(
     switcher: &mut Switcher,
     client_width: f32,
@@ -60,8 +54,7 @@ fn hit_test_at_scale(
 ) -> Option<TaskListHit> {
     let layout = for_compact_list(compact_list);
     let list_width = layout.list_width(client_width, scale);
-    let list_top = layout.list_top();
-    if x < layout.outer_padding || x >= list_width || y < list_top {
+    if x < layout.outer_padding || x >= list_width || y < layout.list_top() {
         return None;
     }
 
@@ -74,15 +67,11 @@ fn hit_test_at_scale(
     }
     switcher.pin_visible_range(visible_rows);
 
-    let row_top = list_top + (row as f32 * (layout.row_height + layout.row_gap));
-    let row_bounds = LogicalRect {
-        left: layout.outer_padding,
-        top: row_top,
-        right: list_width,
-        bottom: row_top + layout.row_height,
-    };
     let selected_position = switcher.selected_visible_index().map(|index| index + 1);
-    if selected_position == Some(position) && layout.close_button_bounds(row_bounds).contains(x, y)
+    if selected_position == Some(position)
+        && layout
+            .close_button_bounds(layout.row_bounds(row, list_width))
+            .contains(x, y)
     {
         Some(TaskListHit::CloseButton(position))
     } else {
@@ -347,12 +336,7 @@ mod tests {
         assert_near(scale, 1.75);
 
         let layout = for_compact_list(false);
-        let row_bounds = LogicalRect {
-            left: layout.outer_padding,
-            top: layout.list_top(),
-            right: layout.list_width(900.0, scale),
-            bottom: layout.list_top() + layout.row_height,
-        };
+        let row_bounds = layout.row_bounds(0, layout.list_width(900.0, scale));
         let hit_target = layout.close_button_bounds(row_bounds);
         let glyph = close_glyph_geometry(hit_target, false, scale);
         let center_x = f32::midpoint(hit_target.left, hit_target.right);

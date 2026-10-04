@@ -96,6 +96,58 @@ impl OverlayLayout {
     }
 
     #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a visible row index is a small integer represented exactly as f32"
+    )]
+    pub fn row_top(self, row: usize) -> f32 {
+        self.list_top() + (row as f32 * (self.row_height + self.row_gap))
+    }
+
+    #[must_use]
+    pub fn row_bounds(self, row: usize, list_width: f32) -> LogicalRect {
+        let top = self.row_top(row);
+        LogicalRect {
+            left: self.outer_padding,
+            top,
+            right: list_width,
+            bottom: top + self.row_height,
+        }
+    }
+
+    #[must_use]
+    pub const fn icon_size(self, large_icons: bool) -> f32 {
+        if large_icons {
+            self.large_icon_size
+        } else {
+            self.small_icon_size
+        }
+    }
+
+    #[must_use]
+    pub fn icon_slot_left(self, show_numbers: bool) -> f32 {
+        self.outer_padding + if show_numbers { self.number_width } else { 0.0 }
+    }
+
+    #[must_use]
+    pub fn icon_bounds(self, row: usize, show_numbers: bool, large_icons: bool) -> LogicalRect {
+        let size = self.icon_size(large_icons);
+        let left = self.icon_slot_left(show_numbers) + ((self.icon_slot_width - size) / 2.0);
+        let top = self.row_top(row) + ((self.row_height - size) / 2.0);
+        LogicalRect {
+            left,
+            top,
+            right: left + size,
+            bottom: top + size,
+        }
+    }
+
+    #[must_use]
+    pub fn text_left(self, show_numbers: bool) -> f32 {
+        self.icon_slot_left(show_numbers) + self.icon_slot_width + self.icon_text_gap
+    }
+
+    #[must_use]
     pub fn close_button_bounds(self, row_bounds: LogicalRect) -> LogicalRect {
         let top = row_bounds.top + ((self.row_height - self.close_button_size) / 2.0);
         LogicalRect {
@@ -316,6 +368,69 @@ mod tests {
         assert!(((layout.row_height + layout.row_gap) * scale - 80.5).abs() < 0.01);
         assert!((layout.large_icon_size * scale - 49.0).abs() < 0.01);
         assert!(((list_right + layout.outer_padding) * scale - 679.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn drawn_rows_are_the_rows_the_pointer_finds() {
+        for compact in [false, true] {
+            let layout = for_compact_list(compact);
+            let rows = layout.visible_row_count(600.0);
+            for row in 0..rows {
+                let bounds = layout.row_bounds(row, 300.0);
+                assert_eq!(layout.visible_row_at(600.0, bounds.top), Some(row));
+                assert_eq!(layout.visible_row_at(600.0, bounds.bottom - 0.5), Some(row));
+                assert_eq!(layout.visible_row_at(600.0, bounds.bottom), None);
+            }
+            assert_eq!(
+                layout.visible_row_at(600.0, layout.row_bounds(rows, 300.0).top),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn rows_step_down_from_the_list_top() {
+        let compact = for_compact_list(true);
+        assert_eq!(
+            compact.row_bounds(2, 243.2),
+            LogicalRect {
+                left: 18.0,
+                top: 110.0,
+                right: 243.2,
+                bottom: 154.0,
+            }
+        );
+
+        let roomy = for_compact_list(false);
+        assert_close(roomy.row_top(0), 20.0);
+        assert_close(roomy.row_top(3), 212.0);
+    }
+
+    #[test]
+    fn icons_center_in_their_slot_and_titles_start_after_it() {
+        let compact = for_compact_list(true);
+        assert_eq!(
+            compact.icon_bounds(1, true, true),
+            LogicalRect {
+                left: 52.0,
+                top: 72.0,
+                right: 80.0,
+                bottom: 100.0,
+            }
+        );
+        assert_close(compact.text_left(true), 87.0);
+
+        let roomy = for_compact_list(false);
+        assert_eq!(
+            roomy.icon_bounds(0, false, false),
+            LogicalRect {
+                left: 32.0,
+                top: 39.0,
+                right: 52.0,
+                bottom: 59.0,
+            }
+        );
+        assert_close(roomy.text_left(false), 68.0);
     }
 
     #[test]
