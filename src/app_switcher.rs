@@ -51,6 +51,36 @@ impl WindowHistory {
             .position(|known| *known == window)
             .unwrap_or(usize::MAX)
     }
+
+    /// Orders `windows`, given in stacking order, by focus history; the stable sort keeps
+    /// stacking order for windows the history has not seen.
+    pub fn sort(&self, windows: &mut [isize]) {
+        windows.sort_by_key(|window| self.rank(*window));
+    }
+}
+
+// Activation history kept for ordering the strip; apps activated longer ago than this follow
+// in window order, which is what they would get anyway.
+const RECENT_APPS_KEPT: usize = 64;
+
+/// Process ids in the order their apps were last activated, the frontmost first.
+#[derive(Debug, Default)]
+pub struct RecentApps {
+    apps: Vec<u32>,
+}
+
+impl RecentApps {
+    /// Records `pid` as the app in front.
+    pub fn note(&mut self, pid: u32) {
+        self.apps.retain(|known| *known != pid);
+        self.apps.insert(0, pid);
+        self.apps.truncate(RECENT_APPS_KEPT);
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[u32] {
+        &self.apps
+    }
 }
 
 /// A running app with the windows it has open.
@@ -584,6 +614,33 @@ mod tests {
         history.note(Some(2), &[2, 1, 4]);
         assert_eq!(ranks(&history, [2, 1, 3]), [0, 1, usize::MAX]);
         assert_eq!(history.rank(4), usize::MAX);
+    }
+
+    #[test]
+    fn windows_sort_by_focus_and_unseen_ones_keep_their_stacking_order() {
+        let mut history = WindowHistory::default();
+        history.note(None, &[3, 1, 2]);
+        history.note(Some(2), &[3, 1, 2]);
+
+        let mut windows = [5, 1, 2, 4, 3];
+        history.sort(&mut windows);
+
+        assert_eq!(windows, [2, 3, 1, 5, 4]);
+    }
+
+    #[test]
+    fn the_app_in_front_moves_to_the_head_of_a_bounded_history() {
+        let mut recent = RecentApps::default();
+        for pid in [1, 2, 3, 1] {
+            recent.note(pid);
+        }
+        assert_eq!(recent.as_slice(), [1, 3, 2]);
+
+        for pid in 10..100 {
+            recent.note(pid);
+        }
+        assert_eq!(recent.as_slice().len(), RECENT_APPS_KEPT);
+        assert!(!recent.as_slice().contains(&2));
     }
 
     #[test]

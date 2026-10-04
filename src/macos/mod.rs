@@ -21,7 +21,8 @@ mod window_list;
 
 use crate::settings_io::SettingsStore;
 use alttabio::app_switcher::{
-    Action, AppEntry, AppSwitcher, Effect, Target, WindowEntry, WindowHistory, group_by_app,
+    Action, AppEntry, AppSwitcher, Effect, RecentApps, Target, WindowEntry, WindowHistory,
+    group_by_app,
 };
 use alttabio::input::WindowCommand;
 use alttabio::panel_layout::{Layout, Shown, WindowState, more_note, scroll_into_view};
@@ -75,9 +76,6 @@ const PREVIEWS_KEPT: usize = 8;
 const REVEAL_SECONDS: f64 = 0.12;
 // How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
-// Activation history kept for ordering the strip; apps activated longer ago than this follow
-// in window order, which is what they would get anyway.
-const RECENT_APPS_KEPT: usize = 64;
 // The first automatic update check waits a minute after the start, so a login does not ask
 // GitHub before the network is up. A failed check tries again in an hour, and any other outcome
 // waits a day.
@@ -388,8 +386,7 @@ pub struct App {
     windowless: Vec<WindowlessApp>,
     order: Vec<u32>,
     icons: HashMap<i32, Retained<NSImage>>,
-    // Process ids in the order their apps were last activated, the frontmost first.
-    recent_apps: Vec<u32>,
+    recent_apps: RecentApps,
     // Windows in the order they last had focus, which orders each app's windows.
     window_history: WindowHistory,
     // The most apps and the longest window list this session has listed. The panel is sized
@@ -463,6 +460,10 @@ impl App {
         preview_mode: bool,
     ) -> Self {
         let hotkey_settings = hotkey_settings(&settings);
+        let mut recent_apps = RecentApps::default();
+        if let Some(pid) = frontmost_pid() {
+            recent_apps.note(pid);
+        }
         Self {
             mtm,
             settings,
@@ -482,7 +483,7 @@ impl App {
             windowless: Vec::new(),
             order: Vec::new(),
             icons: HashMap::new(),
-            recent_apps: frontmost_pid().into_iter().collect(),
+            recent_apps,
             window_history: WindowHistory::default(),
             extent: (0, 0),
             tile_start: 0,
@@ -819,24 +820,18 @@ impl App {
 
     /// Records the front app as the most recently used one, for the strip's order.
     fn note_front_app(&mut self) {
-        let Some(pid) = frontmost_pid() else {
-            return;
-        };
-        self.recent_apps.retain(|known| *known != pid);
-        self.recent_apps.insert(0, pid);
-        self.recent_apps.truncate(RECENT_APPS_KEPT);
+        if let Some(pid) = frontmost_pid() {
+            self.recent_apps.note(pid);
+        }
     }
 
     /// The listed windows grouped by app, the most recently used app first.
     fn app_entries(&self) -> Vec<AppEntry> {
-        // Focus history first, then stacking order for windows it has not seen.
-        let mut order = self.order.clone();
-        order.sort_by_key(|id| {
-            isize::try_from(*id).map_or(usize::MAX, |handle| self.window_history.rank(handle))
-        });
+        let mut order = self.listed_windows();
+        self.window_history.sort(&mut order);
         let windows = order
             .iter()
-            .filter_map(|id| self.records.iter().find(|record| record.window_id == *id))
+            .filter_map(|handle| self.record(*handle))
             .map(|record| WindowEntry {
                 handle: isize::try_from(record.window_id).unwrap_or_default(),
                 process: record_process(record),
@@ -856,7 +851,7 @@ impl App {
                 )
             })
             .collect::<Vec<_>>();
-        group_by_app(&windows, &self.recent_apps, &windowless)
+        group_by_app(&windows, self.recent_apps.as_slice(), &windowless)
     }
 
     fn record(&self, window_handle: isize) -> Option<&WindowRecord> {
