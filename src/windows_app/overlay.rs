@@ -105,7 +105,7 @@ impl App {
     pub(super) fn paint(&mut self) {
         let mut paint = PAINTSTRUCT::default();
         let dc = unsafe {
-            // SAFETY: `paint` is writable and BeginPaint/EndPaint are paired for this WM_PAINT.
+            // SAFETY: the HWND is live during WM_PAINT and `paint` is a writable PAINTSTRUCT.
             BeginPaint(self.hwnd, &raw mut paint)
         };
         // Only a successful BeginPaint validates the update region, so after a failure WM_PAINT
@@ -128,12 +128,13 @@ impl App {
             eprintln!("Could not render the overlay: {error}");
         }
         // Direct2D draws through its own window target; only the GDI icons need the paint DC.
-        if !dc.is_invalid() {
-            self.renderer
-                .draw_icons(self.hwnd, dc, switcher, render_options);
+        if begin_failed {
+            return;
         }
+        self.renderer
+            .draw_icons(self.hwnd, dc, switcher, render_options);
         unsafe {
-            // SAFETY: this balances the BeginPaint call above for the same PAINTSTRUCT.
+            // SAFETY: paint was filled by the successful BeginPaint above for this hwnd.
             // EndPaint is documented to always return nonzero, so there is no failure to handle.
             let _always_nonzero = EndPaint(self.hwnd, &raw const paint);
         }
