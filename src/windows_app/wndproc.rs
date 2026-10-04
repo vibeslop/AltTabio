@@ -37,7 +37,13 @@ pub(super) unsafe extern "system" fn window_proc(
             };
             app.hwnd = hwnd;
             drop(app);
-            if let Err(error) = set_window_user_data(hwnd, host as isize) {
+            let attached = unsafe {
+                // SAFETY: hwnd is the window being created with this procedure, which reads its
+                // user data as an AppHost pointer, and `run` keeps host allocated until
+                // WM_NCDESTROY below has cleared it.
+                set_window_user_data(hwnd, host as isize)
+            };
+            if let Err(error) = attached {
                 // Failing creation lets `run` free the host instead of running a window that
                 // can never reach it.
                 eprintln!("Could not attach AltTabio to its window: {error}");
@@ -77,7 +83,11 @@ pub(super) unsafe extern "system" fn window_proc(
         }
         if message == WM_NCDESTROY {
             // Later messages must not reach the host, which `run` frees once the window is gone.
-            if let Err(error) = set_window_user_data(hwnd, 0) {
+            let detached = unsafe {
+                // SAFETY: zero is always a valid value, and this procedure reads it as no host.
+                set_window_user_data(hwnd, 0)
+            };
+            if let Err(error) = detached {
                 eprintln!("Could not detach AltTabio from its window: {error}");
             }
             return None;

@@ -106,17 +106,23 @@ pub(crate) fn point_from_lparam(lparam: LPARAM) -> Point {
     )
 }
 
-/// Stores `value` as `window`'s user data. A window procedure reads it back as a pointer to its
-/// state, so `value` must be zero or that state, kept alive until `WM_NCDESTROY` clears it.
-pub(crate) fn set_window_user_data(window: HWND, value: isize) -> Result<()> {
+/// Stores `value` as `window`'s user data.
+///
+/// # Safety
+///
+/// `window` must be a window whose procedure reads its user data as a pointer to some type `T`,
+/// and `value` must be zero or a pointer to a `T` that stays valid until the procedure clears
+/// the user data at `WM_NCDESTROY`. A stale handle that another window has reused does not
+/// fail here, so it must not be passed either.
+pub(crate) unsafe fn set_window_user_data(window: HWND, value: isize) -> Result<()> {
     unsafe {
         // SAFETY: SetLastError only writes this thread's last-error value.
         SetLastError(ERROR_SUCCESS);
     }
     let previous = unsafe {
         // SAFETY: the call takes no pointers and stores value as an integer without reading
-        // through it; a stale window handle comes back as an error. Dereferencing the value is
-        // left to the window procedure that reads it back.
+        // through it. It cannot tell a reused handle from the window the caller meant, so the
+        // caller's contract is what makes the procedure that reads value back expect it.
         SetWindowLongPtrW(window, GWLP_USERDATA, value)
     };
     // Zero is also what a successful call returns when the previous value was zero, so only a

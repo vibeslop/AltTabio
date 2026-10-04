@@ -390,7 +390,12 @@ unsafe extern "system" fn dialog_window_proc<S: DialogWindow>(
             }
             WM_NCDESTROY => {
                 host.done.set(true);
-                if let Err(error) = set_window_user_data(hwnd, 0) {
+                let detached = unsafe {
+                    // SAFETY: zero is always a valid value, and this procedure reads it as no
+                    // host.
+                    set_window_user_data(hwnd, 0)
+                };
+                if let Err(error) = detached {
                     eprintln!(
                         "Could not detach {} from its closing window: {error}",
                         S::FRAME.name
@@ -439,7 +444,13 @@ fn attach_host<S: DialogWindow>(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
     };
     state.attach(hwnd);
     drop(state);
-    if let Err(error) = set_window_user_data(hwnd, host as isize) {
+    let attached = unsafe {
+        // SAFETY: hwnd is the window being created with dialog_window_proc::<S>, which reads its
+        // user data as a DialogHost<S> pointer, and ModalDialog keeps host allocated until
+        // WM_NCDESTROY has cleared it.
+        set_window_user_data(hwnd, host as isize)
+    };
+    if let Err(error) = attached {
         eprintln!("Could not attach {} to its window: {error}", S::FRAME.name);
         return REFUSE_CREATION;
     }
