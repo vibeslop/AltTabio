@@ -1,4 +1,5 @@
-//! The close button on the selected window row, as both platforms' overlays draw it.
+//! How the close button on the selected window row draws: at rest, under the pointer, or held
+//! down.
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CloseButtonVisualState {
