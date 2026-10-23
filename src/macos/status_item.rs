@@ -5,9 +5,14 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightSemibold,
+    NSForegroundColorAttributeName, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSStringDrawing,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSAttributedStringKey, NSDictionary, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSString,
+};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,28 +188,53 @@ fn menu_item(
     item
 }
 
-/// The `AltTabio` mark as a template glyph: two overlapping window outlines.
+/// The `AltTabio` mark as a template glyph: the Tab key, outlined around its legend, the way the
+/// menu bar shows the input source.
 fn template_icon() -> Retained<NSImage> {
+    const SIZE: NSSize = NSSize::new(25.0, 16.0);
+    const STROKE: f64 = 1.25;
     let handler = RcBlock::new(|_rect: NSRect| -> Bool {
-        NSColor::blackColor().setStroke();
-        let back = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-            NSRect::new(NSPoint::new(1.5, 5.5), NSSize::new(10.0, 8.0)),
-            2.0,
-            2.0,
+        let ink = NSColor::blackColor();
+        ink.setStroke();
+        let key = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+            NSRect::new(
+                NSPoint::new(STROKE / 2.0, STROKE / 2.0),
+                NSSize::new(SIZE.width - STROKE, SIZE.height - STROKE),
+            ),
+            4.0,
+            4.0,
         );
-        back.setLineWidth(1.5);
-        back.stroke();
-        NSColor::blackColor().setFill();
-        let front = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-            NSRect::new(NSPoint::new(6.5, 1.5), NSSize::new(10.0, 8.0)),
-            2.0,
-            2.0,
-        );
-        front.fill();
+        key.setLineWidth(STROKE);
+        key.stroke();
+
+        let font = unsafe {
+            // SAFETY: the font weight constant is a static value exported by AppKit.
+            NSFont::systemFontOfSize_weight(10.0, NSFontWeightSemibold)
+        };
+        let keys: [&NSAttributedStringKey; 2] = unsafe {
+            // SAFETY: the attribute name constants are static strings exported by AppKit.
+            [NSFontAttributeName, NSForegroundColorAttributeName]
+        };
+        let objects: [&AnyObject; 2] = [&font, &ink];
+        let attributes = NSDictionary::from_slices(&keys, &objects);
+        let legend = NSString::from_str("tab");
+        let width = unsafe {
+            // SAFETY: the attributes dictionary is live for the synchronous measurement.
+            legend.sizeWithAttributes(Some(&attributes)).width
+        };
+        // "tab" has no descender, so its ink runs from the baseline up about the cap height;
+        // centering that, rather than the line box, keeps the word in the middle of the key.
+        let baseline = f64::midpoint(SIZE.height, font.capHeight());
+        unsafe {
+            // SAFETY: the drawing handler runs with the image's graphics context current.
+            legend.drawAtPoint_withAttributes(
+                NSPoint::new((SIZE.width - width) / 2.0, baseline - font.ascender()),
+                Some(&attributes),
+            );
+        }
         Bool::YES
     });
-    let image =
-        NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(18.0, 15.0), true, &handler);
+    let image = NSImage::imageWithSize_flipped_drawingHandler(SIZE, true, &handler);
     image.setTemplate(true);
     image
 }
