@@ -37,6 +37,9 @@ pub enum TrayAction {
 
 pub struct TrayIcon {
     data: NOTIFYICONDATAW,
+    /// Owns the icon in `data.hIcon`. Fields drop after `Drop::drop` deletes the notification
+    /// icon, so the shell has let go of it by then.
+    icon: app_icon::TrayImage,
     menu: HMENU,
     instance: HINSTANCE,
     recreation_message: u32,
@@ -97,7 +100,7 @@ impl TrayIcon {
             uID: 1,
             uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage: WM_TRAY_CALLBACK,
-            hIcon: icon,
+            hIcon: icon.handle(),
             szTip: tip,
             ..NOTIFYICONDATAW::default()
         };
@@ -107,6 +110,7 @@ impl TrayIcon {
         }
         Ok(Self {
             data,
+            icon,
             menu,
             instance,
             recreation_message,
@@ -162,13 +166,15 @@ impl TrayIcon {
     pub fn set_icon(&mut self, icon: IconColor) -> Result<()> {
         let loaded = app_icon::load_tray(self.instance, icon)?;
         let previous = self.data.hIcon;
-        self.data.hIcon = loaded;
+        self.data.hIcon = loaded.handle();
         let updated = unsafe {
             // SAFETY: data identifies the live notification icon and the shell copies the new
-            // shared resource handle during this synchronous update.
+            // icon during this synchronous update.
             Shell_NotifyIconW(NIM_MODIFY, &raw const self.data).as_bool()
         };
         if updated {
+            // The shell holds its own copy now, so replacing the guard releases the previous icon.
+            self.icon = loaded;
             Ok(())
         } else {
             self.data.hIcon = previous;

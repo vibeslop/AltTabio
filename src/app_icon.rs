@@ -1,7 +1,8 @@
 use alttabio::settings::IconColor;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    HICON, ICON_BIG, ICON_SMALL, LoadIconW, SendMessageW, WM_SETICON,
+    DestroyIcon, GetSystemMetrics, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR,
+    LoadIconW, LoadImageW, SM_CXSMICON, SendMessageW, WM_SETICON,
 };
 use windows::core::{PCWSTR, Result};
 
@@ -37,8 +38,45 @@ pub fn load_app(instance: HINSTANCE, icon: IconColor) -> Result<HICON> {
     load(instance, app_resource_id(icon))
 }
 
-pub fn load_tray(instance: HINSTANCE, icon: IconColor) -> Result<HICON> {
-    load(instance, tray_resource_id(icon))
+/// A tray icon loaded at the notification area's size. It is not a shared resource, so this guard
+/// destroys it.
+pub struct TrayImage(HICON);
+
+impl TrayImage {
+    pub const fn handle(&self) -> HICON {
+        self.0
+    }
+}
+
+impl Drop for TrayImage {
+    fn drop(&mut self) {
+        // SAFETY: this guard uniquely owns an icon LoadImageW created without LR_SHARED.
+        if let Err(error) = unsafe { DestroyIcon(self.0) } {
+            eprintln!("Could not release the tray icon: {error}");
+        }
+    }
+}
+
+/// `LoadIconW` would load the large icon size, which the notification area then shrinks; loading
+/// at the small icon size picks the image drawn for the tray at the system's scale.
+pub fn load_tray(instance: HINSTANCE, icon: IconColor) -> Result<TrayImage> {
+    let size = unsafe {
+        // SAFETY: GetSystemMetrics reads a system value and has no pointer preconditions.
+        GetSystemMetrics(SM_CXSMICON)
+    };
+    let image = unsafe {
+        // SAFETY: app.rc embeds every mapped integer resource, and without LR_SHARED the returned
+        // icon belongs to the caller, which hands it to TrayImage.
+        LoadImageW(
+            Some(instance),
+            PCWSTR(tray_resource_id(icon) as *const u16),
+            IMAGE_ICON,
+            size,
+            size,
+            LR_DEFAULTCOLOR,
+        )
+    }?;
+    Ok(TrayImage(HICON(image.0)))
 }
 
 pub fn apply_to_window(hwnd: HWND, instance: HINSTANCE, icon: IconColor) -> Result<()> {
