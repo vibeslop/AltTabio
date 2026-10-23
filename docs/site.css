@@ -91,7 +91,7 @@ code{ font-family: var(--mono); }
 @media (hover: hover) and (pointer: fine){ .stage .btn:hover{ background: oklch(0.85 0 0); } }
 .nav{ position: relative; z-index: 2; display: flex; align-items: center; gap: 8px 28px; min-height: 76px; }
 .brand{ display: flex; align-items: center; gap: 10px; min-height: 44px; margin-inline-end: auto; font: 600 1.0625rem/1 var(--display); letter-spacing: -0.01em; text-decoration: none; }
-.brand .mark{ width: 24px; height: 24px; color: var(--stage-text); overflow: visible; }
+.brand .mark{ width: 30px; height: 19.2px; color: var(--stage-text); overflow: visible; }
 .navlinks{ display: flex; gap: 4px; }
 .navlinks a{ display: inline-flex; align-items: center; min-height: 40px; padding: 0 10px; font-size: 0.9375rem; color: var(--stage-text-2); text-decoration: none; transition: color 150ms ease-out; }
 .navlinks a[aria-current="page"]{ color: var(--stage-text); }
