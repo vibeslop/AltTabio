@@ -76,16 +76,9 @@ printf 'APPL????' > "$contents/PkgInfo"
 # The notices ship inside the bundle because the bundle is all that an install keeps.
 cp LICENSE THIRD_PARTY_LICENSES.md "$contents/Resources/"
 
-# The .icns is generated from the product icon with the tools that ship with macOS.
-iconset=target/mac/AltTabio.iconset
-rm -rf "$iconset"
-mkdir -p "$iconset"
-for size in 16 32 128 256; do
-    sips -z $size $size docs/alttabio-icon.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    sips -z $double $double docs/alttabio-icon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$iconset" -o "$contents/Resources/AltTabio.icns"
+# compile-icon.sh compiles the icon with Xcode's actool; the bundle takes the committed result, so
+# a build still needs only the Command Line Tools.
+cp assets/mac/icon/Assets.car assets/mac/icon/AltTabio.icns "$contents/Resources/"
 
 # macOS matches the grants against the certificate's SHA-1 hash, so codesign gets the hash. It
 # offers only certificates trusted for code signing, at least on macOS 26, so an untrusted one is

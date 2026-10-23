@@ -4,6 +4,8 @@ AltTabio uses the `windows`, `windows-numerics`, and supporting `windows-*` crat
 
 The macOS build uses `objc2`, `objc2-encode`, `block2`, `dispatch2`, and the `objc2-*` framework crates from [the objc2 project](https://github.com/madsmtm/objc2), plus [`libc`](https://github.com/rust-lang/libc) and [`bitflags`](https://github.com/bitflags/bitflags). Where a crate offers a choice of licenses, AltTabio uses it under the MIT license.
 
+The "tab" legend on AltTabio's app icons and the website's icons is drawn from the outlines of [Inter](https://github.com/rsms/inter), copyright 2016 The Inter Project Authors, under the SIL Open Font License 1.1. The icons carry the letter shapes only; AltTabio ships no font.
+
 ## Microsoft windows-rs
 
 MIT License

@@ -10,6 +10,8 @@
     <string>AltTabio</string>
     <key>CFBundleIconFile</key>
     <string>AltTabio</string>
+    <key>CFBundleIconName</key>
+    <string>AltTabio</string>
     <key>CFBundleIdentifier</key>
     <string>com.vibeslop.AltTabio</string>
     <key>CFBundleInfoDictionaryVersion</key>
