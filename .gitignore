@@ -4,3 +4,5 @@
 !.nojekyll
 !docs/.nojekyll
 target/
+*.blend1
+assets/site/render/
