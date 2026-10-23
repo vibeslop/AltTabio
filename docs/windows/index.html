@@ -6,8 +6,8 @@
 <title>AltTabio for Windows: free Alt+Tab replacement for Windows 11 and 10</title>
 <meta name="description" content="Replace the Windows Alt+Tab switcher with a numbered list of open windows, a large live preview, and search as you type. Free and open source, one small .exe for Windows 10 and 11." />
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
-<meta name="theme-color" content="#f8f9fa" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 <meta name="color-scheme" content="light dark" />
 <link rel="canonical" href="https://vibeslop.github.io/AltTabio/windows/" />
 <link rel="alternate" type="application/atom+xml" title="AltTabio releases" href="https://github.com/vibeslop/AltTabio/releases.atom" />
@@ -29,8 +29,6 @@
 <meta name="twitter:title" content="AltTabio for Windows: a better Alt+Tab for Windows 11 and 10" />
 <meta name="twitter:description" content="A numbered list of open windows, a large live preview, and search as you type. Free and open source." />
 <meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
-<link rel="preload" href="../fonts/outfit-latin-400.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="preload" href="../fonts/outfit-latin-600.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="../site.css" />
 <script>
 (function () {
@@ -63,7 +61,7 @@
       "breadcrumb": {"@id": "https://vibeslop.github.io/AltTabio/windows/#breadcrumb"},
       "primaryImageOfPage": {"@type": "ImageObject", "url": "https://vibeslop.github.io/AltTabio/images/hero-switcher.png"},
       "inLanguage": "en",
-      "dateModified": "2026-09-26"
+      "dateModified": "2026-10-23"
     },
     {
       "@type": "BreadcrumbList",
@@ -124,8 +122,8 @@
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="mark" viewBox="0 0 64 64">
-    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.6 0.02 250)" stroke-width="3"/>
-    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.24 0.05 250)" stroke="currentColor" stroke-width="6"/>
+    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.62 0 0)" stroke-width="3"/>
+    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.1 0 0)" stroke="currentColor" stroke-width="6"/>
   </symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></g></symbol>
   <symbol id="i-github" viewBox="0 0 256 256"><path fill="currentColor" d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
@@ -139,54 +137,39 @@
   <symbol id="i-terminal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5l4.5 4.5L5 16.5M12 17h7"/></g></symbol>
 </svg>
 
-<header class="site-header">
-  <nav class="nav" aria-label="Site">
+<header class="stage">
+  <nav class="wrap nav" aria-label="Site">
     <a class="brand" href="../" aria-label="AltTabio home">
       <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>
       <span>AltTabio</span>
     </a>
-    <div class="navlinks" id="navlinks">
+    <div class="navlinks">
       <a href="../windows/" aria-current="page">Windows</a>
       <a href="../mac/">Mac</a>
-      <a href="#install">Install</a>
       <a href="#faq">FAQ</a>
     </div>
     <div class="nav-tools">
       <button class="icon-btn" id="theme-btn" type="button" aria-label="Use the dark appearance">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-moon"/></svg>
       </button>
-      <a class="icon-btn" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
+      <a class="icon-btn nav-github" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-github"/></svg>
       </a>
-      <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="navlinks">
-        <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-list"/></svg>
-      </button>
-      <a class="btn btn-primary btn-sm" href="https://github.com/vibeslop/AltTabio/releases/latest">Download</a>
     </div>
   </nav>
 </header>
 
 <main id="main">
-  <section class="hero" aria-labelledby="hero-title">
+  <section class="stage page-hero" aria-labelledby="hero-title">
     <div class="wrap">
       <span class="eyebrow">AltTabio for Windows 11 and 10</span>
-      <h1 id="hero-title">Find the right window<br> on <mark>the first Alt+Tab.</mark></h1>
+      <h1 id="hero-title">Find the right window on the first Alt+Tab.</h1>
       <p class="sub">AltTabio replaces the Windows switcher with a numbered list of your open windows and a large live preview. Type a few letters and the list narrows.</p>
       <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
-        <a class="link only-win" href="https://github.com/vibeslop/AltTabio">Source code on GitHub <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
-        <a class="link only-mac" href="../mac/">On a Mac? Get the Mac version <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+        <a class="btn" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+        <a class="link only-mac" href="../mac/">On a Mac? <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
       </div>
-      <p class="reassure">One .exe for 64-bit Windows. Free, no installer, no account.</p>
-    </div>
-  </section>
-
-  <section id="screenshot" aria-label="AltTabio on Windows 11">
-    <div class="wrap">
-      <figure class="shot">
-        <img src="../images/hero-switcher.png" width="2177" height="1125" decoding="async" fetchpriority="high" alt="AltTabio on Windows 11: a numbered list of three File Explorer windows on the left, and a live preview of the selected Documents window on the right." />
-        <figcaption>AltTabio on Windows 11. Your open windows in a numbered list, and a live preview of the one you picked.</figcaption>
-      </figure>
+      <p class="note">One .exe for 64-bit Windows. Free, no installer, no account.</p>
     </div>
   </section>
 
@@ -195,38 +178,21 @@
       <div class="head">
         <h2 id="features-title">What changes when you press Alt+Tab.</h2>
       </div>
-      <ul class="features">
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4L7.5 20M16.5 4l-2 16M4.5 9h15.5M3.5 15h15.5"/></g></svg></span>
-          <h3>Numbered windows</h3>
-          <p>Press 1 to 9 and you're on that window, with no stepping through thumbnails.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></g></svg></span>
-          <h3>Large live preview</h3>
-          <p>See the selected window alone, or in its place on the full desktop.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></g></svg></span>
-          <h3>Type to filter</h3>
-          <p>Start typing while you hold Alt. The list narrows by title, app, or number.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h1M10 10h1M13.5 10h1M17 10h.5M8 14h8"/></g></svg></span>
-          <h3>The shortcut you know</h3>
-          <p>Alt+Tab opens it and letting go of Alt switches. Win+Tab can open it too.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></g></svg></span>
-          <h3>Fix a stuck window</h3>
-          <p>F4 closes it, F5 to F7 minimize, maximize, and restore, and F8 ends a frozen program.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/></g></svg></span>
-          <h3>Works across monitors</h3>
-          <p>It scales per monitor, and can list only the windows on the one you're using.</p>
-        </li>
-      </ul>
+      <figure class="shot shot-first">
+        <picture>
+          <source type="image/avif" srcset="../images/switcher-windows.avif" />
+          <source type="image/webp" srcset="../images/switcher-windows.webp" />
+          <img src="../images/hero-switcher.png" width="2177" height="1125" decoding="async" alt="AltTabio on Windows 11: a numbered list of three File Explorer windows on the left, and a live preview of the selected Documents window on the right." />
+        </picture>
+      </figure>
+      <dl class="promises three">
+        <div><dt>Numbered windows</dt><dd>Press 1 to 9 and you're on that window, with no stepping through thumbnails.</dd></div>
+        <div><dt>Large live preview</dt><dd>See the selected window alone, or in its place on the full desktop.</dd></div>
+        <div><dt>Type to filter</dt><dd>Start typing while you hold Alt. The list narrows by title, app, or number.</dd></div>
+        <div><dt>The shortcut you know</dt><dd>Alt+Tab opens it and letting go of Alt switches. Win+Tab can open it too.</dd></div>
+        <div><dt>Fix a stuck window</dt><dd>F4 closes it, F5 to F7 minimize, maximize, and restore, and F8 ends a frozen program.</dd></div>
+        <div><dt>Works across monitors</dt><dd>It scales per monitor, and can list only the windows on the one you're using.</dd></div>
+      </dl>
     </div>
   </section>
 
@@ -265,18 +231,18 @@
         <table class="table">
           <caption class="sr-only">AltTabio shortcuts on Windows</caption>
           <tbody>
-          <tr><th scope="row"><kbd class="k sm">Alt</kbd> <kbd class="k sm">Tab</kbd></th><td>Open the switcher and move through it. Win+Tab can open it too.</td></tr>
-          <tr><th scope="row"><kbd class="k sm">↑</kbd> <kbd class="k sm">↓</kbd> <kbd class="k sm">Shift</kbd> <kbd class="k sm">Tab</kbd></th><td>Change the selected window. The mouse wheel works too.</td></tr>
-          <tr><th scope="row"><kbd class="k sm">Enter</kbd>, click</th><td>Switch to the selected window</td></tr>
-          <tr><th scope="row"><kbd class="k sm">1</kbd> to <kbd class="k sm">9</kbd></th><td>Switch to that window at once</td></tr>
+          <tr><th scope="row"><kbd>Alt</kbd> <kbd>Tab</kbd></th><td>Open the switcher and move through it. Win+Tab can open it too.</td></tr>
+          <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Shift</kbd> <kbd>Tab</kbd></th><td>Change the selected window. The mouse wheel works too.</td></tr>
+          <tr><th scope="row"><kbd>Enter</kbd>, click</th><td>Switch to the selected window</td></tr>
+          <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Switch to that window at once</td></tr>
           <tr><th scope="row">Type</th><td>Filter by window title, app name, or number</td></tr>
-          <tr><th scope="row"><kbd class="k sm">Backspace</kbd></th><td>Remove a filter character</td></tr>
-          <tr><th scope="row"><kbd class="k sm">Home</kbd> <kbd class="k sm">End</kbd></th><td>First or last window</td></tr>
-          <tr><th scope="row"><kbd class="k sm">Esc</kbd></th><td>Close the switcher</td></tr>
-          <tr><th scope="row"><kbd class="k sm">F4</kbd></th><td>Close the selected window</td></tr>
-          <tr><th scope="row"><kbd class="k sm">F5</kbd> <kbd class="k sm">F6</kbd> <kbd class="k sm">F7</kbd></th><td>Minimize, maximize, restore</td></tr>
-          <tr><th scope="row"><kbd class="k sm">F8</kbd></th><td>End the selected window's program</td></tr>
-          <tr><th scope="row"><kbd class="k sm">F9</kbd></th><td>Open another window of the same app, without administrator rights</td></tr>
+          <tr><th scope="row"><kbd>Backspace</kbd></th><td>Remove a filter character</td></tr>
+          <tr><th scope="row"><kbd>Home</kbd> <kbd>End</kbd></th><td>First or last window</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the switcher</td></tr>
+          <tr><th scope="row"><kbd>F4</kbd></th><td>Close the selected window</td></tr>
+          <tr><th scope="row"><kbd>F5</kbd> <kbd>F6</kbd> <kbd>F7</kbd></th><td>Minimize, maximize, restore</td></tr>
+          <tr><th scope="row"><kbd>F8</kbd></th><td>End the selected window's program</td></tr>
+          <tr><th scope="row"><kbd>F9</kbd></th><td>Open another window of the same app, without administrator rights</td></tr>
           <tr><th scope="row">Right click</th><td>Window commands for that row</td></tr>
           </tbody>
         </table>
@@ -306,8 +272,8 @@
         <h2 id="install-title">Up and running in a minute.</h2>
         <p>One executable. No installer, no store account, no runtime.</p>
       </div>
-      <div class="installs">
-        <div class="install">
+      <div class="get">
+        <div>
           <span class="os">Install</span>
           <h3>Download, unzip, run</h3>
           <ol class="steps">
@@ -315,9 +281,9 @@
             <li><span>Unzip it into a folder you'll keep, such as <code class="inline">C:\Program Files\AltTabio</code>.</span></li>
             <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
           </ol>
-          <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest" style="align-self:flex-start"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+          <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
         </div>
-        <div class="install">
+        <div>
           <span class="os">Before you turn on start with Windows</span>
           <h3>Keep it in a safe folder</h3>
           <div class="prose">
@@ -366,16 +332,6 @@
     </div>
   </section>
 
-  <section class="closing" aria-labelledby="closing-title">
-    <div class="wrap">
-      <h2 id="closing-title">Try it on your next <mark>Alt+Tab.</mark></h2>
-      <p>Download, unzip, press Alt+Tab. If it isn't for you, exit from the tray and delete the folder.</p>
-      <div class="cta">
-          <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
-        </div>
-        <p class="reassure">Free and open source. No account, no ads, and it never goes online.</p>
-    </div>
-  </section>
 </main>
 
 <footer>

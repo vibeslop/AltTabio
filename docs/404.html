@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Page not found | AltTabio</title>
 <meta name="robots" content="noindex" />
-<meta name="theme-color" content="#f8f9fa" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 <meta name="color-scheme" content="light dark" />
 <link rel="icon" href="/AltTabio/favicon.ico" sizes="any" />
 <link rel="icon" href="/AltTabio/favicon.svg" type="image/svg+xml" />
@@ -29,8 +29,8 @@
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="mark" viewBox="0 0 64 64">
-    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.6 0.02 250)" stroke-width="3"/>
-    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.24 0.05 250)" stroke="currentColor" stroke-width="6"/>
+    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.62 0 0)" stroke-width="3"/>
+    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.1 0 0)" stroke="currentColor" stroke-width="6"/>
   </symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></g></symbol>
   <symbol id="i-github" viewBox="0 0 256 256"><path fill="currentColor" d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
@@ -44,41 +44,36 @@
   <symbol id="i-terminal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5l4.5 4.5L5 16.5M12 17h7"/></g></symbol>
 </svg>
 
-<header class="site-header">
-  <nav class="nav" aria-label="Site">
+<header class="stage">
+  <nav class="wrap nav" aria-label="Site">
     <a class="brand" href="/AltTabio/" aria-label="AltTabio home">
       <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>
       <span>AltTabio</span>
     </a>
-    <div class="navlinks" id="navlinks">
+    <div class="navlinks">
       <a href="/AltTabio/windows/">Windows</a>
       <a href="/AltTabio/mac/">Mac</a>
-      <a href="/AltTabio/#install">Install</a>
       <a href="/AltTabio/#faq">FAQ</a>
     </div>
     <div class="nav-tools">
       <button class="icon-btn" id="theme-btn" type="button" aria-label="Use the dark appearance">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-moon"/></svg>
       </button>
-      <a class="icon-btn" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
+      <a class="icon-btn nav-github" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-github"/></svg>
       </a>
-      <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="navlinks">
-        <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-list"/></svg>
-      </button>
-      <a class="btn btn-primary btn-sm" href="/AltTabio/#install">Download</a>
     </div>
   </nav>
 </header>
 
 <main id="main">
-  <section class="hero" aria-labelledby="hero-title">
+  <section class="stage page-hero" aria-labelledby="hero-title">
     <div class="wrap">
       <span class="eyebrow">404</span>
-      <h1 id="hero-title">No window <mark>by that name.</mark></h1>
+      <h1 id="hero-title">No window by that name.</h1>
       <p class="sub">The page you asked for isn't here. It may have moved when the site was rebuilt.</p>
       <div class="cta">
-        <a class="btn btn-primary" href="/AltTabio/">Go to the home page</a>
+        <a class="btn" href="/AltTabio/">Go to the home page</a>
         <a class="link" href="/AltTabio/windows/">Windows <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
         <a class="link" href="/AltTabio/mac/">Mac <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
       </div>

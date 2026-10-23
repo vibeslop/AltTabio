@@ -6,8 +6,8 @@
 <title>AltTabio for Mac: a Cmd+Tab replacement that shows every window</title>
 <meta name="description" content="Replace Cmd+Tab on macOS with a switcher that lists every window of every app, including minimized windows and windows on other desktops. Free and open source, for macOS 26 and later." />
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
-<meta name="theme-color" content="#f8f9fa" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#16181c" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 <meta name="color-scheme" content="light dark" />
 <link rel="canonical" href="https://vibeslop.github.io/AltTabio/mac/" />
 <link rel="alternate" type="application/atom+xml" title="AltTabio releases" href="https://github.com/vibeslop/AltTabio/releases.atom" />
@@ -29,8 +29,6 @@
 <meta name="twitter:title" content="AltTabio for Mac: Cmd+Tab that shows every window" />
 <meta name="twitter:description" content="Every window of every app, including minimized ones and ones on other desktops, one Cmd+Tab away. Free and open source." />
 <meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
-<link rel="preload" href="../fonts/outfit-latin-400.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="preload" href="../fonts/outfit-latin-600.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="../site.css" />
 <script>
 (function () {
@@ -62,7 +60,7 @@
       "about": {"@id": "https://vibeslop.github.io/AltTabio/mac/#software"},
       "breadcrumb": {"@id": "https://vibeslop.github.io/AltTabio/mac/#breadcrumb"},
       "inLanguage": "en",
-      "dateModified": "2026-09-26"
+      "dateModified": "2026-10-23"
     },
     {
       "@type": "BreadcrumbList",
@@ -122,8 +120,8 @@
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="mark" viewBox="0 0 64 64">
-    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.6 0.02 250)" stroke-width="3"/>
-    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.24 0.05 250)" stroke="currentColor" stroke-width="6"/>
+    <rect x="9" y="9" width="30" height="24" rx="7" fill="none" stroke="oklch(0.62 0 0)" stroke-width="3"/>
+    <rect x="25.5" y="25.5" width="33" height="29" rx="8.5" fill="oklch(0.1 0 0)" stroke="currentColor" stroke-width="6"/>
   </symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></g></symbol>
   <symbol id="i-github" viewBox="0 0 256 256"><path fill="currentColor" d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
@@ -137,38 +135,33 @@
   <symbol id="i-terminal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7.5l4.5 4.5L5 16.5M12 17h7"/></g></symbol>
 </svg>
 
-<header class="site-header">
-  <nav class="nav" aria-label="Site">
+<header class="stage">
+  <nav class="wrap nav" aria-label="Site">
     <a class="brand" href="../" aria-label="AltTabio home">
       <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>
       <span>AltTabio</span>
     </a>
-    <div class="navlinks" id="navlinks">
+    <div class="navlinks">
       <a href="../windows/">Windows</a>
       <a href="../mac/" aria-current="page">Mac</a>
-      <a href="#install">Install</a>
       <a href="#faq">FAQ</a>
     </div>
     <div class="nav-tools">
       <button class="icon-btn" id="theme-btn" type="button" aria-label="Use the dark appearance">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-moon"/></svg>
       </button>
-      <a class="icon-btn" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
+      <a class="icon-btn nav-github" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-github"/></svg>
       </a>
-      <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="navlinks">
-        <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-list"/></svg>
-      </button>
-      <a class="btn btn-primary btn-sm" href="#install">Download</a>
     </div>
   </nav>
 </header>
 
 <main id="main">
-  <section class="hero" aria-labelledby="hero-title">
+  <section class="stage page-hero" aria-labelledby="hero-title">
     <div class="wrap">
       <span class="eyebrow">AltTabio for Mac</span>
-      <h1 id="hero-title">Cmd+Tab straight to<br> <mark>the window you&nbsp;want.</mark></h1>
+      <h1 id="hero-title">Cmd+Tab straight to the window you want.</h1>
       <p class="sub">The Mac switcher stops at apps. AltTabio keeps Cmd+Tab and lists every window of the selected app, including minimized ones and ones on other desktops.</p>
       <div class="cmd">
             <span class="p" aria-hidden="true">$</span>
@@ -179,7 +172,7 @@
             </button>
             <span class="sr-only copy-status" aria-live="polite"></span>
           </div>
-      <p class="reassure">Paste into Terminal. macOS 26 or later, Apple silicon and Intel. Free and open source. Or <a href="#install">download the app</a>.</p>
+      <p class="note">Paste into Terminal. macOS 26 or later, Apple silicon and Intel. Free and open source. Or <a href="#install">download the app</a>.</p>
     </div>
   </section>
 
@@ -188,38 +181,14 @@
       <div class="head">
         <h2 id="features-title">What changes when you press Cmd+Tab.</h2>
       </div>
-      <ul class="features">
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12.5" height="11" rx="2.5"/><path d="M4 15V6.5A2.5 2.5 0 0 1 6.5 4H15"/></g></svg></span>
-          <h3>Every window</h3>
-          <p>Minimized windows, hidden apps, and windows on other desktops are in the list, each marked.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h1M10 10h1M13.5 10h1M17 10h.5M8 14h8"/></g></svg></span>
-          <h3>Your habits still work</h3>
-          <p>The first Tab lands on the previous app, and letting go of Cmd switches.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4L7.5 20M16.5 4l-2 16M4.5 9h15.5M3.5 15h15.5"/></g></svg></span>
-          <h3>Numbered windows</h3>
-          <p>Press 1 to 9 to switch to that window of the selected app.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></g></svg></span>
-          <h3>Act from the list</h3>
-          <p>W, M, H, and Q close, minimize, hide, or quit. Force Quit is a <span style='white-space:nowrap'>right-click</span> away.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></g></svg></span>
-          <h3>Live preview</h3>
-          <p>Turn on window previews to see the selected window. The list works without them.</p>
-        </li>
-        <li class="feature">
-          <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 20.5h8M12 17v3.5M7.5 10.5h5M10 8l2.5 2.5L10 13"/></g></svg></span>
-          <h3>Works in remote desktops</h3>
-          <p>Cmd+Tab keeps opening AltTabio inside Windows App, Parallels, and VMware.</p>
-        </li>
-      </ul>
+      <dl class="promises three">
+        <div><dt>Every window</dt><dd>Minimized windows, hidden apps, and windows on other desktops are in the list, each marked.</dd></div>
+        <div><dt>Your habits still work</dt><dd>The first Tab lands on the previous app, and letting go of Cmd switches.</dd></div>
+        <div><dt>Numbered windows</dt><dd>Press 1 to 9 to switch to that window of the selected app.</dd></div>
+        <div><dt>Act from the list</dt><dd>W, M, H, and Q close, minimize, hide, or quit. Force Quit is a right-click away.</dd></div>
+        <div><dt>Live preview</dt><dd>Turn on window previews to see the selected window. The list works without them.</dd></div>
+        <div><dt>Works in remote desktops</dt><dd>Cmd+Tab keeps opening AltTabio inside Windows App, Parallels, and VMware.</dd></div>
+      </dl>
     </div>
   </section>
 
@@ -260,15 +229,15 @@
         <table class="table">
           <caption class="sr-only">AltTabio shortcuts on macOS</caption>
           <tbody>
-          <tr><th scope="row"><kbd class="k sm">⌘</kbd> <kbd class="k sm">Tab</kbd></th><td>Open the switcher on the previous app. Tab steps on, Shift+Tab steps back.</td></tr>
-          <tr><th scope="row"><kbd class="k sm">⌥</kbd> <kbd class="k sm">Tab</kbd></th><td>The same, when Also open with ⌥ Tab is on</td></tr>
-          <tr><th scope="row"><kbd class="k sm">←</kbd> <kbd class="k sm">`</kbd> / <kbd class="k sm">→</kbd></th><td>Previous app / next app</td></tr>
-          <tr><th scope="row"><kbd class="k sm">↑</kbd> <kbd class="k sm">↓</kbd></th><td>The selected app's windows</td></tr>
-          <tr><th scope="row"><kbd class="k sm">1</kbd> to <kbd class="k sm">9</kbd></th><td>Switch to that window of the selected app</td></tr>
-          <tr><th scope="row">Release <kbd class="k sm">⌘</kbd>, <kbd class="k sm">Return</kbd></th><td>Switch to the selected window, or bring forward an app that has none</td></tr>
-          <tr><th scope="row"><kbd class="k sm">W</kbd> <kbd class="k sm">M</kbd></th><td>Close or minimize the selected window</td></tr>
-          <tr><th scope="row"><kbd class="k sm">H</kbd> <kbd class="k sm">Q</kbd></th><td>Hide or quit the selected app</td></tr>
-          <tr><th scope="row"><kbd class="k sm">Esc</kbd></th><td>Close the switcher. So does a click outside it.</td></tr>
+          <tr><th scope="row"><kbd>⌘</kbd> <kbd>Tab</kbd></th><td>Open the switcher on the previous app. Tab steps on, Shift+Tab steps back.</td></tr>
+          <tr><th scope="row"><kbd>⌥</kbd> <kbd>Tab</kbd></th><td>The same, when Also open with ⌥ Tab is on</td></tr>
+          <tr><th scope="row"><kbd>←</kbd> <kbd>`</kbd> / <kbd>→</kbd></th><td>Previous app / next app</td></tr>
+          <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd></th><td>The selected app's windows</td></tr>
+          <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Switch to that window of the selected app</td></tr>
+          <tr><th scope="row">Release <kbd>⌘</kbd>, <kbd>Return</kbd></th><td>Switch to the selected window, or bring forward an app that has none</td></tr>
+          <tr><th scope="row"><kbd>W</kbd> <kbd>M</kbd></th><td>Close or minimize the selected window</td></tr>
+          <tr><th scope="row"><kbd>H</kbd> <kbd>Q</kbd></th><td>Hide or quit the selected app</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the switcher. So does a click outside it.</td></tr>
           <tr><th scope="row">Right-click</th><td>Window and app commands, including Force Quit</td></tr>
           </tbody>
         </table>
@@ -310,8 +279,8 @@
         <h2 id="install-title">Install, update, remove.</h2>
         <p>One line for each of the first two.</p>
       </div>
-      <div class="installs">
-        <div class="install">
+      <div class="get">
+        <div>
           <span class="os">Recommended</span>
           <h3>Paste one line into Terminal</h3>
           <div class="cmd">
@@ -329,7 +298,7 @@
             <li><span>AltTabio updates itself from then on, and <strong>Check for Updates…</strong> in its menu bar menu looks right away. Running the same line again updates it too. If an update fails partway, the installed copy stays as it was.</span></li>
           </ol>
         </div>
-        <div class="install">
+        <div>
           <span class="os">By hand</span>
           <h3>Download the app</h3>
           <ol class="steps">
@@ -337,10 +306,10 @@
             <li><span>Move <code class="inline">AltTabio.app</code> to Applications and open it. When macOS says it could not verify the app, choose <strong>Done</strong>.</span></li>
             <li><span>Open <strong>System Settings, Privacy &amp; Security</strong>, click <strong>Open Anyway</strong> next to the message about AltTabio, and confirm.</span></li>
           </ol>
-          <p class="note" style="margin-top:0">macOS asks because AltTabio is not notarized by Apple, which takes a paid developer account. The Terminal line avoids the question.</p>
+          <p class="note">macOS asks because AltTabio is not notarized by Apple, which takes a paid developer account. The Terminal line avoids the question.</p>
         </div>
       </div>
-      <div class="install" id="uninstall" style="margin-top:16px">
+      <div class="solo" id="uninstall">
         <span class="os">Uninstall</span>
         <h3>Remove it and its permissions</h3>
         <div class="prose"><p>Turn off <strong>Launch at login</strong> in the settings, quit AltTabio from its menu bar icon, and delete <code class="inline">AltTabio.app</code>. Then remove its settings and permissions:</p></div>
@@ -392,16 +361,6 @@
     </div>
   </section>
 
-  <section class="closing" aria-labelledby="closing-title">
-    <div class="wrap">
-      <h2 id="closing-title">Try it on your next <mark>Cmd+Tab.</mark></h2>
-      <p>Paste the line, allow Accessibility, press Cmd+Tab. If it isn't for you, turn off Replace ⌘ Tab and the system switcher is back.</p>
-      <div class="cta">
-          <a class="btn btn-primary" href="#install" data-sheet="mac-sheet"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-terminal"/></svg>Install on Mac</a>
-        </div>
-        <p class="reassure">Free and open source. No account, no ads, and it never goes online.</p>
-    </div>
-  </section>
 </main>
 
 <footer>
