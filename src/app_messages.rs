@@ -20,10 +20,12 @@ pub(crate) const WM_LISTED_WINDOW_REFRESH: u32 = WM_APP + 7;
 pub(crate) const WM_SHOW_SETTINGS: u32 = WM_APP + 3;
 pub(crate) const WM_DESTROY_APP: u32 = WM_APP + 4;
 pub(crate) const WM_SHOW_ABOUT: u32 = WM_APP + 5;
+pub(crate) const WM_CLEAR_FILTER: u32 = WM_APP + 8;
 
 pub(crate) const CLOSE_REFRESH_TIMER_ID: usize = 1;
 pub(crate) const LISTED_REFRESH_RETRY_TIMER_ID: usize = 2;
 pub(crate) const SHELL_DISMISS_TIMER_ID: usize = 3;
+pub(crate) const FILTER_FEEDBACK_TIMER_ID: usize = 4;
 
 #[cfg(test)]
 mod tests {
@@ -41,6 +43,7 @@ mod tests {
             WM_SHOW_SETTINGS,
             WM_DESTROY_APP,
             WM_SHOW_ABOUT,
+            WM_CLEAR_FILTER,
         ];
 
         assert_eq!(
@@ -55,6 +58,7 @@ mod tests {
             CLOSE_REFRESH_TIMER_ID,
             LISTED_REFRESH_RETRY_TIMER_ID,
             SHELL_DISMISS_TIMER_ID,
+            FILTER_FEEDBACK_TIMER_ID,
         ];
 
         assert_eq!(timers.iter().collect::<HashSet<_>>().len(), timers.len());

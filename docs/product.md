@@ -40,6 +40,7 @@ It is a practical answer for people searching for:
 - Live preview of the selected window, or a full-desktop preview that shows it in place
 - Compact task list by default so the preview has room
 - Type to filter by window title, application name, or number
+- The query appears in a translucent capsule on the panel's top edge without moving the list, and hides after typing stops
 - Keys 1-9 switch to the corresponding visible window
 - Keyboard and mouse control, including right mouse button plus wheel switching
 - Close, minimize, maximize, restore, end-process, and run-another-instance commands

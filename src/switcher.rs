@@ -242,6 +242,10 @@ impl SwitcherSession {
         self.visible && self.settings.typed_search
     }
 
+    pub fn clear_filter(&mut self) {
+        self.switcher.clear_filter();
+    }
+
     /// Ordinary scrolling moves only the viewport, including past the selected task.
     #[must_use]
     pub fn handle_mouse_wheel(&mut self, delta: i32, visible_rows: usize) -> SwitcherEffect {
@@ -435,6 +439,11 @@ impl Switcher {
     #[must_use]
     pub fn visible_task_count(&self) -> usize {
         self.visible_indices.len()
+    }
+
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
     }
 
     #[must_use]
@@ -1411,6 +1420,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![10, 20]
         );
+    }
+
+    #[test]
+    fn clearing_the_displayed_query_restores_the_session_results() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "Editor", "zed"),
+                SwitchTask::new(2, 20, "Documentation", "firefox"),
+            ],
+            None,
+        );
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('f')),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().filter(), "f");
+        assert_eq!(session.switcher().visible_task_count(), 1);
+        session.clear_filter();
+        assert_eq!(session.switcher().filter(), "");
+        assert_eq!(session.switcher().visible_task_count(), 2);
+        assert!(session.is_visible());
     }
 
     #[test]

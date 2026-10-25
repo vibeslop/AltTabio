@@ -1,9 +1,10 @@
 use super::App;
 use super::mouse::WM_MOUSE_LEAVE;
 use crate::app_messages::{
-    CLOSE_REFRESH_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID, SHELL_DISMISS_TIMER_ID,
-    WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION, WM_LISTED_WINDOW_REFRESH,
-    WM_SHOW_ABOUT, WM_SHOW_SETTINGS, WM_TRAY_CALLBACK,
+    CLOSE_REFRESH_TIMER_ID, FILTER_FEEDBACK_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID,
+    SHELL_DISMISS_TIMER_ID, WM_CLEAR_FILTER, WM_FOREGROUND_CHECK, WM_HOOK_ACTION,
+    WM_HOOK_HOTKEY_ACTION, WM_LISTED_WINDOW_REFRESH, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
+    WM_TRAY_CALLBACK,
 };
 use crate::hook::{HookThread, decode_action};
 use crate::shell_menu;
@@ -15,7 +16,7 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     WM_CAPTURECHANGED, WM_CHAR, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
     WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER,
 };
 
@@ -30,6 +31,10 @@ impl App {
             return Some(result);
         }
         match message {
+            WM_MOVE => {
+                self.sync_filter_popup();
+                Some(LRESULT(0))
+            }
             WM_DPICHANGED => {
                 self.handle_dpi_changed(lparam);
                 Some(LRESULT(0))
@@ -156,6 +161,14 @@ impl App {
                 self.handle_shell_dismissal();
                 Some(LRESULT(0))
             }
+            WM_TIMER if wparam.0 == FILTER_FEEDBACK_TIMER_ID => {
+                self.handle_filter_feedback_timer();
+                Some(LRESULT(0))
+            }
+            WM_CLEAR_FILTER => {
+                self.clear_filter();
+                Some(LRESULT(0))
+            }
             _ => None,
         }
     }
@@ -208,7 +221,16 @@ impl App {
     }
 
     pub(super) fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
-        match self.session.handle_input(action) {
+        let effect = self.session.handle_input(action);
+        if matches!(effect, SwitcherEffect::Redraw)
+            && matches!(
+                action,
+                InputAction::AppendSearchCharacter(_) | InputAction::BackspaceSearch
+            )
+        {
+            self.filter_edited();
+        }
+        match effect {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
             SwitcherEffect::Hide => self.hide_overlay_with_reset(reset_hook),

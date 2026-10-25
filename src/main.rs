@@ -12,6 +12,8 @@ mod app_messages;
 #[cfg(windows)]
 mod dialog_host;
 #[cfg(windows)]
+mod filter_popup;
+#[cfg(windows)]
 mod hook;
 #[cfg(target_os = "macos")]
 mod macos;

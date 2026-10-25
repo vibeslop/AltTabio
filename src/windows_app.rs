@@ -4,6 +4,7 @@ mod commands;
 mod dialogs;
 mod dispatch;
 mod display;
+mod filter;
 mod hooks;
 mod mouse;
 mod overlay;
@@ -13,6 +14,7 @@ mod shell_dismissal;
 mod wndproc;
 
 use crate::app_messages::WM_DESTROY_APP;
+use crate::filter_popup::FilterPopup;
 use crate::hook::HookThread;
 use crate::native_theme::resolve_current_theme;
 use crate::preview::DwmPreview;
@@ -25,6 +27,7 @@ use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
 use crate::win32::{ComApartment, module_instance, wide};
 use alttabio::failure_run::FailureRun;
+use alttabio::filter_feedback::FilterFeedback;
 use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
 use alttabio::settings::Settings;
@@ -180,6 +183,10 @@ struct App {
     session: SwitcherSession,
     task_icons: TaskIcons,
     renderer: Renderer,
+    filter_popup: Option<FilterPopup>,
+    filter_feedback: FilterFeedback,
+    filter_timer_armed: bool,
+    filter_popup_failures: FailureRun,
     begin_paint_failures: FailureRun,
     foreground_bounds_failures: FailureRun,
     hit_test_failures: FailureRun,
@@ -229,6 +236,10 @@ impl App {
             session,
             task_icons: TaskIcons::default(),
             renderer: Renderer::new(resolved_theme)?,
+            filter_popup: None,
+            filter_feedback: FilterFeedback::default(),
+            filter_timer_armed: false,
+            filter_popup_failures: FailureRun::default(),
             begin_paint_failures: FailureRun::default(),
             foreground_bounds_failures: FailureRun::default(),
             hit_test_failures: FailureRun::default(),
@@ -287,6 +298,8 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        self.hide_filter_feedback();
+        self.filter_popup = None;
         self.stop_shell_dismissal();
         self.stop_listed_refresh_retry_timer();
         win_events::clear_notify_hwnd();

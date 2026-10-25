@@ -13,6 +13,7 @@ use windows::core::Error;
 
 impl App {
     pub(super) fn show_overlay(&mut self, selection_delta: Option<i32>) {
+        self.hide_filter_feedback();
         match enumerate_switchable_windows(&self.settings) {
             Ok(EnumeratedTasks { tasks, icons }) => {
                 self.session.open(tasks, selection_delta);
@@ -69,6 +70,7 @@ impl App {
     }
 
     pub(super) fn hide_overlay_with_reset(&mut self, reset_hook: bool) {
+        self.hide_filter_feedback();
         self.stop_shell_dismissal();
         self.task_refresh.clear_notices();
         self.session.hide();
@@ -144,6 +146,7 @@ impl App {
     }
 
     pub(super) fn request_redraw(&mut self) {
+        self.sync_filter_popup();
         let source = self
             .session
             .switcher()
