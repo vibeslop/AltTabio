@@ -78,8 +78,8 @@ pub(super) fn draw_icon_pass(
         );
         let icon = HICON(task.icon_handle as *mut c_void);
         let result = unsafe {
-            // SAFETY: hdc is the current BeginPaint DC, the HICON is borrowed from a live
-            // window/class snapshot, and all pixel dimensions are positive and on-screen.
+            // SAFETY: hdc is the current BeginPaint DC, the task snapshot owns the HICON
+            // until this list is replaced, and all pixel dimensions are positive and on-screen.
             DrawIconEx(
                 hdc,
                 (bounds.left * scale).round() as i32,

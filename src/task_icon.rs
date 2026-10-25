@@ -8,23 +8,25 @@ use windows::Win32::UI::Shell::{
     BHID_SFUIObject, ExtractIconExW, IExtractIconW, IShellItem, SHCreateItemFromParsingName,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, GCLP_HICON, GCLP_HICONSM, GetClassLongPtrW, HICON, ICON_BIG, ICON_SMALL,
+    CopyIcon, DestroyIcon, GCLP_HICON, GCLP_HICONSM, GetClassLongPtrW, HICON, ICON_BIG, ICON_SMALL,
     ICON_SMALL2, SMTO_ABORTIFHUNG, SMTO_BLOCK, SendMessageTimeoutW, WM_GETICON,
 };
 use windows::core::{BSTR, Error, PCWSTR, Result, w};
 
 #[derive(Default)]
-/// Owns extracted icons for one task-list snapshot. Keep it alive until that list is replaced.
+/// Owns task icons for one task-list snapshot. Keep it alive until that list is replaced.
 pub struct TaskIcons {
+    window_icons: Vec<OwnedIcon>,
     icons: HashMap<String, Option<OwnedIcon>>,
     app_icons: HashMap<String, Option<OwnedIcon>>,
 }
 
 impl TaskIcons {
     pub fn resolve(&mut self, hwnd: HWND, executable: &str) -> isize {
-        let borrowed = window_icon(hwnd);
-        if borrowed != 0 {
-            return borrowed;
+        if let Some(icon) = window_icon(hwnd) {
+            let handle = icon.0.0 as isize;
+            self.window_icons.push(icon);
+            return handle;
         }
         let extracted = self
             .icons
@@ -58,9 +60,25 @@ impl TaskIcons {
 
 struct OwnedIcon(HICON);
 
+impl OwnedIcon {
+    fn copy_borrowed(icon: usize) -> Option<Self> {
+        if icon == 0 {
+            return None;
+        }
+        // SAFETY: this scalar handle comes from WM_GETICON or the window class. CopyIcon
+        // validates it and creates an independent owned icon without taking the source's ownership.
+        match unsafe { CopyIcon(HICON(icon as *mut _)) } {
+            Ok(copy) => Some(Self(copy)),
+            // The application can replace and destroy its icon between query and copy.
+            // Try the remaining window/class icons, then the executable and Shell fallbacks.
+            Err(_) => None,
+        }
+    }
+}
+
 impl Drop for OwnedIcon {
     fn drop(&mut self) {
-        // SAFETY: this guard uniquely owns an extracted icon, never a window/class icon.
+        // SAFETY: this guard uniquely owns a copied or extracted icon, never its borrowed source.
         if let Err(error) = unsafe { DestroyIcon(self.0) } {
             eprintln!("Could not release a task icon: {error}");
         }
@@ -138,7 +156,7 @@ fn shell_app_icon(app_id: &str) -> Result<Option<OwnedIcon>> {
     Ok(owned)
 }
 
-fn window_icon(hwnd: HWND) -> isize {
+fn window_icon(hwnd: HWND) -> Option<OwnedIcon> {
     for size in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
         let mut icon = 0_usize;
         let sent = unsafe {
@@ -153,8 +171,10 @@ fn window_icon(hwnd: HWND) -> isize {
                 Some(&raw mut icon),
             )
         };
-        if sent.0 != 0 && icon != 0 {
-            return isize::try_from(icon).unwrap_or_default();
+        if sent.0 != 0
+            && let Some(copy) = OwnedIcon::copy_borrowed(icon)
+        {
+            return Some(copy);
         }
     }
     for class_index in [GCLP_HICON, GCLP_HICONSM] {
@@ -162,21 +182,22 @@ fn window_icon(hwnd: HWND) -> isize {
             // SAFETY: hwnd is borrowed; class icons remain owned by the registered class.
             GetClassLongPtrW(hwnd, class_index)
         };
-        if icon != 0 {
-            return isize::try_from(icon).unwrap_or_default();
+        if let Some(copy) = OwnedIcon::copy_borrowed(icon) {
+            return Some(copy);
         }
     }
-    0
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::win32::ComApartment;
+    use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC, HDC};
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CopyIcon, CreateWindowExW, DestroyWindow, IDI_APPLICATION, LoadIconW, SendMessageW,
-        WINDOW_EX_STYLE, WM_SETICON, WS_POPUP,
+        CopyIcon, CreateWindowExW, DI_NORMAL, DestroyWindow, DrawIconEx, IDI_APPLICATION,
+        LoadIconW, SendMessageW, WINDOW_EX_STYLE, WM_SETICON, WS_POPUP,
     };
     use windows::core::{Result, w};
 
@@ -216,12 +237,61 @@ mod tests {
         }
     }
 
+    struct MemoryDc(HDC);
+
+    impl Drop for MemoryDc {
+        fn drop(&mut self) {
+            // SAFETY: this guard uniquely owns the memory DC, with no selected owned objects.
+            assert!(unsafe { DeleteDC(self.0) }.as_bool());
+        }
+    }
+
+    #[test]
+    fn snapshot_icon_still_draws_after_window_replaces_and_destroys_source() -> Result<()> {
+        let window = TestWindow::new()?;
+        // SAFETY: the stock icon is shared; CopyIcon returns a separate, test-owned icon.
+        let stock = unsafe { LoadIconW(None, IDI_APPLICATION) }?;
+        let source = OwnedIcon(unsafe { CopyIcon(stock) }?);
+        // SAFETY: this thread owns the hidden window and keeps source alive until replacement.
+        unsafe {
+            SendMessageW(
+                window.0,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(source.0.0 as isize)),
+            );
+        }
+        let mut icons = TaskIcons::default();
+        let snapshot = HICON(icons.resolve(window.0, "missing.exe") as *mut _);
+        // SAFETY: None creates a private memory DC; the guard releases it after both paints.
+        let dc = MemoryDc(unsafe { CreateCompatibleDC(None) });
+        assert_ne!(dc.0, HDC::default());
+        // SAFETY: the DC and the window's source icon are live for this first paint.
+        unsafe { DrawIconEx(dc.0, 0, 0, snapshot, 32, 32, 0, None, DI_NORMAL) }?;
+        // Simulate an application updating its unread badge while the switcher stays open.
+        // SAFETY: the hidden window is live and stock remains valid after source is destroyed.
+        unsafe {
+            SendMessageW(
+                window.0,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(stock.0 as isize)),
+            );
+        }
+        drop(source);
+        // SAFETY: DrawIconEx validates this scalar handle; no icon allocation has reused source.
+        assert!(
+            unsafe { DrawIconEx(dc.0, 0, 0, snapshot, 32, 32, 0, None, DI_NORMAL) }.is_ok(),
+            "the next Tab repaint must still draw the snapshot after the app destroys its icon"
+        );
+        Ok(())
+    }
+
     #[test]
     fn iconless_window_uses_executable_icon() -> Result<()> {
         let window = TestWindow::new()?;
-        assert_eq!(
-            window_icon(window.0),
-            0,
+        assert!(
+            window_icon(window.0).is_none(),
             "fixture must have no window or class icon"
         );
         let executable = std::env::current_exe().map_err(|error| {
@@ -255,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_window_icon_stays_borrowed() -> Result<()> {
+    fn window_icon_copy_is_released_without_destroying_the_source() -> Result<()> {
         let window = TestWindow::new()?;
         // SAFETY: IDI_APPLICATION is a shared system icon; it must not be destroyed by this cache.
         let icon = unsafe { LoadIconW(None, IDI_APPLICATION) }?;
@@ -269,15 +339,50 @@ mod tests {
             );
         }
         let mut icons = TaskIcons::default();
-        assert_eq!(icons.resolve(window.0, "missing.exe"), icon.0 as isize);
+        let snapshot = HICON(icons.resolve(window.0, "missing.exe") as *mut _);
+        assert_ne!(snapshot, HICON::default());
+        assert_ne!(snapshot, icon);
+        assert_eq!(icons.window_icons.len(), 1);
         assert!(
             icons.icons.is_empty(),
-            "borrowed window icons never enter the owned cache"
+            "a window icon must not need an executable fallback"
         );
         drop(icons);
+        // SAFETY: CopyIcon validates the stale copy, with no intervening icon allocation.
+        assert!(unsafe { CopyIcon(snapshot) }.is_err());
         // SAFETY: the shared icon must still be live after dropping the cache.
         let copy = unsafe { CopyIcon(icon) }?;
         drop(OwnedIcon(copy));
+        Ok(())
+    }
+
+    #[test]
+    fn destroyed_window_icon_uses_another_available_icon() -> Result<()> {
+        let window = TestWindow::new()?;
+        let executable = std::env::current_exe().map_err(|error| {
+            Error::new(
+                windows::core::HRESULT(0x8000_4005_u32.cast_signed()),
+                error.to_string(),
+            )
+        })?;
+        // SAFETY: CopyIcon creates a test-owned icon from a live shared stock icon.
+        let source = OwnedIcon(unsafe { CopyIcon(LoadIconW(None, IDI_APPLICATION)?) }?);
+        // SAFETY: this thread owns the hidden window and source is still live during WM_SETICON.
+        unsafe {
+            SendMessageW(
+                window.0,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(source.0.0 as isize)),
+            );
+        }
+        // Model an application destroying the icon before publishing its replacement.
+        drop(source);
+        let mut icons = TaskIcons::default();
+        let resolved = HICON(icons.resolve(window.0, &executable.to_string_lossy()) as *mut _);
+        assert_ne!(resolved, HICON::default());
+        // SAFETY: CopyIcon validates that an alternate source supplied a usable icon.
+        drop(OwnedIcon(unsafe { CopyIcon(resolved) }?));
         Ok(())
     }
 
