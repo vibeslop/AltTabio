@@ -502,7 +502,8 @@ mod tests {
                 effect => panic!("unexpected effect: {effect:?}"),
             }
         }
-        assert_eq!(activated, Some(30));
+        // The right-button gesture reopens on the first task; wheel-up stops at that boundary.
+        assert_eq!(activated, Some(10));
         assert!(
             !session.is_visible(),
             "Alt release must complete the pending switch"

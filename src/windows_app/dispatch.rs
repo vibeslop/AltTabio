@@ -208,7 +208,15 @@ impl App {
     }
 
     pub(super) fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
-        match self.session.handle_input(action) {
+        let effect = if let InputAction::MouseWheel(delta) = action {
+            let visible_rows = self
+                .renderer
+                .visible_row_count(self.settings.appearance.compact_list);
+            self.session.handle_mouse_wheel(delta, visible_rows)
+        } else {
+            self.session.handle_input(action)
+        };
+        match effect {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
             SwitcherEffect::Hide => self.hide_overlay_with_reset(reset_hook),

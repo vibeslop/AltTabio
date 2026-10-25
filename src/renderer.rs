@@ -168,6 +168,16 @@ impl Renderer {
         }
     }
 
+    pub fn visible_row_count(&self, compact_list: bool) -> usize {
+        self.resources.as_ref().map_or(0, |resources| {
+            let size = unsafe {
+                // SAFETY: the render target is live and used only on its owning UI thread.
+                resources.target.GetSize()
+            };
+            for_compact_list(compact_list).visible_row_count(size.height)
+        })
+    }
+
     pub fn resize(&mut self, hwnd: HWND, width: u32, height: u32) -> Result<()> {
         let next = RenderTargetMetrics::for_window(hwnd, width, height);
         let update = self
