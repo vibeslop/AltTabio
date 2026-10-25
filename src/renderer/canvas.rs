@@ -39,7 +39,8 @@ impl Canvas<'_> {
         let layout = self.layout;
         let list_width = layout.list_width(size.width, self.scale);
         let visible_rows = layout.visible_row_count(size.height);
-        let start = switcher.visible_range(visible_rows).start;
+        let visible_range = switcher.visible_range(visible_rows);
+        let start = visible_range.start;
         let selected_handle = switcher.selected_task().map(|task| task.window_handle);
 
         unsafe {
@@ -68,10 +69,48 @@ impl Canvas<'_> {
                 utf16,
             );
         }
+        self.draw_scroll_indicators(layout.scroll_indicators(
+            size.height,
+            list_width,
+            visible_range,
+            switcher.visible_task_count(),
+        ));
         unsafe {
             // SAFETY: the target is valid on this UI thread, and this ends the BeginDraw above on
             // it; nothing between them returns early, so every BeginDraw gets its EndDraw.
             target.EndDraw(None, None)
+        }
+    }
+
+    fn draw_scroll_indicators(&self, indicators: [Option<LogicalRect>; 2]) {
+        for (edge, bounds) in indicators.into_iter().enumerate() {
+            let Some(bounds) = bounds else {
+                continue;
+            };
+            let (tip_y, base_y) = if edge == 0 {
+                (bounds.top, bounds.bottom)
+            } else {
+                (bounds.bottom, bounds.top)
+            };
+            let tip = Vector2::new(f32::midpoint(bounds.left, bounds.right), tip_y);
+            unsafe {
+                // SAFETY: the target and brush are valid on this UI thread and both lines are
+                // drawn within the BeginDraw/EndDraw pair of draw_switcher.
+                self.resources.target.DrawLine(
+                    Vector2::new(bounds.left, base_y),
+                    tip,
+                    &self.resources.secondary_brush,
+                    1.5,
+                    None,
+                );
+                self.resources.target.DrawLine(
+                    tip,
+                    Vector2::new(bounds.right, base_y),
+                    &self.resources.secondary_brush,
+                    1.5,
+                    None,
+                );
+            }
         }
     }
 

@@ -407,7 +407,7 @@ impl Switcher {
     }
 
     #[must_use]
-    pub(crate) fn visible_task_count(&self) -> usize {
+    pub fn visible_task_count(&self) -> usize {
         self.visible_indices.len()
     }
 
