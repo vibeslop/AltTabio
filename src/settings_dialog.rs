@@ -45,7 +45,11 @@ const FRAME: DialogFrame = DialogFrame {
     ex_style: WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0),
 };
 
-pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
+pub fn show(
+    owner: HWND,
+    settings: &Settings,
+    on_open: impl FnOnce(HWND),
+) -> Result<Option<Settings>> {
     let instance = win32::module_instance()?;
     register_class(instance)?;
     let dpi = owner_dpi(owner);
@@ -80,6 +84,7 @@ pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
     if let Err(error) = dialog_host::focus(ok_button) {
         eprintln!("Could not focus the settings OK button: {error}");
     }
+    on_open(window);
     let Some(state) = dialog.run(Keyboard::DialogNavigation)? else {
         return Ok(None);
     };

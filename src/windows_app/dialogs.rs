@@ -1,5 +1,5 @@
 use super::{App, AppHost, show_error_for_window};
-use crate::{about_dialog, settings_dialog, startup};
+use crate::{about_dialog, dialog_host, settings_dialog, startup};
 use alttabio::input::HookSettings;
 use alttabio::settings::Settings;
 use alttabio::settings_change::{
@@ -7,10 +7,26 @@ use alttabio::settings_change::{
 };
 use alttabio::theme::ResolvedTheme;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    IsIconic, PostMessageW, SW_RESTORE, SW_SHOW, ShowWindow,
+};
 
 impl AppHost {
     pub(super) fn show_settings(&self) {
+        if let Some(window) = self.settings_window.get() {
+            unsafe {
+                // SAFETY: the Settings dialog owns this window on this UI thread until its
+                // nested loop returns. The result reports previous visibility, not failure.
+                let command = if IsIconic(window).as_bool() {
+                    SW_RESTORE
+                } else {
+                    SW_SHOW
+                };
+                let _was_visible = ShowWindow(window, command);
+            }
+            dialog_host::bring_to_front(window, "settings");
+            return;
+        }
         let Some((owner, mut dialog_settings)) = self
             .state
             .try_borrow_mut()
@@ -36,7 +52,10 @@ impl AppHost {
                 }
             }
         };
-        let result = settings_dialog::show(owner, &dialog_settings);
+        let result = settings_dialog::show(owner, &dialog_settings, |window| {
+            self.settings_window.set(Some(window));
+        });
+        self.settings_window.set(None);
 
         let Ok(mut app) = self.state.try_borrow_mut() else {
             eprintln!("Could not finish Settings because application state is busy");
@@ -152,5 +171,83 @@ impl SettingsEffects for App {
     fn restart_hooks(&mut self, settings: HookSettings) -> std::result::Result<(), String> {
         self.hooks = None;
         self.start_input_hooks(settings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings_io::SettingsStore;
+    use crate::win32::{ComApartment, module_instance};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, IsIconic, IsWindowVisible, SW_HIDE, SW_MINIMIZE,
+        ShowWindow, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
+    };
+    use windows::core::{Error, Result, w};
+
+    struct TestWindow(HWND);
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            // SAFETY: this test uniquely owns the window on the creating thread.
+            assert!(unsafe { DestroyWindow(self.0) }.is_ok());
+        }
+    }
+
+    #[test]
+    fn repeated_settings_request_shows_and_restores_the_existing_window() -> Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let window = TestWindow(unsafe {
+            // SAFETY: STATIC is a system class, and the test owns the resulting window.
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!("Settings activation test"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(module_instance()?),
+                None,
+            )
+        }?);
+        let (store, settings) = SettingsStore::load_from(
+            std::env::temp_dir().join(format!(
+                "alttabio-settings-activation-test-{}.ini",
+                std::process::id()
+            )),
+            &Settings::default(),
+        )
+        .map_err(|error| Error::new(windows::Win32::Foundation::E_FAIL, error))?;
+        let mut app = App::new(false, false, settings, store)?;
+        app.settings_dialog_open = true;
+        let host = AppHost::new(app);
+        host.settings_window.set(Some(window.0));
+
+        for state in [SW_HIDE, SW_MINIMIZE] {
+            unsafe {
+                // SAFETY: window stays live and belongs to this test thread; the result is
+                // previous visibility rather than success.
+                let _was_visible = ShowWindow(window.0, state);
+            }
+            host.show_settings();
+            unsafe {
+                // SAFETY: these queries only read the live test window's state.
+                assert!(
+                    IsWindowVisible(window.0).as_bool(),
+                    "invoking Settings again must show the existing window"
+                );
+                assert!(
+                    !IsIconic(window.0).as_bool(),
+                    "invoking Settings again must restore the existing window"
+                );
+            }
+            assert_eq!(host.settings_window.get(), Some(window.0));
+            assert!(host.state.borrow().settings_dialog_open);
+        }
+        Ok(())
     }
 }

@@ -37,7 +37,7 @@ use alttabio::task_refresh::TaskListRefresh;
 use alttabio::theme::ResolvedTheme;
 use appearance::apply_window_appearance;
 use shell_dismissal::PendingShellDismissal;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::mem::size_of;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -214,12 +214,15 @@ struct App {
 
 struct AppHost {
     state: RefCell<App>,
+    // Borrowed only while the Settings dialog's nested message loop is running.
+    settings_window: Cell<Option<HWND>>,
 }
 
 impl AppHost {
     fn new(state: App) -> Self {
         Self {
             state: RefCell::new(state),
+            settings_window: Cell::new(None),
         }
     }
 }
