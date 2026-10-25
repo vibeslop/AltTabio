@@ -87,6 +87,7 @@ pub enum InputAction {
     AltReleased,
     RightButtonPressed,
     RightButtonReleased,
+    /// Selection switching from the explicit right-button + wheel gesture.
     MouseWheel(i32),
     AppendSearchCharacter(char),
     BackspaceSearch,

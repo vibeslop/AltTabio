@@ -70,7 +70,7 @@ impl App {
             }
             WM_MOUSEWHEEL => {
                 let delta = high_word(wparam.0).cast_signed();
-                self.handle_input_action(InputAction::MouseWheel(i32::from(delta.signum())));
+                self.handle_mouse_wheel(i32::from(delta));
                 Some(LRESULT(0))
             }
             WM_SIZE => {
@@ -208,15 +208,7 @@ impl App {
     }
 
     pub(super) fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
-        let effect = if let InputAction::MouseWheel(delta) = action {
-            let visible_rows = self
-                .renderer
-                .visible_row_count(self.settings.appearance.compact_list);
-            self.session.handle_mouse_wheel(delta, visible_rows)
-        } else {
-            self.session.handle_input(action)
-        };
-        match effect {
+        match self.session.handle_input(action) {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
             SwitcherEffect::Hide => self.hide_overlay_with_reset(reset_hook),

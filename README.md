@@ -41,7 +41,9 @@ AltTabio is not notarized, so macOS blocks a copy downloaded in a browser. The [
 | Input | Action |
 | --- | --- |
 | Alt+Tab or Win+Tab | Open the switcher and move through it |
-| Arrow keys, Tab, Shift+Tab, or mouse wheel | Change the selected window |
+| Arrow keys, Tab, or Shift+Tab | Change the selected window |
+| Mouse wheel | Scroll the window list without changing the selected window |
+| Right mouse button + wheel, when enabled | Open the switcher and change the selected window |
 | Enter or click | Switch to the selected window |
 | 1-9, on the number row or the number pad | Switch to that window directly |
 | Type | Filter by window title, app name, or number |

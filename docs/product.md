@@ -100,7 +100,9 @@ tccutil reset All com.vibeslop.AltTabio
 | Input | Action |
 | --- | --- |
 | Alt+Tab or Win+Tab | Open and move through the switcher |
-| Arrow keys, Tab, Shift+Tab, or mouse wheel | Change the selected window |
+| Arrow keys, Tab, or Shift+Tab | Change the selected window |
+| Mouse wheel | Scroll the window list without changing the selected window |
+| Right mouse button + wheel, when enabled | Open the switcher and change the selected window |
 | Enter or left click | Activate the selected window |
 | 1-9 or numpad 1-9 | Activate that visible window |
 | Type | Filter by title, application name, or number |

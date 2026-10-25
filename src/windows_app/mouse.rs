@@ -37,36 +37,33 @@ impl AppHost {
 }
 
 impl App {
-    pub(super) fn handle_mouse_move(&mut self, lparam: LPARAM) {
-        if !self.mouse_selection_armed {
-            let mut cursor = POINT::default();
-            let current = unsafe {
-                // SAFETY: `cursor` is writable for the call.
-                GetCursorPos(&raw mut cursor)
-            };
-            // Every move reads the cursor until hover selection arms, so a failure that lasts
-            // would log on each one. Logging the first failure of a run is enough.
-            match current {
-                Ok(()) => self.cursor_read_failures.succeed(),
-                Err(error) => {
-                    if self.cursor_read_failures.fail() {
-                        eprintln!(
-                            "Could not read the cursor position to arm hover selection: {error}"
-                        );
-                    }
-                    return;
-                }
-            }
-            if self.mouse_origin == Some(cursor) {
-                return;
-            }
-            self.mouse_selection_armed = true;
+    pub(super) fn handle_mouse_wheel(&mut self, delta: i32) {
+        let visible_rows = self
+            .renderer
+            .visible_row_count(self.settings.appearance.compact_list);
+        if self.session.handle_mouse_wheel(delta, visible_rows) == SwitcherEffect::Redraw {
+            // A queued or synthetic mouse move at this position must not select the row that
+            // scrolling just moved under the pointer.
+            self.mouse_position = self.read_mouse_position();
+            self.close_button.update_hover(None);
+            self.request_redraw();
         }
+    }
+
+    pub(super) fn handle_mouse_move(&mut self, lparam: LPARAM) {
+        let Some(cursor) = self.read_mouse_position() else {
+            return;
+        };
+        let pointer_moved = self
+            .mouse_position
+            .is_some_and(|previous| previous != cursor);
+        self.mouse_position = Some(cursor);
         self.track_mouse_leave();
 
         let mut hit = self.hit_test(lparam);
         let mut needs_redraw = false;
-        if self.settings.general.mouse_over_selection
+        if pointer_moved
+            && self.settings.general.mouse_over_selection
             && !self.close_button.is_pressed()
             && let Some(TaskListHit::Task(position)) = hit
             && select_hovered_position(self.session.switcher_mut(), position)
@@ -179,22 +176,28 @@ impl App {
         )
     }
 
-    pub(super) fn reset_mouse_selection(&mut self) {
+    fn read_mouse_position(&mut self) -> Option<POINT> {
         let mut cursor = POINT::default();
         let read = unsafe {
             // SAFETY: `cursor` is writable for the call.
             GetCursorPos(&raw mut cursor)
         };
-        // Without an origin, the first mouse move arms hover selection even if the cursor has
-        // not moved since the overlay opened.
-        self.mouse_origin = match read {
-            Ok(()) => Some(cursor),
+        match read {
+            Ok(()) => {
+                self.cursor_read_failures.succeed();
+                Some(cursor)
+            }
             Err(error) => {
-                eprintln!("Could not read the cursor position the overlay opened at: {error}");
+                if self.cursor_read_failures.fail() {
+                    eprintln!("Could not read the cursor position for hover selection: {error}");
+                }
                 None
             }
-        };
-        self.mouse_selection_armed = false;
+        }
+    }
+
+    pub(super) fn reset_mouse_selection(&mut self) {
+        self.mouse_position = self.read_mouse_position();
         self.mouse_leave_tracked = false;
         self.close_button.reset();
     }
