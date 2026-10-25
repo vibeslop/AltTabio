@@ -177,11 +177,14 @@ impl SettingsEffects for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_messages::{WM_SHOW_SETTINGS, WM_TRAY_CALLBACK};
     use crate::settings_io::SettingsStore;
     use crate::win32::{ComApartment, module_instance};
+    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, IsIconic, IsWindowVisible, SW_HIDE, SW_MINIMIZE,
-        ShowWindow, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
+        CreateWindowExW, DestroyWindow, IsIconic, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW,
+        SW_HIDE, SW_MINIMIZE, ShowWindow, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WS_EX_TOOLWINDOW,
+        WS_OVERLAPPEDWINDOW,
     };
     use windows::core::{Error, Result, w};
 
@@ -192,6 +195,69 @@ mod tests {
             // SAFETY: this test uniquely owns the window on the creating thread.
             assert!(unsafe { DestroyWindow(self.0) }.is_ok());
         }
+    }
+
+    #[test]
+    fn tray_show_during_settings_keeps_the_disabled_overlay_hidden() -> Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let window = TestWindow(unsafe {
+            // SAFETY: STATIC is a system class, and the test owns the resulting window.
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!("Modal switcher test"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(module_instance()?),
+                None,
+            )
+        }?);
+        let (store, settings) = SettingsStore::load_from(
+            std::env::temp_dir().join(format!(
+                "alttabio-modal-switcher-test-{}.ini",
+                std::process::id()
+            )),
+            &Settings::default(),
+        )
+        .map_err(|error| Error::new(windows::Win32::Foundation::E_FAIL, error))?;
+        let mut app = App::new(false, false, settings, store)?;
+        app.hwnd = window.0;
+        app.settings_dialog_open = true;
+        let _owner_guard = dialog_host::OwnerGuard::disable(window.0);
+
+        for tray_message in [WM_LBUTTONUP, WM_LBUTTONDBLCLK] {
+            let tray_message = isize::try_from(tray_message).map_err(|error| {
+                Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
+            })?;
+            app.handle_message(WM_TRAY_CALLBACK, WPARAM(0), LPARAM(tray_message));
+            assert!(
+                !app.is_visible(),
+                "a modal dialog must keep the session hidden"
+            );
+            let mut message = MSG::default();
+            unsafe {
+                // SAFETY: these calls query the live test-owned window and its posted messages.
+                assert!(!IsWindowVisible(window.0).as_bool());
+                assert!(!IsWindowEnabled(window.0).as_bool());
+                assert!(
+                    PeekMessageW(
+                        &raw mut message,
+                        Some(window.0),
+                        WM_SHOW_SETTINGS,
+                        WM_SHOW_SETTINGS,
+                        PM_REMOVE,
+                    )
+                    .as_bool(),
+                    "Show must request the existing Settings window instead of the disabled overlay"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

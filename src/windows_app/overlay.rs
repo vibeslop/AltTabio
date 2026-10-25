@@ -1,6 +1,7 @@
 use super::App;
 use super::activation::request_foreground;
 use super::display::position_on_cursor_monitor;
+use crate::app_messages::WM_SHOW_SETTINGS;
 use crate::preview::DwmPreview;
 use crate::renderer::RenderOptions;
 use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows};
@@ -13,6 +14,12 @@ use windows::core::Error;
 
 impl App {
     pub(super) fn show_overlay(&mut self, selection_delta: Option<i32>) {
+        if self.modal_state().any_open() {
+            if self.settings_dialog_open {
+                self.request_modal_dialog(WM_SHOW_SETTINGS, "Settings");
+            }
+            return;
+        }
         self.hide_filter_feedback();
         match enumerate_switchable_windows(&self.settings) {
             Ok(EnumeratedTasks { tasks, icons }) => {
