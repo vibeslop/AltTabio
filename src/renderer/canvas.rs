@@ -160,7 +160,7 @@ impl Canvas<'_> {
             }
         }
 
-        if options.show_numbers {
+        if options.show_numbers && visible_position <= 9 {
             self.draw_text(
                 encode_number(utf16, visible_position),
                 &self.text.number,
