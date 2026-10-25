@@ -151,8 +151,8 @@ mod tests {
     use alttabio::switcher::SwitchTask;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, GetWindowRect, WA_INACTIVE, WM_ACTIVATE, WS_EX_TOOLWINDOW,
-        WS_POPUP,
+        CreateWindowExW, DestroyWindow, GetWindowRect, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
+        WM_KEYDOWN, WS_EX_TOOLWINDOW, WS_POPUP,
     };
     use windows::core::{Error, w};
 
@@ -216,6 +216,14 @@ mod tests {
         assert!(app.session.filter_visible());
         app.apply_input_action(InputAction::AppendSearchCharacter('a'));
         assert_eq!(app.session.switcher().filter(), "a");
+        // Preview mode has no hooks: each printable press reaches keydown and then WM_CHAR.
+        for (key, character, expected) in
+            [(0x31, '1', "a1"), (0x62, '2', "a12"), (0x33, '#', "a12#")]
+        {
+            let _handled = app.handle_message(WM_KEYDOWN, WPARAM(key), LPARAM(0));
+            let _handled = app.handle_message(WM_CHAR, WPARAM(character as usize), LPARAM(0));
+            assert_eq!(app.session.switcher().filter(), expected);
+        }
         app.clear_filter();
         assert!(!app.session.filter_visible());
         assert_eq!(app.session.switcher().visible_task_count(), 2);

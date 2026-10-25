@@ -281,11 +281,13 @@ impl App {
             return;
         }
         if let Some(action) = overlay_key_action(event) {
-            let action = if let InputAction::ActivateVisiblePosition(position) = action {
-                InputAction::NumberKey(position)
-            } else {
-                action
-            };
+            // Focused printable query input arrives through WM_CHAR, including its keyboard
+            // layout and Shift translation. Handling digits here too would insert them twice.
+            if self.session.filter_visible()
+                && matches!(action, InputAction::ActivateVisiblePosition(_))
+            {
+                return;
+            }
             self.handle_input_action(action);
         }
     }
