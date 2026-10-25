@@ -10,6 +10,8 @@ mod app_icon;
 #[cfg(windows)]
 mod app_messages;
 #[cfg(windows)]
+mod clipboard;
+#[cfg(windows)]
 mod dialog_host;
 #[cfg(windows)]
 mod filter_popup;

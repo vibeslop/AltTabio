@@ -55,6 +55,9 @@ impl Default for KeyboardState {
 }
 
 impl KeyboardState {
+    pub(super) fn pressed(&self, key: VIRTUAL_KEY) -> bool {
+        self.keys[usize::from(key.0)] & 0x80 != 0
+    }
     pub(super) fn snapshot() -> Result<Self, String> {
         let mut keys = [0; 256];
         unsafe {

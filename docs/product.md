@@ -40,7 +40,8 @@ It is a practical answer for people searching for:
 - Live preview of the selected window, or a full-desktop preview that shows it in place
 - Compact task list by default so the preview has room
 - Type to filter by window title, application name, or number
-- The query appears in a translucent capsule on the panel's top edge without moving the list, and hides after typing stops
+- The query stays visible in a translucent capsule on the panel's top edge until cleared, without moving the list
+- Select and edit the query with the mouse, Shift and Ctrl navigation, and standard copy, cut, paste, undo, and redo shortcuts
 - Keys 1-9 switch to the corresponding visible window
 - Keyboard and mouse control, including right mouse button plus wheel switching
 - Close, minimize, maximize, restore, end-process, and run-another-instance commands
@@ -101,15 +102,17 @@ tccutil reset All com.vibeslop.AltTabio
 | Input | Action |
 | --- | --- |
 | Alt+Tab or Win+Tab | Open and move through the switcher |
-| Arrow keys, Tab, or Shift+Tab | Change the selected window |
+| Up, Down, Tab, or Shift+Tab | Change the selected window |
+| Left, Right, Home, or End | Edit an active query; otherwise navigate the windows |
 | Mouse wheel | Scroll the window list without changing the selected window |
 | Right mouse button + wheel, when enabled | Open the switcher and change the selected window |
 | Enter or left click | Activate the selected window |
 | 1-9 or numpad 1-9 | Activate that visible window |
 | Type | Filter by title, application name, or number |
 | Backspace | Remove a filter character |
-| Home or End | First or last window |
-| Escape | Close the switcher |
+| Escape or click outside | Close the switcher |
+| Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V | Select, copy, cut, or paste query text |
+| Ctrl+Z or Ctrl+Y | Undo or redo a query edit |
 | F4 | Close the selected window |
 | F5 | Minimize |
 | F6 | Maximize |

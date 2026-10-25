@@ -27,7 +27,6 @@ use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
 use crate::win32::{ComApartment, module_instance, wide};
 use alttabio::failure_run::FailureRun;
-use alttabio::filter_feedback::FilterFeedback;
 use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
 use alttabio::settings::Settings;
@@ -184,8 +183,6 @@ struct App {
     task_icons: TaskIcons,
     renderer: Renderer,
     filter_popup: Option<FilterPopup>,
-    filter_feedback: FilterFeedback,
-    filter_timer_armed: bool,
     filter_popup_failures: FailureRun,
     begin_paint_failures: FailureRun,
     foreground_bounds_failures: FailureRun,
@@ -237,8 +234,6 @@ impl App {
             task_icons: TaskIcons::default(),
             renderer: Renderer::new(resolved_theme)?,
             filter_popup: None,
-            filter_feedback: FilterFeedback::default(),
-            filter_timer_armed: false,
             filter_popup_failures: FailureRun::default(),
             begin_paint_failures: FailureRun::default(),
             foreground_bounds_failures: FailureRun::default(),

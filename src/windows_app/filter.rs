@@ -1,85 +1,81 @@
 use super::App;
-use crate::app_messages::FILTER_FEEDBACK_TIMER_ID;
 use crate::filter_popup::FilterPopup;
-use alttabio::filter_feedback::HIDE_DELAY;
-use std::time::Instant;
-use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
-use windows::core::{Error, Result};
+use alttabio::switcher::SwitcherSession;
+use alttabio::text_edit::TextCommand;
+use windows::core::Result;
 
 impl App {
-    pub(super) fn filter_edited(&mut self) {
-        let query = self.session.switcher().filter();
-        self.filter_feedback.edited(query, Instant::now());
-        if query.is_empty() {
-            self.hide_filter_feedback();
+    pub(super) fn handle_outside_pointer(&mut self, x: i32, y: i32) {
+        if !self.is_visible() || self.pending_shell.is_some() || self.modal_state().any_open() {
             return;
         }
-        let timer = unsafe {
-            // SAFETY: the live overlay owns this timer. Reusing the ID resets its idle delay;
-            // no callback pointer or borrowed data is retained by Windows.
-            SetTimer(
-                Some(self.hwnd),
-                FILTER_FEEDBACK_TIMER_ID,
-                u32::try_from(HIDE_DELAY.as_millis()).unwrap_or(u32::MAX),
-                None,
-            )
-        };
-        if timer == 0 {
-            eprintln!(
-                "Could not schedule filter feedback hiding: {}",
-                Error::from_thread()
-            );
-            self.hide_filter_feedback();
-        } else {
-            self.filter_timer_armed = true;
+        let mut panel = windows::Win32::Foundation::RECT::default();
+        if let Err(error) = unsafe {
+            // SAFETY: the live overlay owns this initialized output for a synchronous read.
+            windows::Win32::UI::WindowsAndMessaging::GetWindowRect(self.hwnd, &raw mut panel)
+        } {
+            eprintln!("Could not check an outside click: {error}");
+            return;
+        }
+        let point = alttabio::dialog_layout::Point::new(x, y);
+        let in_panel = crate::win32::rect_from_native(panel).contains_point(point);
+        let in_query = self
+            .filter_popup
+            .as_ref()
+            .and_then(FilterPopup::visible_bounds)
+            .is_some_and(|bounds| bounds.contains_point(point));
+        if !in_panel && !in_query {
+            self.hide_overlay();
         }
     }
-
-    pub(super) fn handle_filter_feedback_timer(&mut self) {
-        if let Some(popup) = &self.filter_popup
-            && let Err(error) = popup.check_events()
-        {
-            eprintln!("Could not post a filter popup action: {error}");
-        }
-        // A timer tick queued before another edit must not hide that edit's fresh feedback.
-        if !self.filter_feedback.is_visible(Instant::now()) {
-            self.hide_filter_feedback();
-        }
-    }
-
-    pub(super) fn hide_filter_feedback(&mut self) {
-        self.filter_feedback.hide();
+    pub(super) fn hide_filter_feedback(&self) {
         if let Some(popup) = &self.filter_popup {
             popup.hide();
-        }
-        if self.filter_timer_armed {
-            self.filter_timer_armed = false;
-            let result = unsafe {
-                // SAFETY: the timer belongs to this live overlay and is stopped once per arm.
-                KillTimer(Some(self.hwnd), FILTER_FEEDBACK_TIMER_ID)
-            };
-            if let Err(error) = result {
-                eprintln!("Could not stop filter feedback hiding: {error}");
-            }
         }
     }
 
     pub(super) fn clear_filter(&mut self) {
         if self.session.search_active() && !self.session.context_menu_open() {
             self.session.clear_filter();
-            self.hide_filter_feedback();
             self.request_redraw();
         }
     }
 
-    pub(super) fn sync_filter_popup(&mut self) {
-        if !self.session.search_active()
-            || self.session.context_menu_open()
-            || !self.filter_feedback.is_visible(Instant::now())
-        {
-            if let Some(popup) = &self.filter_popup {
-                popup.hide();
+    pub(super) fn handle_filter_pointer(&mut self, x: usize, mode: isize) {
+        if !self.session.filter_visible() || self.modal_state().any_open() {
+            return;
+        }
+        if mode == 2 {
+            let _effect = self
+                .session
+                .handle_input(alttabio::input::InputAction::EditSearch(
+                    TextCommand::SelectAll,
+                ));
+        } else if let Some(popup) = &self.filter_popup {
+            match popup.hit_test(i32::try_from(x).unwrap_or(i32::MAX)) {
+                Ok(position) => self.session.select_filter_position(position, mode == 1),
+                Err(error) => eprintln!("Could not position the filter caret: {error}"),
             }
+        }
+        self.request_redraw();
+    }
+
+    pub(super) fn handle_clipboard_command(&mut self, command: TextCommand) {
+        let owner = self.hwnd;
+        if let Err(error) = clipboard_command(
+            &mut self.session,
+            command,
+            || crate::clipboard::read(owner),
+            |text| crate::clipboard::write(owner, text),
+        ) {
+            eprintln!("Could not edit the filter through the clipboard: {error}");
+        }
+        self.request_redraw();
+    }
+
+    pub(super) fn sync_filter_popup(&mut self) {
+        if !self.session.filter_visible() || self.session.context_menu_open() {
+            self.hide_filter_feedback();
             return;
         }
         match self.update_filter_popup() {
@@ -90,9 +86,7 @@ impl App {
                 if self.filter_popup_failures.fail() {
                     eprintln!("Could not show the typed filter: {error}");
                 }
-                if let Some(popup) = &self.filter_popup {
-                    popup.hide();
-                }
+                self.hide_filter_feedback();
             }
         }
     }
@@ -104,13 +98,47 @@ impl App {
         if let Some(popup) = &mut self.filter_popup {
             popup.update(
                 self.hwnd,
-                self.session.switcher().filter(),
+                self.session.switcher().filter_editor(),
                 self.resolved_theme,
                 self.settings.appearance.compact_list,
             )?;
         }
         Ok(())
     }
+}
+
+fn clipboard_command(
+    session: &mut SwitcherSession,
+    command: TextCommand,
+    read: impl FnOnce() -> Result<String>,
+    write: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    if !session.search_active() || session.context_menu_open() {
+        return Ok(());
+    }
+    match command {
+        TextCommand::Copy | TextCommand::Cut => {
+            let selected = session
+                .switcher()
+                .filter_editor()
+                .selected_text()
+                .to_owned();
+            if !selected.is_empty() {
+                write(&selected)?;
+                if command == TextCommand::Cut {
+                    session.replace_filter_selection("");
+                }
+            }
+        }
+        TextCommand::Paste => {
+            let text = read()?;
+            if !text.is_empty() {
+                session.replace_filter_selection(&text);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -121,11 +149,12 @@ mod tests {
     use alttabio::input::InputAction;
     use alttabio::settings::Settings;
     use alttabio::switcher::SwitchTask;
-    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, GetWindowRect, WS_EX_TOOLWINDOW, WS_POPUP,
+        CreateWindowExW, DestroyWindow, GetWindowRect, WA_INACTIVE, WM_ACTIVATE, WS_EX_TOOLWINDOW,
+        WS_POPUP,
     };
-    use windows::core::w;
+    use windows::core::{Error, w};
 
     struct Owner(HWND);
     impl Drop for Owner {
@@ -136,10 +165,11 @@ mod tests {
     }
 
     #[test]
-    fn typing_idle_and_clear_use_the_app_path_without_moving_the_panel() -> Result<()> {
+    fn query_stays_visible_through_selection_and_empty_results_then_click_away_dismisses()
+    -> Result<()> {
         let _apartment = ComApartment::initialize()?;
         let owner = Owner(unsafe {
-            // SAFETY: STATIC is a system class, and the test owns this hidden, bounded popup.
+            // SAFETY: STATIC is a system class, and the test owns this hidden popup.
             CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 w!("STATIC"),
@@ -176,35 +206,97 @@ mod tests {
         unsafe {
             GetWindowRect(owner.0, &raw mut before)?;
         }
-        app.apply_input_action(InputAction::AppendSearchCharacter('a'));
-        assert!(app.filter_timer_armed);
-        assert!(app.filter_feedback.is_visible(Instant::now()));
+        app.apply_input_action(InputAction::AppendSearchCharacter('z'));
+        assert!(app.session.filter_visible());
+        assert_eq!(app.session.switcher().visible_task_count(), 0);
         assert!(app.filter_popup.is_some());
-        let expired = Instant::now()
-            .checked_sub(HIDE_DELAY)
-            .ok_or_else(Error::from_thread)?;
-        app.filter_feedback.edited("a", expired);
-        app.handle_filter_feedback_timer();
-        assert!(!app.filter_timer_armed);
-        assert_eq!(
-            app.session.switcher().filter(),
-            "a",
-            "idle hiding keeps the filter"
-        );
-        app.apply_input_action(InputAction::AppendSearchCharacter('b'));
-        assert!(app.filter_feedback.is_visible(Instant::now()));
+        app.apply_input_action(InputAction::EditSearch(TextCommand::SelectAll));
+        assert_eq!(app.session.switcher().filter_editor().selected_text(), "z");
+        app.request_redraw();
+        assert!(app.session.filter_visible());
+        app.apply_input_action(InputAction::AppendSearchCharacter('a'));
+        assert_eq!(app.session.switcher().filter(), "a");
         app.clear_filter();
-        assert!(!app.filter_timer_armed);
-        assert!(!app.filter_feedback.is_visible(Instant::now()));
-        assert_eq!(app.session.switcher().filter(), "");
+        assert!(!app.session.filter_visible());
         assert_eq!(app.session.switcher().visible_task_count(), 2);
         let mut after = RECT::default();
-        // SAFETY: the test window is still live and after is writable for the comparison.
+        // SAFETY: the test window remains live and after is writable for the comparison.
         unsafe {
             GetWindowRect(owner.0, &raw mut after)?;
         }
         assert_eq!(before, after);
+        app.handle_outside_pointer(before.left + 40, before.top + 40);
+        assert!(app.session.is_visible());
+        assert!(app.session.open_context_menu());
+        app.handle_outside_pointer(before.left - 40, before.top);
+        assert!(
+            app.session.is_visible(),
+            "an open context menu must retain the switcher"
+        );
+        let _effect = app.session.finish_context_menu(None);
+        app.handle_outside_pointer(before.left - 40, before.top);
+        assert!(!app.session.is_visible());
+        app.session
+            .open([SwitchTask::new(1, 10, "Alpha", "editor")], None);
+        let _handled = app.handle_message(
+            WM_ACTIVATE,
+            WPARAM(usize::try_from(WA_INACTIVE).unwrap_or_default()),
+            LPARAM(0),
+        );
+        assert!(!app.session.is_visible());
         app.shutdown();
+        Ok(())
+    }
+
+    #[test]
+    fn clipboard_copy_cut_paste_and_failed_cut_preserve_the_expected_text() -> Result<()> {
+        let settings = alttabio::switcher::SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        };
+        let mut session = SwitcherSession::new(settings);
+        session.open([SwitchTask::new(1, 10, "Alpha", "editor")], None);
+        session.replace_filter_selection("Документы 🦀");
+        let _effect = session.handle_input(InputAction::EditSearch(TextCommand::SelectAll));
+        clipboard_command(
+            &mut session,
+            TextCommand::Copy,
+            || Ok(String::new()),
+            |text| {
+                assert_eq!(text, "Документы 🦀");
+                Ok(())
+            },
+        )?;
+        assert_eq!(session.switcher().filter(), "Документы 🦀");
+        let failed = clipboard_command(
+            &mut session,
+            TextCommand::Cut,
+            || Ok(String::new()),
+            |_| {
+                Err(Error::from_hresult(windows::core::HRESULT(
+                    0x8000_4005_u32.cast_signed(),
+                )))
+            },
+        );
+        assert!(failed.is_err());
+        assert_eq!(session.switcher().filter(), "Документы 🦀");
+        clipboard_command(
+            &mut session,
+            TextCommand::Cut,
+            || Ok(String::new()),
+            |_| Ok(()),
+        )?;
+        assert_eq!(session.switcher().filter(), "");
+        clipboard_command(
+            &mut session,
+            TextCommand::Paste,
+            || Ok("browser".to_owned()),
+            |_| Ok(()),
+        )?;
+        assert_eq!(session.switcher().filter(), "browser");
+        let _effect = session.handle_input(InputAction::EditSearch(TextCommand::Undo));
+        assert_eq!(session.switcher().filter(), "");
         Ok(())
     }
 }

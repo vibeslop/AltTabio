@@ -2,6 +2,7 @@
 
 mod key;
 
+use crate::text_edit::TextCommand;
 use crate::window_command::WindowCommand;
 use key::KeySet;
 pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
@@ -84,6 +85,7 @@ pub enum InputAction {
     CloseSelected,
     WindowCommand(WindowCommand),
     ActivateVisiblePosition(usize),
+    NumberKey(usize),
     AltReleased,
     RightButtonPressed,
     RightButtonReleased,
@@ -91,6 +93,7 @@ pub enum InputAction {
     MouseWheel(i32),
     AppendSearchCharacter(char),
     BackspaceSearch,
+    EditSearch(TextCommand),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -358,6 +361,10 @@ impl HookState {
             return HookOutcome::suppressed();
         }
 
+        if let Some(outcome) = self.process_editing_key(event, settings.search_active) {
+            return outcome;
+        }
+
         if let Some(outcome) = self.process_command_key(event) {
             return outcome;
         }
@@ -374,7 +381,9 @@ impl HookState {
             return HookOutcome::suppressed();
         }
 
-        if let Some(outcome) = self.process_number_shortcut(event, key_was_down, alt_down) {
+        if let Some(outcome) =
+            self.process_number_shortcut(event, key_was_down, alt_down, settings.search_active)
+        {
             return outcome;
         }
 
@@ -465,6 +474,7 @@ impl HookState {
         event: KeyEvent,
         key_was_down: bool,
         alt_down: bool,
+        search_active: bool,
     ) -> Option<HookOutcome> {
         if event.transition != KeyTransition::Pressed {
             return None;
@@ -477,6 +487,15 @@ impl HookState {
             })?
         else {
             return None;
+        };
+        let action = if search_active {
+            if let InputAction::ActivateVisiblePosition(position) = action {
+                InputAction::NumberKey(position)
+            } else {
+                action
+            }
+        } else {
+            action
         };
         if self.alt_switch_gesture_active && alt_down {
             self.alt_switch_gesture_active = false;
@@ -810,6 +829,34 @@ impl HookState {
         None
     }
 
+    fn process_editing_key(&mut self, event: KeyEvent, search_active: bool) -> Option<HookOutcome> {
+        if !search_active
+            || event.transition != KeyTransition::Pressed
+            || event.modifiers.left_windows
+            || event.modifiers.right_windows
+        {
+            return None;
+        }
+        let command = TextCommand::for_key(
+            u32::from(event.key.virtual_key()),
+            event.modifiers.control,
+            event.modifiers.shift,
+        )?;
+        if !matches!(command, TextCommand::Start | TextCommand::End)
+            || event.modifiers.control
+            || event.modifiers.shift
+        {
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+        }
+        self.suppress_owned_key_release(event.key);
+        let action = if command == TextCommand::Backspace {
+            InputAction::BackspaceSearch
+        } else {
+            InputAction::EditSearch(command)
+        };
+        Some(HookOutcome::one(true, action))
+    }
     fn process_search_key(&mut self, event: KeyEvent, search_active: bool) -> Option<HookOutcome> {
         // Typing a key whose release cannot be owned would leak that release to the foreground.
         if !KeySet::can_hold(event.key) || event.transition == KeyTransition::Released {
@@ -921,6 +968,45 @@ fn windows_keys(mask: u8) -> impl Iterator<Item = Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editing_shortcuts_are_commands_and_own_their_key_releases() {
+        for (key, command) in [
+            (b'A', TextCommand::SelectAll),
+            (b'C', TextCommand::Copy),
+            (b'X', TextCommand::Cut),
+            (b'V', TextCommand::Paste),
+            (b'Z', TextCommand::Undo),
+            (b'Y', TextCommand::Redo),
+        ] {
+            let mut state = HookState::default();
+            let settings = HookSettings {
+                search_active: true,
+                ..HookSettings::default()
+            };
+            let modifiers = Modifiers {
+                control: true,
+                ..Modifiers::default()
+            };
+            let key = Key::Other(u16::from(key));
+            let outcome = state.process_key(KeyEvent::pressed(key, modifiers), settings);
+            assert!(outcome.suppress);
+            assert_eq!(
+                outcome.actions().collect::<Vec<_>>(),
+                vec![InputAction::EditSearch(command)]
+            );
+            assert!(
+                state
+                    .process_key(KeyEvent::released(key, modifiers), settings)
+                    .suppress
+            );
+            assert!(
+                !HookState::default()
+                    .process_key(KeyEvent::pressed(key, modifiers), HookSettings::default())
+                    .suppress
+            );
+        }
+    }
 
     #[test]
     fn owned_alt_tab_cycles_without_windows_alt_flag() {
@@ -1389,6 +1475,8 @@ mod tests {
 
     const ALT: Modifiers = Modifiers {
         alt: true,
+        control: false,
+        shift: false,
         left_windows: false,
         right_windows: false,
     };
@@ -2248,7 +2336,7 @@ mod tests {
             state.process_key(KeyEvent::pressed(Key::NumpadDigit(9), ALT), settings),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::ActivateVisiblePosition(9)), None],
+                actions: [Some(InputAction::NumberKey(9)), None],
             }
         );
         assert_eq!(
@@ -3027,7 +3115,7 @@ mod tests {
             ),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::Navigate(1)), None],
+                actions: [Some(InputAction::EditSearch(TextCommand::Right)), None],
             }
         );
         assert!(

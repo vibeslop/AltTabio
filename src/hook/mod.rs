@@ -6,6 +6,7 @@ mod keyboard_state;
 mod recovery;
 mod replay;
 
+use crate::app_messages::WM_OUTSIDE_POINTER;
 use crate::win32::{high_word, module_instance};
 use alttabio::hook_flags::{
     HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS,
@@ -29,13 +30,15 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_RWIN, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW,
+    KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WH_MOUSE_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WH_MOUSE_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_QUIT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::Error;
 
@@ -435,6 +438,8 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     let key = decode_virtual_key(data.vkCode);
     let modifiers = Modifiers {
         alt: data.flags.contains(LLKHF_ALTDOWN),
+        control: false,
+        shift: false,
         left_windows: key_pressed(VK_LWIN.0),
         right_windows: key_pressed(VK_RWIN.0),
     };
@@ -443,6 +448,11 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         context
             .keyboard_state
             .observe_at(data.vkCode, transition, data.time);
+        let modifiers = Modifiers {
+            control: context.keyboard_state.pressed(VK_CONTROL),
+            shift: context.keyboard_state.pressed(VK_SHIFT),
+            ..modifiers
+        };
         let flags = context.sync_interception();
         let search_active = flags & SEARCH_ACTIVE != 0;
         context
@@ -489,6 +499,26 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
         return None;
     }
     let event = match u32::try_from(wparam.0).ok()? {
+        WM_LBUTTONDOWN => {
+            let _posted = process_with_context(|context| {
+                if context.sync_interception() & OVERLAY_ACTIVE != 0 {
+                    let posted = unsafe {
+                        // SAFETY: the hook owner retains the target HWND. Only scalar screen
+                        // coordinates cross this callback; hit testing runs on the app thread.
+                        PostMessageW(
+                            Some(context.target),
+                            WM_OUTSIDE_POINTER,
+                            WPARAM(usize::try_from(data.pt.x.cast_unsigned()).unwrap_or_default()),
+                            LPARAM(isize::try_from(data.pt.y).unwrap_or_default()),
+                        )
+                    };
+                    if posted.is_err() {
+                        context.record_error(HOOK_ERROR_POST_ACTION);
+                    }
+                }
+            });
+            return None;
+        }
         WM_RBUTTONDOWN => MouseEvent::RightButtonPressed,
         WM_RBUTTONUP => MouseEvent::RightButtonReleased,
         WM_MOUSEWHEEL => MouseEvent::Wheel(high_word(data.mouseData as usize).cast_signed()),

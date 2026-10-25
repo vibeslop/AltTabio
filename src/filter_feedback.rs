@@ -1,31 +1,8 @@
-//! The typed query's short-lived feedback and its placement over the panel's top edge.
+//! Placement and opacity of the active query over the panel's top edge.
 
 use crate::dialog_layout::{Rect, scale};
 use crate::overlay_layout::{for_compact_list, layout_dpi, layout_scale};
-use std::time::{Duration, Instant};
-
-pub const HIDE_DELAY: Duration = Duration::from_millis(1_500);
 pub const BACKGROUND_OPACITY: f32 = 0.5;
-
-#[derive(Debug, Default)]
-pub struct FilterFeedback {
-    until: Option<Instant>,
-}
-
-impl FilterFeedback {
-    pub fn edited(&mut self, query: &str, now: Instant) {
-        self.until = (!query.is_empty()).then(|| now + HIDE_DELAY);
-    }
-
-    #[must_use]
-    pub fn is_visible(&self, now: Instant) -> bool {
-        self.until.is_some_and(|until| now < until)
-    }
-
-    pub fn hide(&mut self) {
-        self.until = None;
-    }
-}
 
 /// The popup shares the panel's DPI cap and overlaps only its existing top padding. When a
 /// manually moved panel leaves no room above it, omit the feedback instead of covering a row.
@@ -70,27 +47,23 @@ mod tests {
     use crate::overlay_window::overlay_bounds;
 
     #[test]
-    fn editing_renews_feedback_but_a_stale_timer_cannot_hide_new_text() {
-        let start = Instant::now();
-        let mut feedback = FilterFeedback::default();
-        assert!(!feedback.is_visible(start));
-        feedback.edited("f", start);
-        assert!(feedback.is_visible(start + HIDE_DELAY / 2));
-        feedback.edited("fi", start + HIDE_DELAY / 2);
-        assert!(feedback.is_visible(start + HIDE_DELAY));
-        assert!(!feedback.is_visible(start + HIDE_DELAY * 2));
-    }
-
-    #[test]
-    fn clearing_and_dismissing_hide_feedback_immediately() {
-        let now = Instant::now();
-        let mut feedback = FilterFeedback::default();
-        feedback.edited("file", now);
-        feedback.edited("", now);
-        assert!(!feedback.is_visible(now));
-        feedback.edited("file", now);
-        feedback.hide();
-        assert!(!feedback.is_visible(now));
+    fn an_active_query_never_becomes_an_invisible_filter() {
+        use crate::input::InputAction;
+        use crate::switcher::{SwitchTask, SwitcherSession, SwitcherSessionSettings};
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        });
+        session.open([SwitchTask::new(1, 10, "Editor", "editor")], None);
+        let _effect = session.handle_input(InputAction::AppendSearchCharacter('z'));
+        assert_eq!(session.switcher().visible_task_count(), 0);
+        assert!(session.filter_visible());
+        let _effect = session.handle_input(InputAction::Navigate(1));
+        assert!(session.filter_visible());
+        session.clear_filter();
+        assert!(!session.filter_visible());
+        assert_eq!(session.switcher().visible_task_count(), 1);
     }
 
     #[test]

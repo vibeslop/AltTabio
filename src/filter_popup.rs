@@ -2,8 +2,9 @@
 
 mod paint;
 mod surface;
+mod text;
 
-use crate::app_messages::WM_CLEAR_FILTER;
+use crate::app_messages::{WM_CLEAR_FILTER, WM_FILTER_POINTER};
 use crate::win32::{
     module_instance, point_from_lparam, rect_from_native, set_window_user_data,
     work_area_near_window,
@@ -22,11 +23,11 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Gdi::{AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
+    CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
     GetWindowLongPtrW, GetWindowRect, IDC_ARROW, LoadCursorW, MA_NOACTIVATE, PostMessageW,
     RegisterClassExW, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow, ULW_ALPHA, UpdateLayeredWindow,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_NCCREATE, WM_NCDESTROY, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{Error, Result, w};
 
@@ -35,6 +36,8 @@ const CLASS_NAME: windows::core::PCWSTR = w!("AltTabioFilterFeedback");
 #[derive(PartialEq)]
 struct Frame {
     query: String,
+    caret: usize,
+    selection: std::ops::Range<usize>,
     bounds: Rect,
     dpi: u16,
     theme: ResolvedTheme,
@@ -43,6 +46,7 @@ struct Frame {
 struct Events {
     owner: HWND,
     clear_start: Cell<bool>,
+    selecting: Cell<bool>,
     clear_left: Cell<i32>,
     post_failure: Cell<Option<Error>>,
     destroyed: Cell<bool>,
@@ -64,6 +68,7 @@ impl FilterPopup {
             LoadCursorW(None, IDC_ARROW)
         }?;
         let class = WNDCLASSEXW {
+            style: CS_DBLCLKS,
             cbSize: u32::try_from(size_of::<WNDCLASSEXW>()).unwrap_or_default(),
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
@@ -85,6 +90,7 @@ impl FilterPopup {
         let mut events = Box::new(Events {
             owner,
             clear_start: Cell::new(false),
+            selecting: Cell::new(false),
             clear_left: Cell::new(0),
             post_failure: Cell::new(None),
             destroyed: Cell::new(false),
@@ -118,7 +124,7 @@ impl FilterPopup {
     pub fn update(
         &mut self,
         owner: HWND,
-        query: &str,
+        editor: &alttabio::text_edit::QueryText,
         theme: ResolvedTheme,
         compact: bool,
     ) -> Result<()> {
@@ -139,7 +145,9 @@ impl FilterPopup {
             return Ok(());
         };
         let frame = Frame {
-            query: query.to_owned(),
+            query: editor.text().to_owned(),
+            caret: editor.caret(),
+            selection: editor.selection(),
             bounds,
             dpi: layout_dpi(window_dpi),
             theme,
@@ -147,7 +155,7 @@ impl FilterPopup {
         if self.frame.as_ref() != Some(&frame) {
             let surface =
                 self.painter
-                    .draw(query, bounds.width, bounds.height, frame.dpi, theme)?;
+                    .draw_editor(editor, bounds.width, bounds.height, frame.dpi, theme)?;
             let position = POINT {
                 x: bounds.x,
                 y: bounds.y,
@@ -193,6 +201,7 @@ impl FilterPopup {
     pub fn hide(&self) {
         if let Some(events) = &self.events {
             events.clear_start.set(false);
+            events.selecting.set(false);
             if events.destroyed.get() {
                 return;
             }
@@ -201,6 +210,37 @@ impl FilterPopup {
             // SAFETY: the popup remains live until this wrapper is dropped.
             let _previous_visibility = ShowWindow(self.hwnd, SW_HIDE);
         }
+    }
+
+    pub fn visible_bounds(&self) -> Option<Rect> {
+        if self
+            .events
+            .as_ref()
+            .is_some_and(|events| events.destroyed.get())
+        {
+            return None;
+        }
+        // SAFETY: the owned popup remains live and this only reads its visibility.
+        if !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(self.hwnd) }.as_bool()
+        {
+            return None;
+        }
+        self.frame.as_ref().map(|frame| frame.bounds)
+    }
+
+    pub fn hit_test(&self, x: i32) -> Result<usize> {
+        let Some(frame) = &self.frame else {
+            return Ok(0);
+        };
+        let position = self.painter.hit_test(x, frame.dpi)?;
+        let mut utf16 = 0;
+        for (byte, character) in frame.query.char_indices() {
+            if utf16 >= position {
+                return Ok(byte);
+            }
+            utf16 += u32::try_from(character.len_utf16()).unwrap_or(1);
+        }
+        Ok(frame.query.len())
     }
 
     pub fn check_events(&self) -> Result<()> {
@@ -249,7 +289,7 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     let handled = catch_unwind(AssertUnwindSafe(|| {
-        handle_window_message(hwnd, message, lparam)
+        handle_window_message(hwnd, message, wparam, lparam)
     }))
     .ok()
     .flatten();
@@ -259,7 +299,12 @@ unsafe extern "system" fn window_proc(
     })
 }
 
-fn handle_window_message(hwnd: HWND, message: u32, lparam: LPARAM) -> Option<LRESULT> {
+fn handle_window_message(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<LRESULT> {
     if message == WM_MOUSEACTIVATE {
         return Some(LRESULT(isize::try_from(MA_NOACTIVATE).unwrap_or_default()));
     }
@@ -289,13 +334,30 @@ fn handle_window_message(hwnd: HWND, message: u32, lparam: LPARAM) -> Option<LRE
             }
             None
         }
-        WM_LBUTTONDOWN => {
-            events
-                .clear_start
-                .set(point_from_lparam(lparam).x >= events.clear_left.get());
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            let x = point_from_lparam(lparam).x;
+            let clear = x >= events.clear_left.get();
+            events.clear_start.set(clear);
+            events.selecting.set(!clear);
+            if !clear {
+                post_pointer(
+                    events,
+                    x,
+                    if message == WM_LBUTTONDBLCLK {
+                        2
+                    } else {
+                        isize::from(wparam.0 & 4 != 0)
+                    },
+                );
+            }
+            Some(LRESULT(0))
+        }
+        WM_MOUSEMOVE if events.selecting.get() && wparam.0 & 1 != 0 => {
+            post_pointer(events, point_from_lparam(lparam).x, 1);
             Some(LRESULT(0))
         }
         WM_LBUTTONUP => {
+            events.selecting.set(false);
             if events.clear_start.replace(false)
                 && point_from_lparam(lparam).x >= events.clear_left.get()
                 && let Err(error) = unsafe {
@@ -308,6 +370,21 @@ fn handle_window_message(hwnd: HWND, message: u32, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         _ => None,
+    }
+}
+
+fn post_pointer(events: &Events, x: i32, mode: isize) {
+    if let Err(error) = unsafe {
+        // SAFETY: the owner outlives this callback's popup. Coordinates and selection mode are
+        // scalar values; text measurement and model changes happen later on the app thread.
+        PostMessageW(
+            Some(events.owner),
+            WM_FILTER_POINTER,
+            WPARAM(usize::try_from(x).unwrap_or_default()),
+            LPARAM(mode),
+        )
+    } {
+        events.post_failure.set(Some(error));
     }
 }
 
@@ -355,7 +432,9 @@ mod tests {
             GetForegroundWindow()
         };
         let mut popup = FilterPopup::new(owner.0)?;
-        popup.update(owner.0, "firefox", ResolvedTheme::Dark, true)?;
+        let mut editor = alttabio::text_edit::QueryText::default();
+        editor.insert("firefox");
+        popup.update(owner.0, &editor, ResolvedTheme::Dark, true)?;
         let mut current = RECT::default();
         let mut bounds = RECT::default();
         unsafe {

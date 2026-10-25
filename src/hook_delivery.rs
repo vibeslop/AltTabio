@@ -75,6 +75,8 @@ mod tests {
 
     const ALT: Modifiers = Modifiers {
         alt: true,
+        control: false,
+        shift: false,
         left_windows: false,
         right_windows: false,
     };

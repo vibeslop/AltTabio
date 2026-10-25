@@ -31,6 +31,8 @@ const ACTION_SELECT_LAST: usize = 13;
 const ACTION_DISMISS_OVERLAY: usize = 14;
 const ACTION_CLOSE_SELECTED: usize = 15;
 const ACTION_WINDOW_COMMAND: usize = 16;
+const ACTION_EDIT_SEARCH: usize = 17;
+const ACTION_NUMBER_KEY: usize = 18;
 const ACTION_CODE_MASK: usize = 0xFF;
 const ACTION_EPOCH_MASK: usize = usize::MAX >> 8;
 static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
@@ -62,6 +64,10 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
             ACTION_ACTIVATE_POSITION,
             isize::try_from(position).unwrap_or_default(),
         ),
+        InputAction::NumberKey(position) => (
+            ACTION_NUMBER_KEY,
+            isize::try_from(position).unwrap_or_default(),
+        ),
         InputAction::AltReleased => (ACTION_ALT_RELEASED, 0),
         InputAction::RightButtonPressed => (ACTION_RIGHT_BUTTON_PRESSED, 0),
         InputAction::RightButtonReleased => (ACTION_RIGHT_BUTTON_RELEASED, 0),
@@ -71,6 +77,7 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
             isize::try_from(u32::from(character)).unwrap_or_default(),
         ),
         InputAction::BackspaceSearch => (ACTION_BACKSPACE_SEARCH, 0),
+        InputAction::EditSearch(command) => (ACTION_EDIT_SEARCH, isize::from(command as u8)),
     };
     (action_wparam(code, generation), value)
 }
@@ -84,6 +91,7 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
         ACTION_ACTIVATE_POSITION => usize::try_from(lparam)
             .ok()
             .map(InputAction::ActivateVisiblePosition),
+        ACTION_NUMBER_KEY => usize::try_from(lparam).ok().map(InputAction::NumberKey),
         ACTION_ALT_RELEASED => Some(InputAction::AltReleased),
         ACTION_RIGHT_BUTTON_PRESSED => Some(InputAction::RightButtonPressed),
         ACTION_RIGHT_BUTTON_RELEASED => Some(InputAction::RightButtonReleased),
@@ -93,6 +101,10 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
             .and_then(char::from_u32)
             .map(InputAction::AppendSearchCharacter),
         ACTION_BACKSPACE_SEARCH => Some(InputAction::BackspaceSearch),
+        ACTION_EDIT_SEARCH => u8::try_from(lparam)
+            .ok()
+            .and_then(crate::text_edit::TextCommand::from_code)
+            .map(InputAction::EditSearch),
         ACTION_NAVIGATE => i32::try_from(lparam).ok().map(InputAction::Navigate),
         ACTION_ACTIVATE_SELECTED => Some(InputAction::ActivateSelected),
         ACTION_SELECT_FIRST => Some(InputAction::SelectFirst),

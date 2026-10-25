@@ -41,13 +41,15 @@ AltTabio is not notarized, so macOS blocks a copy downloaded in a browser. The [
 | Input | Action |
 | --- | --- |
 | Alt+Tab or Win+Tab | Open the switcher and move through it |
-| Arrow keys, Tab, or Shift+Tab | Change the selected window |
+| Up, Down, Tab, or Shift+Tab | Change the selected window |
+| Left, Right, Home, or End | Edit an active query; otherwise navigate the windows |
 | Mouse wheel | Scroll the window list without changing the selected window |
 | Right mouse button + wheel, when enabled | Open the switcher and change the selected window |
 | Enter or click | Switch to the selected window |
 | 1-9, on the number row or the number pad | Switch to that window directly |
 | Type | Filter by window title, app name, or number |
-| Escape | Close the switcher |
+| Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V | Select, copy, cut, or paste query text |
+| Escape or click outside | Close the switcher |
 | F4 to F9 | Close, minimize, maximize, or restore the selected window, end its process, or start another instance of its app |
 
 ### macOS

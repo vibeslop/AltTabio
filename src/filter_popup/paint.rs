@@ -1,21 +1,22 @@
 use super::surface::Surface;
+use super::text::TextRun;
 use alttabio::filter_feedback::BACKGROUND_OPACITY;
+use alttabio::text_edit::QueryText;
 use alttabio::theme::{ResolvedTheme, Rgb8};
+use std::cell::{Cell, RefCell};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT,
-    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory,
-    ID2D1SolidColorBrush,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1DCRenderTarget,
+    ID2D1Factory, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory,
-    IDWriteTextFormat,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::{Result, w};
@@ -28,6 +29,8 @@ pub(super) struct Painter {
     label_format: IDWriteTextFormat,
     target: Option<ID2D1DCRenderTarget>,
     surface: Option<Surface>,
+    scroll: Cell<f32>,
+    text_run: RefCell<Option<TextRun>>,
 }
 
 impl Painter {
@@ -47,12 +50,14 @@ impl Painter {
             write,
             target: None,
             surface: None,
+            scroll: Cell::new(0.0),
+            text_run: RefCell::new(None),
         })
     }
 
-    pub fn draw(
+    pub fn draw_editor(
         &mut self,
-        query: &str,
+        editor: &QueryText,
         width: i32,
         height: i32,
         dpi: u16,
@@ -96,7 +101,7 @@ impl Painter {
             target.SetDpi(f32::from(dpi), f32::from(dpi));
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         }
-        let result = self.paint(target, surface, query, dpi, theme);
+        let result = self.paint(target, surface, editor, dpi, theme);
         if let Err(error) = result {
             self.target = None;
             return Err(error);
@@ -114,7 +119,7 @@ impl Painter {
         &self,
         target: &ID2D1DCRenderTarget,
         surface: &Surface,
-        query: &str,
+        editor: &QueryText,
         dpi: u16,
         theme: ResolvedTheme,
     ) -> Result<()> {
@@ -126,7 +131,7 @@ impl Painter {
             ResolvedTheme::Dark => Rgb8::new(40, 45, 52),
         };
         let palette = theme.palette();
-        let (fill, edge, text, secondary) = unsafe {
+        let (fill, edge, text, secondary, selected) = unsafe {
             // SAFETY: all colors remain valid for their synchronous creation calls and the
             // brushes belong to this live target. Only the background has 50% opacity.
             (
@@ -134,38 +139,18 @@ impl Painter {
                 target.CreateSolidColorBrush(&color(palette.window_border, 0.35), None)?,
                 target.CreateSolidColorBrush(&color(palette.primary, 1.0), None)?,
                 target.CreateSolidColorBrush(&color(palette.secondary, 1.0), None)?,
+                target.CreateSolidColorBrush(&color(palette.selected, 1.0), None)?,
             )
         };
-        let text_rect = D2D_RECT_F {
-            left: 52.0,
-            top: 0.0,
-            right: width - 35.0,
-            bottom: height,
-        };
-        let encoded = query.encode_utf16().collect::<Vec<_>>();
-        let layout = unsafe {
-            // SAFETY: the text buffer, format and bounded dimensions outlive this layout call.
-            self.write.CreateTextLayout(
-                &encoded,
-                &self.query_format,
-                (text_rect.right - text_rect.left).max(1.0),
-                height,
-            )
-        }?;
-        let mut metrics = DWRITE_TEXT_METRICS::default();
-        unsafe {
-            // SAFETY: layout is live and metrics is writable for the synchronous query.
-            layout.GetMetrics(&raw mut metrics)?;
-        }
-        let offset =
-            (metrics.widthIncludingTrailingWhitespace - (text_rect.right - text_rect.left) + 3.0)
-                .max(0.0);
-        let origin = Vector2 {
-            X: text_rect.left - offset,
-            Y: 0.0,
-        };
-        let caret_x =
-            (origin.X + metrics.widthIncludingTrailingWhitespace + 2.0).min(text_rect.right - 1.0);
+        let run = TextRun::new(
+            &self.write,
+            &self.query_format,
+            editor,
+            width,
+            height,
+            self.scroll.get(),
+        )?;
+        self.scroll.set(run.scroll);
         let capsule = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
                 left: 0.5,
@@ -196,27 +181,37 @@ impl Painter {
                 D2D1_DRAW_TEXT_OPTIONS_CLIP,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
-            target.PushAxisAlignedClip(&raw const text_rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            // The explicit query clip keeps the suffix visible after a long layout is shifted
-            // left; clipping to the shifted layout rectangle would remove that suffix too.
-            target.DrawTextLayout(origin, &layout, &text, D2D1_DRAW_TEXT_OPTIONS_NONE);
-            target.DrawLine(
-                Vector2 {
-                    X: caret_x,
-                    Y: 10.0,
-                },
-                Vector2 {
-                    X: caret_x,
-                    Y: height - 10.0,
-                },
-                &text,
-                1.0,
-                None,
-            );
-            target.PopAxisAlignedClip();
+            run.draw(target, &text, &selected);
             draw_clear_glyph(target, &secondary, width, height);
-            target.EndDraw(None, None)
+            target.EndDraw(None, None)?;
         }
+        *self.text_run.borrow_mut() = Some(run);
+        Ok(())
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "popup-local mouse coordinates fit f32"
+    )]
+    pub fn hit_test(&self, x: i32, dpi: u16) -> Result<u32> {
+        self.text_run
+            .borrow()
+            .as_ref()
+            .map_or(Ok(0), |run| run.hit_test(x as f32 * 96.0 / f32::from(dpi)))
+    }
+
+    #[cfg(test)]
+    fn draw(
+        &mut self,
+        query: &str,
+        width: i32,
+        height: i32,
+        dpi: u16,
+        theme: ResolvedTheme,
+    ) -> Result<&Surface> {
+        let mut editor = QueryText::default();
+        editor.insert(query);
+        self.draw_editor(&editor, width, height, dpi, theme)
     }
 }
 
@@ -300,6 +295,42 @@ mod tests {
                 "layered pixels must be premultiplied"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn selection_is_painted_and_replacing_long_text_resets_horizontal_scrolling() -> Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let mut painter = Painter::new()?;
+        let mut editor = QueryText::default();
+        editor.insert("firefox");
+        editor.command(alttabio::text_edit::TextCommand::SelectAll);
+        let pixels = painter
+            .draw_editor(&editor, 240, 36, 96, ResolvedTheme::Dark)?
+            .pixels();
+        let selected = ResolvedTheme::Dark.palette().selected;
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel == [selected.blue, selected.green, selected.red, 255])
+        );
+        assert_eq!(painter.hit_test(52, 96)?, 0);
+        editor.reset(&"long prefix ".repeat(30));
+        let _surface = painter.draw_editor(&editor, 240, 36, 96, ResolvedTheme::Dark)?;
+        editor.reset("x");
+        let reused = painter
+            .draw_editor(&editor, 240, 36, 96, ResolvedTheme::Dark)?
+            .pixels()
+            .to_vec();
+        let mut fresh = Painter::new()?;
+        assert_eq!(
+            reused,
+            fresh
+                .draw_editor(&editor, 240, 36, 96, ResolvedTheme::Dark)?
+                .pixels()
+        );
+        let _surface = painter.draw_editor(&editor, 420, 63, 168, ResolvedTheme::Light)?;
+        assert_eq!(painter.hit_test(0, 168)?, 0);
         Ok(())
     }
 

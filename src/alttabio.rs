@@ -26,6 +26,7 @@ pub mod settings_form;
 pub mod switcher;
 pub mod task_list_hit;
 pub mod task_refresh;
+pub mod text_edit;
 pub mod theme;
 pub mod update;
 pub mod window_command;

@@ -93,7 +93,7 @@ pub struct Switcher {
     selected_visible_index: Option<usize>,
     // Pointer interaction owns the viewport independently of the selected task.
     pinned_visible_start: Option<usize>,
-    filter: String,
+    filter: crate::text_edit::QueryText,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,7 +160,7 @@ impl SwitcherSession {
                 visible_indices: Vec::new(),
                 selected_visible_index: None,
                 pinned_visible_start: None,
-                filter: String::new(),
+                filter: crate::text_edit::QueryText::new(),
             },
             settings,
             visible: false,
@@ -246,6 +246,20 @@ impl SwitcherSession {
         self.switcher.clear_filter();
     }
 
+    #[must_use]
+    pub fn filter_visible(&self) -> bool {
+        self.search_active() && !self.switcher.filter().is_empty()
+    }
+
+    pub fn replace_filter_selection(&mut self, text: &str) {
+        self.switcher.filter.insert(text);
+        self.switcher.apply_filter();
+    }
+
+    pub fn select_filter_position(&mut self, position: usize, extend: bool) {
+        self.switcher.filter.select_at(position, extend);
+    }
+
     /// Ordinary scrolling moves only the viewport, including past the selected task.
     #[must_use]
     pub fn handle_mouse_wheel(&mut self, delta: i32, visible_rows: usize) -> SwitcherEffect {
@@ -287,6 +301,9 @@ impl SwitcherSession {
         }
 
         match action {
+            InputAction::EditSearch(command) if self.settings.typed_search => {
+                self.edit_search(command)
+            }
             InputAction::Switch(delta) => {
                 self.switcher.select_next(delta);
                 SwitcherEffect::Redraw
@@ -309,7 +326,17 @@ impl SwitcherSession {
             }
             InputAction::CloseSelected => self.command(WindowCommand::Close),
             InputAction::WindowCommand(command) => self.command(command),
-            InputAction::ActivateVisiblePosition(position) => {
+            InputAction::NumberKey(position) if self.filter_visible() => {
+                if self.filter_visible()
+                    && let Ok(digit) = u32::try_from(position)
+                    && let Some(character) = char::from_digit(digit, 10)
+                {
+                    self.switcher.append_filter_character(character);
+                    return SwitcherEffect::Redraw;
+                }
+                SwitcherEffect::None
+            }
+            InputAction::NumberKey(position) | InputAction::ActivateVisiblePosition(position) => {
                 if self.switcher.select_visible_position(position) {
                     self.activate_selected()
                 } else {
@@ -344,10 +371,38 @@ impl SwitcherSession {
             InputAction::AltReleased
             | InputAction::RightButtonReleased
             | InputAction::AppendSearchCharacter(_)
-            | InputAction::BackspaceSearch => SwitcherEffect::None,
+            | InputAction::BackspaceSearch
+            | InputAction::EditSearch(_) => SwitcherEffect::None,
         }
     }
 
+    fn edit_search(&mut self, command: crate::text_edit::TextCommand) -> SwitcherEffect {
+        use crate::text_edit::TextCommand as C;
+        if self.switcher.filter().is_empty() {
+            match command {
+                C::Left | C::Right => {
+                    self.switcher
+                        .select_bounded(if command == C::Left { -1 } else { 1 });
+                    return SwitcherEffect::Redraw;
+                }
+                C::Start | C::End => {
+                    if command == C::Start {
+                        self.switcher.select_first();
+                    } else {
+                        self.switcher.select_last();
+                    }
+                    return SwitcherEffect::Redraw;
+                }
+                _ => {}
+            }
+        }
+        let previous = self.switcher.filter().to_owned();
+        self.switcher.filter.command(command);
+        if self.switcher.filter() != previous {
+            self.switcher.apply_filter();
+        }
+        SwitcherEffect::Redraw
+    }
     fn activate_from_release(&mut self) -> SwitcherEffect {
         if self.context_menu_open() {
             SwitcherEffect::None
@@ -395,24 +450,29 @@ impl Switcher {
         self.rebuild_visible_indices();
     }
 
+    #[cfg(test)]
     fn set_filter(&mut self, filter: &str) {
-        if self.filter != filter {
-            filter.clone_into(&mut self.filter);
+        if self.filter.text() != filter {
+            self.filter.reset(filter);
             self.apply_filter();
         }
     }
 
     fn clear_filter(&mut self) {
-        self.set_filter("");
+        self.filter.reset("");
+        self.apply_filter();
     }
 
     pub(crate) fn append_filter_character(&mut self, value: char) {
-        self.filter.push(value);
+        self.filter.insert(value.encode_utf8(&mut [0; 4]));
         self.apply_filter();
     }
 
     pub(crate) fn backspace_filter(&mut self) {
-        if self.filter.pop().is_some() {
+        let previous = self.filter.text().to_owned();
+        self.filter
+            .command(crate::text_edit::TextCommand::Backspace);
+        if self.filter.text() != previous {
             self.apply_filter();
         }
     }
@@ -443,6 +503,11 @@ impl Switcher {
 
     #[must_use]
     pub fn filter(&self) -> &str {
+        self.filter.text()
+    }
+
+    #[must_use]
+    pub const fn filter_editor(&self) -> &crate::text_edit::QueryText {
         &self.filter
     }
 
@@ -568,7 +633,7 @@ impl Switcher {
     }
 
     fn rebuild_visible_indices(&mut self) {
-        let normalized = self.filter.trim().to_lowercase();
+        let normalized = self.filter.text().trim().to_lowercase();
         self.visible_indices.clear();
         for (index, task) in self.all_tasks.iter().enumerate() {
             if normalized.is_empty()
@@ -1446,6 +1511,39 @@ mod tests {
         assert_eq!(session.switcher().filter(), "");
         assert_eq!(session.switcher().visible_task_count(), 2);
         assert!(session.is_visible());
+    }
+
+    #[test]
+    fn digits_edit_active_queries_but_pointer_activation_still_switches() {
+        let settings = SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+            release_right_button_switches: true,
+        };
+        let tasks = [
+            SwitchTask::new(1, 10, "Alpha1", "editor"),
+            SwitchTask::new(2, 20, "Beta", "browser"),
+        ];
+        let mut session = SwitcherSession::new(settings);
+        session.open(tasks.clone(), None);
+        assert_eq!(
+            session.handle_input(InputAction::NumberKey(2)),
+            SwitcherEffect::Activate(20)
+        );
+        session.open(tasks, None);
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('a')),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(
+            session.handle_input(InputAction::NumberKey(1)),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().filter(), "a1");
+        assert_eq!(
+            session.handle_input(InputAction::ActivateVisiblePosition(1)),
+            SwitcherEffect::Activate(10)
+        );
     }
 
     #[test]

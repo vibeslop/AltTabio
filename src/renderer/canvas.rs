@@ -55,6 +55,14 @@ impl Canvas<'_> {
             self.draw_preview_frame(frame);
         }
         self.draw_divider(list_width, size.height);
+        if switcher.visible_task_count() == 0 && !switcher.filter().is_empty() {
+            self.draw_text(
+                encode(utf16, "No matching windows"),
+                &self.text.detail,
+                layout.row_bounds(0, list_width),
+                &self.resources.secondary_brush,
+            );
+        }
         for (visible_position, task) in switcher
             .positioned_visible_tasks()
             .skip(start)
