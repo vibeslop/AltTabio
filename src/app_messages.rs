@@ -27,6 +27,7 @@ pub(crate) const WM_OUTSIDE_POINTER: u32 = WM_APP + 10;
 pub(crate) const CLOSE_REFRESH_TIMER_ID: usize = 1;
 pub(crate) const LISTED_REFRESH_RETRY_TIMER_ID: usize = 2;
 pub(crate) const SHELL_DISMISS_TIMER_ID: usize = 3;
+pub(crate) const UPDATE_TIMER_ID: usize = 4;
 
 #[cfg(test)]
 mod tests {
@@ -61,6 +62,7 @@ mod tests {
             CLOSE_REFRESH_TIMER_ID,
             LISTED_REFRESH_RETRY_TIMER_ID,
             SHELL_DISMISS_TIMER_ID,
+            UPDATE_TIMER_ID,
         ];
 
         assert_eq!(timers.iter().collect::<HashSet<_>>().len(), timers.len());

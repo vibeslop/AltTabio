@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=ALTTABIO_RELEASE");
     println!("cargo:rerun-if-changed=app.rc");
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=app.dev.manifest");

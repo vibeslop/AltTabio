@@ -52,6 +52,8 @@ mod win32;
 mod win_events;
 #[cfg(windows)]
 mod windows_app;
+#[cfg(windows)]
+mod windows_updater;
 
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();

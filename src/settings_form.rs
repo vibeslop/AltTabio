@@ -4,8 +4,8 @@ use crate::dialog_layout::{Point, Rect, Size, scale};
 use crate::settings::{IconColor, Settings, Theme};
 use std::iter;
 
-const OPTION_COUNT: usize = 16;
-const GENERAL_OPTION_COUNT: usize = 8;
+const OPTION_COUNT: usize = 17;
+const GENERAL_OPTION_COUNT: usize = 9;
 const APPEARANCE_OPTION_COUNT: usize = 7;
 // IDOK and IDCANCEL, which IsDialogMessageW sends for Enter and Esc.
 const OK_ID: usize = 1;
@@ -243,6 +243,7 @@ setting_options! {
     ReleaseRightButtonSwitches: General, 5, general.release_right_button_switches, "Activate the selected task when the right mouse button is released";
     RightButtonWheelSwitching: General, 6, general.right_button_wheel_switching, "Use right mouse button + wheel switching";
     MouseOverSelection: General, 7, general.mouse_over_selection, "Select tasks when the mouse moves over them";
+    AutoUpdate: General, 8, general.auto_update, "Automatically check for and install updates";
     CompactList: Appearance, 0, appearance.compact_list, "Use a compact task list";
     LargeIcons: Appearance, 1, appearance.large_icons, "Use large icons";
     ShowNumbers: Appearance, 2, appearance.show_numbers, "Show number shortcuts";
@@ -388,7 +389,7 @@ impl SettingsLayout {
         Self {
             client: Size::new(CLIENT_WIDTH, CLIENT_HEIGHT),
             general_group: Rect::new(20, 16, 520, 250),
-            general_options: option_rows::<GENERAL_OPTION_COUNT>(38, 42, 484, 24, 27),
+            general_options: option_rows::<GENERAL_OPTION_COUNT>(38, 42, 484, 24, 24),
             appearance_group: Rect::new(20, 280, 520, 316),
             theme_label: Rect::new(38, 309, 64, 24),
             theme_selector: Rect::new(112, 304, APPEARANCE_SELECTOR_WIDTH, 30),
@@ -449,7 +450,7 @@ mod tests {
 
     #[test]
     fn every_checkbox_reads_only_its_bound_setting() {
-        let fields: [fn(&mut Settings) -> &mut bool; 16] = [
+        let fields: [fn(&mut Settings) -> &mut bool; 17] = [
             |s| &mut s.general.autostart,
             |s| &mut s.general.replace_alt_tab,
             |s| &mut s.general.replace_win_tab,
@@ -458,6 +459,7 @@ mod tests {
             |s| &mut s.general.release_right_button_switches,
             |s| &mut s.general.right_button_wheel_switching,
             |s| &mut s.general.mouse_over_selection,
+            |s| &mut s.general.auto_update,
             |s| &mut s.appearance.compact_list,
             |s| &mut s.appearance.large_icons,
             |s| &mut s.appearance.show_numbers,
@@ -664,6 +666,7 @@ mod tests {
                 Control::Checkbox(SettingOption::ReleaseRightButtonSwitches),
                 Control::Checkbox(SettingOption::RightButtonWheelSwitching),
                 Control::Checkbox(SettingOption::MouseOverSelection),
+                Control::Checkbox(SettingOption::AutoUpdate),
                 Control::Group(Group::Appearance),
                 Control::Label(Selector::Theme),
                 Control::Selector(Selector::Theme),

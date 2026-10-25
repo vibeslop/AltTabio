@@ -33,7 +33,9 @@ macOS ties Accessibility and Screen Recording grants to the certificate an app i
 
 ## Releasing
 
-Set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and push the tag `v<version>` once that commit is on `main`. The Release workflow builds the Windows and macOS archives, signs the macOS one with the [release certificate](#the-macos-release-certificate), and attaches both to a draft release. Write its notes, one section per platform, and publish it; the install script and the Mac updater only see published releases.
+Set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and push the tag `v<version>` once that commit is on `main`. The Release workflow builds the Windows and macOS archives, signs the macOS one with the [release certificate](#the-macos-release-certificate), and attaches both to a draft release. Write its notes, one section per platform, and publish it; the install script and both updaters only see published releases.
+
+The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the updater. Ordinary source builds leave it unset so they never download over local work. Windows verifies the archive's GitHub asset digest, stages only `AltTabio.exe` in a protected folder beside the installation, and uses a helper to replace and restart it once the running copy exits. Run `powershell.exe -NoProfile -File scripts/windows/test-updater.ps1` to exercise verification failures, replacement, and rollback without downloading or launching a release.
 
 Running the workflow by hand with a tag builds that tag's Windows archive alone. Re-running the tag's own run rebuilds both.
 

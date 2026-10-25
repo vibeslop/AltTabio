@@ -3,6 +3,7 @@ use crate::app_messages::WM_TRAY_CALLBACK;
 use crate::native_theme::{DarkModeApi, PreferredAppMode, preferred_app_mode};
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
+use std::cell::Cell;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HINSTANCE, HWND, POINT};
 use windows::Win32::UI::Shell::{
@@ -10,9 +11,9 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_SEPARATOR, MF_STRING,
-    RegisterWindowMessageW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_BYCOMMAND, MF_SEPARATOR,
+    MF_STRING, ModifyMenuW, RegisterWindowMessageW, SetForegroundWindow, TPM_BOTTOMALIGN,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
@@ -24,12 +25,14 @@ const SHOW_COMMAND: usize = 1;
 const SETTINGS_COMMAND: usize = 2;
 const ABOUT_COMMAND: usize = 3;
 const EXIT_COMMAND: usize = 4;
+const UPDATE_COMMAND: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TrayAction {
     Show,
     Settings,
     About,
+    Update,
     Exit,
     #[default]
     None,
@@ -45,6 +48,7 @@ pub struct TrayIcon {
     recreation_message: u32,
     theme: ResolvedTheme,
     dark_mode_api: Option<DarkModeApi>,
+    update_installed: Cell<bool>,
 }
 
 impl TrayIcon {
@@ -83,6 +87,9 @@ impl TrayIcon {
                     .and_then(|()| {
                         AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio"))
                     })
+                    .and_then(|()| {
+                        AppendMenuW(menu, MF_STRING, UPDATE_COMMAND, w!("Check for Updates..."))
+                    })
                     .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
                     .and_then(|()| AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("Exit")))
             })
@@ -116,6 +123,7 @@ impl TrayIcon {
             recreation_message,
             theme,
             dark_mode_api,
+            update_installed: Cell::new(false),
         })
     }
 
@@ -157,6 +165,29 @@ impl TrayIcon {
         if let Some(api) = self.dark_mode_api.as_ref() {
             apply_menu_theme(api, theme);
         }
+    }
+
+    pub fn set_update_installed(&self, installed: bool) -> Result<()> {
+        if self.update_installed.get() == installed {
+            return Ok(());
+        }
+        let label = if installed {
+            w!("Relaunch to Update")
+        } else {
+            w!("Check for Updates...")
+        };
+        unsafe {
+            // SAFETY: menu is owned by this guard, the command exists, and label is static UTF-16.
+            ModifyMenuW(
+                self.menu,
+                u32::try_from(UPDATE_COMMAND).unwrap_or_default(),
+                MF_BYCOMMAND | MF_STRING,
+                UPDATE_COMMAND,
+                label,
+            )
+        }?;
+        self.update_installed.set(installed);
+        Ok(())
     }
 
     pub fn restore_for_message(&self, message: u32) -> Option<Result<()>> {
@@ -220,6 +251,7 @@ fn action_for_command(command: usize) -> TrayAction {
         SHOW_COMMAND => TrayAction::Show,
         SETTINGS_COMMAND => TrayAction::Settings,
         ABOUT_COMMAND => TrayAction::About,
+        UPDATE_COMMAND => TrayAction::Update,
         EXIT_COMMAND => TrayAction::Exit,
         _ => TrayAction::None,
     }
@@ -288,6 +320,7 @@ mod tests {
         assert_eq!(action_for_command(SHOW_COMMAND), TrayAction::Show);
         assert_eq!(action_for_command(SETTINGS_COMMAND), TrayAction::Settings);
         assert_eq!(action_for_command(ABOUT_COMMAND), TrayAction::About);
+        assert_eq!(action_for_command(UPDATE_COMMAND), TrayAction::Update);
         assert_eq!(action_for_command(EXIT_COMMAND), TrayAction::Exit);
         assert_eq!(action_for_command(0), TrayAction::None);
     }

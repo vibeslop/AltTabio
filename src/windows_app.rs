@@ -11,6 +11,7 @@ mod overlay;
 mod passthrough;
 mod refresh;
 mod shell_dismissal;
+mod update;
 mod wndproc;
 
 use crate::app_messages::WM_DESTROY_APP;
@@ -141,7 +142,10 @@ pub fn run(
         }
     }
 
-    let loop_result = run_message_loop();
+    let loop_result = unsafe {
+        // SAFETY: host_pointer remains allocated until the loop ends and window user data is cleared.
+        run_message_loop(&*host_pointer, hwnd)
+    };
     let window_retains_app = unsafe {
         // SAFETY: hwnd is either the application window or an already-destroyed borrowed value;
         // nonzero user data means a live callback can still reach host_pointer.
@@ -204,6 +208,8 @@ struct App {
     about_dialog_open: bool,
     win_event_watcher: Option<WinEventWatcher>,
     listed_refresh_retry_timer_armed: bool,
+    updates: update::Updates,
+    update_dialog_open: bool,
 }
 
 struct AppHost {
@@ -255,6 +261,8 @@ impl App {
             about_dialog_open: false,
             win_event_watcher: None,
             listed_refresh_retry_timer_armed: false,
+            updates: update::Updates::default(),
+            update_dialog_open: false,
         })
     }
 
@@ -275,6 +283,7 @@ impl App {
                 .map_err(|error| format!("Could not create the tray icon: {error}"))?,
             );
             self.start_input_hooks(hook_settings(&self.settings))?;
+            self.start_update_timer();
             win_events::publish_notify_hwnd(hwnd);
             match WinEventWatcher::install() {
                 Ok(watcher) => {
@@ -327,7 +336,7 @@ impl App {
 
     const fn modal_state(&self) -> ModalState {
         ModalState {
-            settings_dialog: self.settings_dialog_open,
+            settings_dialog: self.settings_dialog_open || self.update_dialog_open,
             about_dialog: self.about_dialog_open,
             context_menu: self.session.context_menu_open(),
         }
@@ -382,7 +391,7 @@ fn register_window_class(instance: HINSTANCE) -> Result<()> {
     }
 }
 
-fn run_message_loop() -> Result<()> {
+fn run_message_loop(host: &AppHost, hwnd: HWND) -> Result<()> {
     let mut message = MSG::default();
     loop {
         let result = unsafe {
@@ -394,6 +403,15 @@ fn run_message_loop() -> Result<()> {
         }
         if result.0 == 0 {
             return Ok(());
+        }
+        if message.hwnd == hwnd
+            && message.message == windows::Win32::UI::WindowsAndMessaging::WM_TIMER
+            && message.wParam.0 == crate::app_messages::UPDATE_TIMER_ID
+        {
+            if host.update_tick() {
+                return Ok(());
+            }
+            continue;
         }
         unsafe {
             // SAFETY: GetMessageW initialized `message` for this UI thread.

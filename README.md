@@ -22,6 +22,8 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 
 AltTabio needs administrator rights. With **Autostart** on, it gets them at every logon, and so would anyone who replaced `AltTabio.exe`. That is why it belongs in a folder only administrators can change.
 
+Release builds check for updates automatically, verify the Windows archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input. Settings has an automatic-update toggle, and the tray menu has **Check for Updates** and **Relaunch to Update**. Updates replace the executable in its current folder and preserve `AltTabio.ini` and the startup task. Builds from source do not install published updates.
+
 ### macOS
 
 Paste this into Terminal:

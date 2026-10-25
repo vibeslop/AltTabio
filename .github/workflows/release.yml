@@ -84,6 +84,8 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Build
+        env:
+          ALTTABIO_RELEASE: "1"
         run: cargo build --release --locked --quiet
 
       - name: Package

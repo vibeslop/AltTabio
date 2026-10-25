@@ -210,6 +210,7 @@ impl App {
             }
             TrayAction::Settings => self.request_modal_dialog(WM_SHOW_SETTINGS, "Settings"),
             TrayAction::About => self.request_modal_dialog(WM_SHOW_ABOUT, "About"),
+            TrayAction::Update => self.updates.request(),
             TrayAction::Exit => self.request_close("the tray"),
             TrayAction::None => {}
         }
