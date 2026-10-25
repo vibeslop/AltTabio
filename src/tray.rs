@@ -21,7 +21,7 @@ const fn is_recreation_message(message: u32, registered_message: u32) -> bool {
     registered_message != 0 && message == registered_message
 }
 
-const SHOW_COMMAND: usize = 1;
+const OPEN_SWITCHER_COMMAND: usize = 1;
 const SETTINGS_COMMAND: usize = 2;
 const ABOUT_COMMAND: usize = 3;
 const EXIT_COMMAND: usize = 4;
@@ -29,7 +29,7 @@ const UPDATE_COMMAND: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TrayAction {
-    Show,
+    OpenSwitcher,
     Settings,
     About,
     Update,
@@ -82,17 +82,19 @@ impl TrayIcon {
             // SAFETY: menu is live, command ids are application-owned, and labels are static
             // null-terminated UTF-16 strings. A zero-id separator cannot emit an application
             // command.
-            AppendMenuW(menu, MF_STRING, SHOW_COMMAND, w!("Show")).and_then(|()| {
-                AppendMenuW(menu, MF_STRING, SETTINGS_COMMAND, w!("Settings"))
-                    .and_then(|()| {
-                        AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio"))
-                    })
-                    .and_then(|()| {
-                        AppendMenuW(menu, MF_STRING, UPDATE_COMMAND, w!("Check for Updates..."))
-                    })
-                    .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
-                    .and_then(|()| AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("Exit")))
-            })
+            AppendMenuW(menu, MF_STRING, OPEN_SWITCHER_COMMAND, w!("Open Switcher")).and_then(
+                |()| {
+                    AppendMenuW(menu, MF_STRING, SETTINGS_COMMAND, w!("Settings"))
+                        .and_then(|()| {
+                            AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio"))
+                        })
+                        .and_then(|()| {
+                            AppendMenuW(menu, MF_STRING, UPDATE_COMMAND, w!("Check for Updates..."))
+                        })
+                        .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
+                        .and_then(|()| AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("Exit")))
+                },
+            )
         };
         if let Err(error) = menu_result {
             destroy_menu(menu);
@@ -248,7 +250,7 @@ fn apply_menu_theme(api: &impl MenuThemeApi, theme: ResolvedTheme) {
 
 fn action_for_command(command: usize) -> TrayAction {
     match command {
-        SHOW_COMMAND => TrayAction::Show,
+        OPEN_SWITCHER_COMMAND => TrayAction::OpenSwitcher,
         SETTINGS_COMMAND => TrayAction::Settings,
         ABOUT_COMMAND => TrayAction::About,
         UPDATE_COMMAND => TrayAction::Update,
@@ -317,7 +319,10 @@ mod tests {
 
     #[test]
     fn tray_commands_map_to_their_actions() {
-        assert_eq!(action_for_command(SHOW_COMMAND), TrayAction::Show);
+        assert_eq!(
+            action_for_command(OPEN_SWITCHER_COMMAND),
+            TrayAction::OpenSwitcher
+        );
         assert_eq!(action_for_command(SETTINGS_COMMAND), TrayAction::Settings);
         assert_eq!(action_for_command(ABOUT_COMMAND), TrayAction::About);
         assert_eq!(action_for_command(UPDATE_COMMAND), TrayAction::Update);

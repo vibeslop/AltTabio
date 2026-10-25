@@ -193,7 +193,7 @@ impl App {
     fn handle_tray_message(&mut self, lparam: LPARAM) {
         let message = u32::try_from(lparam.0).unwrap_or_default();
         let action = match message {
-            WM_LBUTTONUP | WM_LBUTTONDBLCLK => TrayAction::Show,
+            WM_LBUTTONUP | WM_LBUTTONDBLCLK => TrayAction::OpenSwitcher,
             WM_RBUTTONUP => {
                 let _suspension = self.hooks.as_ref().map(HookThread::suspend_interception);
                 self.tray
@@ -204,7 +204,7 @@ impl App {
             _ => TrayAction::None,
         };
         match action {
-            TrayAction::Show => {
+            TrayAction::OpenSwitcher => {
                 self.stop_shell_dismissal();
                 self.show_overlay(None);
             }
