@@ -842,8 +842,12 @@ impl HookState {
             event.modifiers.control,
             event.modifiers.shift,
         )?;
-        if !matches!(command, TextCommand::Start | TextCommand::End)
-            || event.modifiers.control
+        // Plain navigation also moves through windows when the query is empty. Preserve the
+        // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
+        if !matches!(
+            command,
+            TextCommand::Left | TextCommand::Right | TextCommand::Start | TextCommand::End
+        ) || event.modifiers.control
             || event.modifiers.shift
         {
             self.alt_switch_gesture_active = false;
@@ -2665,6 +2669,68 @@ mod tests {
             state.process_key(KeyEvent::released(Key::Alt, Modifiers::default()), settings),
             HookOutcome::default()
         );
+    }
+
+    #[test]
+    fn empty_query_navigation_preserves_alt_release_activation() {
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+
+        for (key, target) in [
+            (Key::LeftArrow, 10),
+            (Key::RightArrow, 30),
+            (Key::Home, 10),
+            (Key::End, 30),
+        ] {
+            let mut state = HookState::default();
+            let settings = HookSettings {
+                search_active: true,
+                ..HookSettings::default()
+            };
+            let modifiers = Modifiers::default();
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+                release_right_button_switches: true,
+            });
+            assert!(
+                state
+                    .process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings)
+                    .suppress
+            );
+            let opening = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
+            assert_eq!(
+                opening
+                    .actions()
+                    .next()
+                    .map(|action| session.handle_input(action)),
+                Some(SwitcherEffect::Open {
+                    selection_delta: Some(1),
+                })
+            );
+            session.open(
+                [
+                    SwitchTask::new(1, 10, "Alpha", "editor"),
+                    SwitchTask::new(2, 20, "Beta", "browser"),
+                    SwitchTask::new(3, 30, "Gamma", "terminal"),
+                ],
+                Some(1),
+            );
+            let mut effects = Vec::new();
+            for event in [
+                KeyEvent::released(Key::Tab, modifiers),
+                KeyEvent::pressed(key, modifiers),
+                KeyEvent::released(key, modifiers),
+                KeyEvent::released(Key::LeftAlt, modifiers),
+            ] {
+                let outcome = state.process_key(event, settings);
+                assert!(outcome.suppress);
+                effects.extend(outcome.actions().map(|action| session.handle_input(action)));
+            }
+            assert_eq!(effects.last(), Some(&SwitcherEffect::Activate(target)));
+            assert!(!session.is_visible());
+        }
     }
 
     #[test]
