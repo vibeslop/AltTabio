@@ -203,7 +203,7 @@ impl App {
     }
 
     fn prepare_task_context_menu(&mut self, lparam: LPARAM) -> Option<HWND> {
-        if !self.is_visible() || self.modal_state().any_open() {
+        if !self.is_visible() || self.dialog_state().blocks_switcher() {
             return None;
         }
         let hit = self.hit_test(lparam)?;

@@ -27,8 +27,8 @@ use crate::task_icon::TaskIcons;
 use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
 use crate::win32::{ComApartment, module_instance, wide};
+use alttabio::dialog_state::DialogState;
 use alttabio::failure_run::FailureRun;
-use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
 use alttabio::settings::Settings;
 use alttabio::settings_change::{hook_settings, switcher_session_settings};
@@ -337,10 +337,10 @@ impl App {
         self.session.is_visible()
     }
 
-    const fn modal_state(&self) -> ModalState {
-        ModalState {
-            settings_dialog: self.settings_dialog_open || self.update_dialog_open,
-            about_dialog: self.about_dialog_open,
+    const fn dialog_state(&self) -> DialogState {
+        DialogState {
+            settings_dialog: self.settings_dialog_open,
+            blocking_dialog: self.about_dialog_open || self.update_dialog_open,
             context_menu: self.session.context_menu_open(),
         }
     }

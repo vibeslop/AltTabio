@@ -27,7 +27,7 @@ impl App {
         let Some(hooks) = self.hooks.as_ref() else {
             return;
         };
-        let suspended = self.modal_state().any_open();
+        let suspended = self.dialog_state().blocks_switcher();
         if suspended {
             hooks.set_interception_suspended(true);
         }

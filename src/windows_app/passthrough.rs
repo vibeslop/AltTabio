@@ -22,7 +22,7 @@ impl App {
             && foreground != self.hwnd
             && self.is_visible()
             && self.pending_shell.is_none()
-            && !self.modal_state().any_open()
+            && !self.dialog_state().blocks_switcher()
         {
             self.hide_overlay();
         }

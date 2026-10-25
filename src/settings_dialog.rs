@@ -2,9 +2,7 @@ mod controls;
 mod paint;
 mod theme;
 
-use crate::dialog_host::{
-    self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog, OwnerGuard,
-};
+use crate::dialog_host::{self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog};
 use crate::native_drawing::{OwnedBrush, OwnedFont, system_color};
 use crate::win32::{self, high_word, low_word};
 use crate::{
@@ -64,12 +62,12 @@ pub fn show(
             None
         }
     };
-    let _owner_guard = OwnerGuard::disable(owner);
     let dialog = ModalDialog::create(
         instance,
         window_origin,
         window_size,
-        settings_window_owner(owner),
+        // Native ownership would put Settings in the overlay's topmost Z-order band.
+        None,
         DialogState::new(settings.clone(), dpi, instance, dark_mode_api),
     )?;
     let window = dialog.window();
@@ -89,12 +87,6 @@ pub fn show(
         return Ok(None);
     };
     Ok(state.accepted.then_some(state.settings))
-}
-
-fn settings_window_owner(_modal_controller: HWND) -> Option<HWND> {
-    // Native ownership would promote Settings into the topmost overlay's Z-order band. OwnerGuard
-    // supplies the required modality without that relationship.
-    None
 }
 
 struct DialogState {
@@ -396,14 +388,6 @@ fn request_dialog_close(hwnd: HWND) {
 mod tests {
     use super::*;
     use alttabio::dialog_layout::{BASE_DPI, Point, Size};
-
-    #[test]
-    fn settings_window_is_not_owned_by_the_topmost_overlay() {
-        let mut owner_storage = 0_u8;
-        let owner = HWND(std::ptr::from_mut(&mut owner_storage).cast());
-
-        assert_eq!(settings_window_owner(owner), None);
-    }
 
     #[test]
     fn settings_window_requests_app_window_alt_tab_presence() {

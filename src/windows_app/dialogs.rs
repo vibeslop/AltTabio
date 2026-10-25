@@ -95,7 +95,7 @@ impl AppHost {
 
 impl App {
     fn prepare_settings_dialog(&mut self) -> Option<(HWND, Settings)> {
-        if self.modal_state().dialog_open() {
+        if self.dialog_state().dialog_open() {
             return None;
         }
         self.hide_overlay();
@@ -105,7 +105,7 @@ impl App {
     }
 
     fn prepare_about_dialog(&mut self) -> Option<(ResolvedTheme, alttabio::settings::IconColor)> {
-        if self.modal_state().dialog_open() {
+        if self.dialog_state().dialog_open() {
             return None;
         }
         self.hide_overlay();
@@ -177,14 +177,14 @@ impl SettingsEffects for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_messages::{WM_SHOW_SETTINGS, WM_TRAY_CALLBACK};
+    use crate::app_messages::WM_TRAY_CALLBACK;
     use crate::settings_io::SettingsStore;
     use crate::win32::{ComApartment, module_instance};
-    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{IsWindowEnabled, VK_ESCAPE, VK_RETURN};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, IsIconic, IsWindowVisible, MSG, PM_REMOVE, PeekMessageW,
-        SW_HIDE, SW_MINIMIZE, ShowWindow, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WS_EX_TOOLWINDOW,
-        WS_OVERLAPPEDWINDOW,
+        CreateWindowExW, DestroyWindow, GW_OWNER, GetWindow, IsIconic, IsWindowVisible, SW_HIDE,
+        SW_MINIMIZE, ShowWindow, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+        WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
     };
     use windows::core::{Error, Result, w};
 
@@ -198,65 +198,110 @@ mod tests {
     }
 
     #[test]
-    fn tray_show_during_settings_keeps_the_disabled_overlay_hidden() -> Result<()> {
+    fn settings_keeps_switcher_open_select_and_cancel_available() -> Result<()> {
         let _apartment = ComApartment::initialize()?;
-        let window = TestWindow(unsafe {
-            // SAFETY: STATIC is a system class, and the test owns the resulting window.
-            CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                w!("STATIC"),
-                w!("Modal switcher test"),
-                WS_OVERLAPPEDWINDOW,
-                0,
-                0,
-                100,
-                100,
-                None,
-                None,
-                Some(module_instance()?),
-                None,
-            )
-        }?);
         let (store, settings) = SettingsStore::load_from(
             std::env::temp_dir().join(format!(
-                "alttabio-modal-switcher-test-{}.ini",
+                "alttabio-settings-switcher-test-{}.ini",
                 std::process::id()
             )),
             &Settings::default(),
         )
         .map_err(|error| Error::new(windows::Win32::Foundation::E_FAIL, error))?;
-        let mut app = App::new(false, false, settings, store)?;
-        app.hwnd = window.0;
-        app.settings_dialog_open = true;
-        let _owner_guard = dialog_host::OwnerGuard::disable(window.0);
-
-        for tray_message in [WM_LBUTTONUP, WM_LBUTTONDBLCLK] {
-            let tray_message = isize::try_from(tray_message).map_err(|error| {
-                Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
-            })?;
-            app.handle_message(WM_TRAY_CALLBACK, WPARAM(0), LPARAM(tray_message));
-            assert!(
-                !app.is_visible(),
-                "a modal dialog must keep the session hidden"
-            );
-            let mut message = MSG::default();
+        let host = Box::new(AppHost::new(App::new(false, false, settings, store)?));
+        let instance = module_instance()?;
+        super::super::register_window_class(instance)?;
+        let overlay = TestWindow(unsafe {
+            // SAFETY: the registered production procedure receives this stable host allocation,
+            // which outlives the test-owned window and is never borrowed across a native loop.
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                super::super::WINDOW_CLASS,
+                super::super::WINDOW_TITLE,
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(instance),
+                Some(std::ptr::from_ref(host.as_ref()).cast()),
+            )
+        }?);
+        let Some((owner, settings)) = host.state.borrow_mut().prepare_settings_dialog() else {
+            panic!("Settings must open from an idle switcher");
+        };
+        let result = settings_dialog::show(owner, &settings, |settings_window| {
             unsafe {
-                // SAFETY: these calls query the live test-owned window and its posted messages.
-                assert!(!IsWindowVisible(window.0).as_bool());
-                assert!(!IsWindowEnabled(window.0).as_bool());
+                // SAFETY: both windows are live and belong to this test thread.
                 assert!(
-                    PeekMessageW(
-                        &raw mut message,
-                        Some(window.0),
-                        WM_SHOW_SETTINGS,
-                        WM_SHOW_SETTINGS,
-                        PM_REMOVE,
-                    )
-                    .as_bool(),
-                    "Show must request the existing Settings window instead of the disabled overlay"
+                    IsWindowEnabled(owner).as_bool(),
+                    "Settings must not disable the switcher"
+                );
+                assert!(
+                    GetWindow(settings_window, GW_OWNER).is_err(),
+                    "Settings must stay independent of the overlay's Z-order band"
                 );
             }
-        }
+            for tray_message in [WM_LBUTTONUP, WM_LBUTTONDBLCLK] {
+                let tray_message = isize::try_from(tray_message)
+                    .unwrap_or_else(|error| panic!("invalid tray message: {error}"));
+                let mut app = host.state.borrow_mut();
+                app.handle_message(WM_TRAY_CALLBACK, WPARAM(0), LPARAM(tray_message));
+                assert!(
+                    app.is_visible(),
+                    "the tray command must open the switcher during Settings"
+                );
+                let Some(position) = app
+                    .session
+                    .switcher()
+                    .positioned_visible_tasks()
+                    .find(|(_, task)| task.window_handle == settings_window.0 as isize)
+                    .map(|(position, _)| position)
+                else {
+                    panic!("the open Settings window must remain switchable");
+                };
+                assert!(app.session.switcher_mut().select_visible_position(position));
+                app.handle_message(WM_KEYDOWN, WPARAM(usize::from(VK_RETURN.0)), LPARAM(0));
+                assert!(!app.is_visible(), "Enter must choose the selected window");
+                unsafe {
+                    // SAFETY: Settings remains live through this callback and its nested loop.
+                    assert!(IsWindowVisible(settings_window).as_bool());
+                }
+            }
+            host.state.borrow_mut().handle_message(
+                WM_TRAY_CALLBACK,
+                WPARAM(0),
+                LPARAM(isize::try_from(WM_LBUTTONUP).unwrap_or_default()),
+            );
+            assert!(host.state.borrow().is_visible());
+            unsafe {
+                // SAFETY: the posted keys and close request carry no borrowed data. The real
+                // Settings loop must dispatch Escape to the overlay before closing Settings.
+                assert!(
+                    PostMessageW(
+                        Some(owner),
+                        WM_KEYDOWN,
+                        WPARAM(usize::from(VK_ESCAPE.0)),
+                        LPARAM(0)
+                    )
+                    .is_ok()
+                );
+                assert!(
+                    PostMessageW(Some(settings_window), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok()
+                );
+            }
+        })?;
+        assert!(
+            result.is_none(),
+            "the test must cancel Settings without saving"
+        );
+        assert!(
+            !host.state.borrow().is_visible(),
+            "Escape must dismiss the switcher inside the Settings loop"
+        );
+        drop(overlay);
         Ok(())
     }
 

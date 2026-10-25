@@ -35,7 +35,7 @@ impl App {
             WM_ACTIVATE if u32::from(low_word(wparam.0)) == WA_INACTIVE => {
                 if self.is_visible()
                     && self.pending_shell.is_none()
-                    && !self.modal_state().any_open()
+                    && !self.dialog_state().blocks_switcher()
                 {
                     self.hide_overlay();
                 }
@@ -131,7 +131,7 @@ impl App {
         }
         match message {
             WM_HOOK_ACTION | WM_HOOK_HOTKEY_ACTION => {
-                if !self.modal_state().any_open()
+                if !self.dialog_state().blocks_switcher()
                     && self
                         .hooks
                         .as_ref()

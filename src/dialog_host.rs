@@ -13,7 +13,7 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HBRUSH, InvalidateRect};
 use windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, HICON, IDC_ARROW,
@@ -555,30 +555,4 @@ pub(crate) fn focus(window: HWND) -> Result<()> {
         Err(error) if error.code().is_err() => error,
         _ => Error::new(E_FAIL, "the focus stayed on another window"),
     })
-}
-
-/// Disables a dialog's owner while the dialog is open, which gives the dialog modality without
-/// native ownership.
-pub(crate) struct OwnerGuard(HWND);
-
-impl OwnerGuard {
-    pub(crate) fn disable(owner: HWND) -> Self {
-        unsafe {
-            // SAFETY: owner is the live application HWND and remains live through the dialog
-            // loop. The result reports the previous state, not a failure.
-            let _was_disabled = EnableWindow(owner, false);
-        }
-        Self(owner)
-    }
-}
-
-impl Drop for OwnerGuard {
-    fn drop(&mut self) {
-        unsafe {
-            // SAFETY: owner remains live after the nested dialog closes. The result reports the
-            // previous state, not a failure.
-            let _was_disabled = EnableWindow(self.0, true);
-        }
-        bring_to_front(self.0, "the AltTabio window");
-    }
 }

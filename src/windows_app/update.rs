@@ -270,7 +270,7 @@ impl AppHost {
             let Ok(mut app) = self.state.try_borrow_mut() else {
                 return false;
             };
-            if app.modal_state().any_open() {
+            if app.dialog_state().any_open() {
                 return false;
             }
             let automatic = app.settings.general.auto_update && windows_updater::is_release_build();

@@ -6,7 +6,10 @@ use windows::core::Result;
 
 impl App {
     pub(super) fn handle_outside_pointer(&mut self, x: i32, y: i32) {
-        if !self.is_visible() || self.pending_shell.is_some() || self.modal_state().any_open() {
+        if !self.is_visible()
+            || self.pending_shell.is_some()
+            || self.dialog_state().blocks_switcher()
+        {
             return;
         }
         let mut panel = windows::Win32::Foundation::RECT::default();
@@ -42,7 +45,7 @@ impl App {
     }
 
     pub(super) fn handle_filter_pointer(&mut self, x: usize, mode: isize) {
-        if !self.session.filter_visible() || self.modal_state().any_open() {
+        if !self.session.filter_visible() || self.dialog_state().blocks_switcher() {
             return;
         }
         if mode == 2 {
