@@ -14,6 +14,7 @@ const OPTION_ID_BASE: usize = 100;
 const CLIENT_WIDTH: i32 = 560;
 const CLIENT_HEIGHT: i32 = 747;
 const APPEARANCE_SELECTOR_WIDTH: i32 = 180;
+pub const SELECTOR_ITEM_HEIGHT: i32 = 32;
 
 /// Every child control of the dialog. The dialog creates, lays out, themes and paints its
 /// controls by walking `Control::all` instead of naming each one.
@@ -107,9 +108,12 @@ impl Control {
     #[must_use]
     pub fn window_rect(self, layout: &SettingsLayout, dpi: u32) -> Rect {
         let rect = self.rect(layout);
-        if let Self::Selector(_) = self {
+        if let Self::Selector(selector) = self {
             Rect {
-                height: rect.height.saturating_add(scale(96, dpi)),
+                height: rect.height.saturating_add(
+                    scale(SELECTOR_ITEM_HEIGHT, dpi)
+                        * i32::try_from(selector.entries().len()).unwrap_or_default(),
+                ),
                 ..rect
             }
         } else {
@@ -735,8 +739,9 @@ mod tests {
         for control in Control::all() {
             let field = control.rect(&layout);
             let window = control.window_rect(&layout, 144);
-            let extension = if matches!(control, Control::Selector(_)) {
-                144
+            let extension = if let Control::Selector(selector) = control {
+                scale(SELECTOR_ITEM_HEIGHT, 144)
+                    * i32::try_from(selector.entries().len()).unwrap_or_default()
             } else {
                 0
             };

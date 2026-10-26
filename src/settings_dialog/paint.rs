@@ -1,7 +1,7 @@
 //! Owner-drawn painting of the Settings controls through comctl32 subclassing.
 
 use super::DialogState;
-use super::controls::{DialogControls, is_checked, is_control_enabled};
+use super::controls::{DialogControls, is_checked, is_control_enabled, selected_index};
 use crate::dialog_host::DialogHost;
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
@@ -9,7 +9,7 @@ use crate::native_drawing::{
 };
 use crate::win32::rect_from_native;
 use alttabio::dialog_layout::{Point, hairline, scale};
-use alttabio::settings_form::{Control, checkmark_points};
+use alttabio::settings_form::{Control, Selector, checkmark_points};
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -178,9 +178,7 @@ fn paint_settings_control(hwnd: HWND, dc: HDC, state: &DialogState) {
             is_control_enabled(hwnd),
             state,
         ),
-        Some(Control::Selector(selector)) => {
-            paint_combo_box(dc, client, state.selected_name(selector), state)
-        }
+        Some(Control::Selector(selector)) => paint_combo_box(dc, client, selector, state),
         Some(control @ Control::Button(_)) => {
             paint_push_button(dc, client, control.text(), hwnd, state)
         }
@@ -335,7 +333,7 @@ fn paint_push_button(
     )
 }
 
-fn paint_combo_box(dc: HDC, client: RECT, label: &str, state: &DialogState) -> Result<()> {
+fn paint_combo_box(dc: HDC, client: RECT, selector: Selector, state: &DialogState) -> Result<()> {
     fill_color(dc, client, state.palette.control_surface)?;
     let border = hairline(state.dpi);
     frame_color(dc, client, state.palette.control_border, border)?;
@@ -348,18 +346,19 @@ fn paint_combo_box(dc: HDC, client: RECT, label: &str, state: &DialogState) -> R
         bottom: client.bottom.saturating_sub(border),
     };
     fill_color(dc, separator, state.palette.control_border)?;
-    let padding = scale(8, state.dpi);
-    let mut text_rect = client;
-    text_rect.left = text_rect.left.saturating_add(padding);
-    text_rect.right = button_left.saturating_sub(padding);
-    draw_text(
-        dc,
-        label,
-        text_rect,
-        state.palette.text,
-        DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX | DRAW_TEXT_END_ELLIPSIS,
-        state,
-    )?;
+    if let Some(index) = selected_index(state.controls.get(Control::Selector(selector))) {
+        super::selectors::paint_entry(
+            dc,
+            RECT {
+                right: button_left,
+                ..client
+            },
+            selector,
+            index,
+            state.palette.text,
+            state,
+        )?;
+    }
     let center_x = button_left.saturating_add(button_width / 2);
     let center_y = client
         .top

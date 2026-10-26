@@ -1,5 +1,6 @@
 mod controls;
 mod paint;
+mod selectors;
 mod theme;
 
 use crate::dialog_host::{self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog};
@@ -24,13 +25,14 @@ use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPA
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, COLOR_WINDOWTEXT, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, InvalidateRect,
 };
+use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CBN_SELCHANGE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_ERASEBKGND,
-    WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_OVERLAPPED,
-    WS_SYSMENU,
+    WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_DRAWITEM,
+    WM_ERASEBKGND, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+    WS_OVERLAPPED, WS_SYSMENU,
 };
 use windows::core::Result;
 
@@ -93,6 +95,7 @@ struct DialogState {
     hwnd: HWND,
     controls: DialogControls,
     fonts: Option<DialogFonts>,
+    previews: Option<selectors::Previews>,
     background: Option<OwnedBrush>,
     background_color: COLORREF,
     text_color: COLORREF,
@@ -136,6 +139,7 @@ impl DialogState {
             hwnd: HWND::default(),
             controls: DialogControls::default(),
             fonts: None,
+            previews: None,
             background: None,
             background_color: system_color(COLOR_WINDOW),
             text_color: system_color(COLOR_WINDOWTEXT),
@@ -157,6 +161,7 @@ impl DialogState {
     ) -> Result<()> {
         let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
+        self.previews = Some(selectors::Previews::load(instance)?);
         self.controls =
             DialogControls::create(parent, instance, &layout, self.dpi, &fonts, &self.settings)?;
         self.fonts = Some(fonts);
@@ -170,8 +175,8 @@ impl DialogState {
     fn update_dpi(&mut self, dpi: u32) -> Result<()> {
         let layout = SettingsLayout::for_dpi(dpi);
         let fonts = DialogFonts::create(dpi)?;
-        self.controls.apply_layout(&layout, dpi)?;
         self.controls.apply_fonts(&fonts);
+        self.controls.apply_layout(&layout, dpi)?;
         self.fonts = Some(fonts);
         self.dpi = dpi;
         Ok(())
@@ -198,13 +203,6 @@ impl DialogState {
 
     fn selected_icon(&self) -> IconColor {
         self.selected(Selector::Icon, &ICON_CHOICES, self.settings.appearance.icon)
-    }
-
-    fn selected_name(&self, selector: Selector) -> &'static str {
-        match selector {
-            Selector::Theme => self.selected_theme().as_ini_value(),
-            Selector::Icon => self.selected_icon().as_ini_value(),
-        }
     }
 
     fn sync_right_button_release_enabled(&self) {
@@ -321,6 +319,14 @@ fn handle_settings_message(
 ) -> Option<LRESULT> {
     match message {
         WM_COMMAND => handle_command(hwnd, state, wparam),
+        WM_DRAWITEM => {
+            let item = unsafe {
+                // SAFETY: WM_DRAWITEM supplies a DRAWITEMSTRUCT valid for this synchronous
+                // callback. It is borrowed only until the handler returns.
+                (lparam.0 as *const DRAWITEMSTRUCT).as_ref()
+            }?;
+            selectors::paint_list_item(item, state)
+        }
         WM_DPICHANGED => {
             dialog_host::handle_dpi_changed(hwnd, wparam, lparam, FRAME.name, |dpi| {
                 state.update_dpi(dpi)

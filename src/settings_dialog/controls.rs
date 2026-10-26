@@ -2,18 +2,21 @@
 
 use super::DialogFonts;
 use crate::win32::wide;
-use alttabio::dialog_layout::Rect;
+use alttabio::dialog_layout::{Rect, scale};
 use alttabio::settings::Settings;
-use alttabio::settings_form::{Control, DialogButton, Selector, SettingOption, SettingsLayout};
+use alttabio::settings_form::{
+    Control, DialogButton, SELECTOR_ITEM_HEIGHT, Selector, SettingOption, SettingsLayout,
+};
 use std::ffi::c_void;
 use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::HFONT;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
-    CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
-    CreateWindowExW, HMENU, MoveWindow, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT,
-    WS_CHILD, WS_GROUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_SETCURSEL, CB_SETITEMHEIGHT, CBS_DROPDOWNLIST,
+    CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, HMENU, MoveWindow, SendMessageW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT, WS_CHILD, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
@@ -33,8 +36,12 @@ impl DialogControls {
         Control::all()
             .map(|control| {
                 let rect = control.window_rect(layout, dpi);
-                create_child(parent, instance, control, rect, fonts.of(control), settings)
-                    .map(|hwnd| (control, hwnd))
+                let hwnd =
+                    create_child(parent, instance, control, rect, fonts.of(control), settings)?;
+                if let Control::Selector(_) = control {
+                    size_selector_items(hwnd, dpi)?;
+                }
+                Ok((control, hwnd))
             })
             .collect::<Result<_>>()
             .map(Self)
@@ -68,6 +75,9 @@ impl DialogControls {
 
     pub(super) fn apply_layout(&self, layout: &SettingsLayout, dpi: u32) -> Result<()> {
         for (control, hwnd) in self.iter() {
+            if let Control::Selector(_) = control {
+                size_selector_items(hwnd, dpi)?;
+            }
             move_control(hwnd, control.window_rect(layout, dpi))?;
         }
         Ok(())
@@ -93,7 +103,10 @@ fn create_child(
         Control::Label(_) => (w!("STATIC"), WINDOW_STYLE::default()),
         Control::Selector(_) => (
             w!("COMBOBOX"),
-            WS_VSCROLL | WINDOW_STYLE((CBS_DROPDOWNLIST | CBS_HASSTRINGS).cast_unsigned()),
+            WS_VSCROLL
+                | WINDOW_STYLE(
+                    (CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_OWNERDRAWFIXED).cast_unsigned(),
+                ),
         ),
         Control::Checkbox(_) => (w!("BUTTON"), WINDOW_STYLE(BS_AUTOCHECKBOX as u32)),
         Control::Button(button) => {
@@ -132,6 +145,26 @@ fn create_child(
         _ => {}
     }
     Ok(hwnd)
+}
+
+fn size_selector_items(hwnd: HWND, dpi: u32) -> Result<()> {
+    // The field's 24px content plus the native frame fits its 30px layout row.
+    for (index, height) in [(usize::MAX, 24), (0, SELECTOR_ITEM_HEIGHT)] {
+        let result = unsafe {
+            // SAFETY: hwnd is a live owner-drawn combo. -1 addresses its selected field;
+            // zero sets the fixed height of every list item. Payloads are scalar pixels.
+            SendMessageW(
+                hwnd,
+                CB_SETITEMHEIGHT,
+                Some(WPARAM(index)),
+                Some(LPARAM(scale(height, dpi) as isize)),
+            )
+        };
+        if result.0 == CB_ERR as isize {
+            return Err(Error::new(E_FAIL, "could not size settings preview items"));
+        }
+    }
+    Ok(())
 }
 
 fn fill_selector(hwnd: HWND, selector: Selector, settings: &Settings) -> Result<()> {
