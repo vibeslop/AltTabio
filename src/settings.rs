@@ -145,7 +145,7 @@ impl Default for Settings {
                 theme: Theme::Auto,
                 compact_list: true,
                 large_icons: true,
-                show_numbers: true,
+                show_numbers: false,
                 show_app_names: false,
                 visible_borders: false,
                 preview: true,
