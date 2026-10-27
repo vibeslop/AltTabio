@@ -20,7 +20,7 @@ use alttabio::passthrough::PassthroughPolicy;
 use delivery::{dispatch_registered_switch, post_actions, route_registered_switch};
 use keyboard_state::{KeyboardState, translate_search_character};
 use recovery::{KeyboardRecoveryWatcher, publish_recovery_flags, recover_keyboard_state};
-use replay::{is_own_replayed_input, replay_key_events, replay_mouse_event};
+use replay::{is_own_replayed_input, replay_key_events};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{
@@ -222,6 +222,11 @@ impl HookThread {
             PostThreadMessageW(self.thread_id, WM_RESET_GESTURES, WPARAM(0), LPARAM(0))
         }
         .map_err(|error| format!("Could not release input-hook gesture ownership: {error}"))
+    }
+
+    /// Called by the UI thread before applying an opening RMB action.
+    pub fn prepare_mouse_open(&self, action: InputAction) -> Result<(), String> {
+        replay::prepare_mouse_open(action, &self.flags, || self.reset_gestures())
     }
 }
 
@@ -496,6 +501,10 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
         (lparam.0 as *const MSLLHOOKSTRUCT).as_ref()
     }?;
     if is_own_replayed_input(data.dwExtraInfo) {
+        if wparam.0 == WM_RBUTTONUP as usize {
+            let _acknowledged =
+                process_with_context(|context| context.state.take_replayed_mouse_event());
+        }
         return None;
     }
     let event = match u32::try_from(wparam.0).ok()? {
@@ -524,22 +533,14 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
         WM_MOUSEWHEEL => MouseEvent::Wheel(high_word(data.mouseData as usize).cast_signed()),
         _ => return None,
     };
-    let (mut outcome, replayed_mouse_event) = process_with_context(|context| {
+    let outcome = process_with_context(|context| {
         let flags = context.sync_interception();
         context
             .state
             .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
-        let outcome = context.state.process_mouse(event, context.settings);
-        let replayed_mouse_event = context.state.take_replayed_mouse_event();
-        (outcome, replayed_mouse_event)
+        // The UI requests the balancing release. Its tagged callback acknowledges delivery.
+        context.state.process_mouse(event, context.settings)
     })?;
-    if !replay_mouse_event(replayed_mouse_event, &mut outcome) {
-        record_callback_error(HOOK_ERROR_REPLAY_INPUT);
-        let _abandoned =
-            process_with_context(|context| context.state.abandon_right_button_gesture());
-        reset_context();
-        outcome = HookOutcome::default();
-    }
     Some(outcome)
 }
 
@@ -655,6 +656,44 @@ mod tests {
     use alttabio::input::Key;
     use replay::REPLAYED_INPUT_MARKER;
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_LSHIFT, VK_SHIFT};
+
+    fn mouse_event(message: u32, mouse_data: u32, extra_info: usize) -> Option<HookOutcome> {
+        let data = MSLLHOOKSTRUCT {
+            mouseData: mouse_data,
+            dwExtraInfo: extra_info,
+            ..Default::default()
+        };
+        process_mouse_message(WPARAM(message as usize), LPARAM((&raw const data) as isize))
+    }
+
+    #[test]
+    fn mouse_callback_leaves_the_balancing_release_for_the_ui_thread() {
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
+        let _down = mouse_event(WM_RBUTTONDOWN, 0, 0);
+        let opening = mouse_event(WM_MOUSEWHEEL, 120_u32 << 16, 0);
+        assert!(opening.is_some_and(|outcome| outcome.suppress
+            && outcome.actions().next() == Some(InputAction::RightButtonPressed)));
+        assert_eq!(
+            process_with_context(|context| context.state.take_replayed_mouse_event()).flatten(),
+            Some(alttabio::input::ReplayedMouseEvent::RightButtonReleased)
+        );
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    #[test]
+    fn tagged_mouse_release_acknowledges_replay_and_retains_physical_release_ownership() {
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
+        let _down = mouse_event(WM_RBUTTONDOWN, 0, 0);
+        let _wheel = mouse_event(WM_MOUSEWHEEL, 120_u32 << 16, 0);
+        assert_eq!(mouse_event(WM_RBUTTONUP, 0, REPLAYED_INPUT_MARKER), None);
+        let _suspended =
+            process_with_context(|context| context.state.set_interception_suspended(true));
+        let release = mouse_event(WM_RBUTTONUP, 0, 0);
+        assert!(
+            release.is_some_and(|outcome| outcome.suppress && outcome.actions().next().is_none())
+        );
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
 
     #[test]
     fn swallowed_and_replayed_toggles_follow_actual_chain_delivery() {

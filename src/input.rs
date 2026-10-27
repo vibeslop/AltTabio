@@ -182,7 +182,8 @@ pub struct HookState {
     pending_alt_keys: u8,
     pending_windows_keys: u8,
     replayed_key_events: [Option<ReplayedKeyEvent>; 3],
-    replayed_mouse_event: Option<ReplayedMouseEvent>,
+    // Several complete gestures can arrive before the adapter drains its delivery queue.
+    pending_mouse_releases: u8,
     overlay_active: bool,
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
@@ -259,6 +260,11 @@ impl HookState {
     }
 
     pub fn reset_gestures(&mut self) {
+        // Until the deferred replay runs, Windows still owns the original down. Cancellation
+        // must leave its physical up available, rather than retaining an unbalanced capture.
+        if self.pending_mouse_releases != 0 {
+            self.abandon_right_button_gesture();
+        }
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
@@ -274,7 +280,7 @@ impl HookState {
 
     pub fn abandon_right_button_gesture(&mut self) {
         self.right_button = RightButtonState::Released;
-        self.replayed_mouse_event = None;
+        self.pending_mouse_releases = 0;
     }
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
@@ -282,7 +288,11 @@ impl HookState {
     }
 
     pub fn take_replayed_mouse_event(&mut self) -> Option<ReplayedMouseEvent> {
-        self.replayed_mouse_event.take()
+        if self.pending_mouse_releases == 0 {
+            return None;
+        }
+        self.pending_mouse_releases -= 1;
+        Some(ReplayedMouseEvent::RightButtonReleased)
     }
 
     #[must_use]
@@ -548,7 +558,7 @@ impl HookState {
                     HookOutcome::one(true, wheel)
                 } else {
                     self.right_button = RightButtonState::WheelGesture;
-                    self.replayed_mouse_event = Some(ReplayedMouseEvent::RightButtonReleased);
+                    self.pending_mouse_releases = self.pending_mouse_releases.saturating_add(1);
                     HookOutcome::two(true, InputAction::RightButtonPressed, wheel)
                 }
             }
@@ -1567,6 +1577,48 @@ mod tests {
                 actions: [Some(InputAction::RightButtonReleased), None],
             }
         );
+    }
+
+    #[test]
+    fn cancelling_before_deferred_mouse_replay_forwards_the_physical_release() {
+        for suspend in [false, true] {
+            let mut state = HookState::default();
+            let settings = HookSettings::default();
+            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
+            assert!(
+                state
+                    .process_mouse(MouseEvent::Wheel(120), settings)
+                    .suppress
+            );
+            if suspend {
+                state.set_interception_suspended(true);
+            } else {
+                state.reset_gestures();
+            }
+            assert_eq!(state.take_replayed_mouse_event(), None);
+            assert_eq!(
+                state.process_mouse(MouseEvent::RightButtonReleased, settings),
+                HookOutcome::default()
+            );
+        }
+    }
+
+    #[test]
+    fn rapid_mouse_gestures_keep_each_pending_balancing_release() {
+        let mut state = HookState::default();
+        let settings = HookSettings::default();
+        for _ in 0..2 {
+            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
+            let _wheel = state.process_mouse(MouseEvent::Wheel(120), settings);
+            let _up = state.process_mouse(MouseEvent::RightButtonReleased, settings);
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                state.take_replayed_mouse_event(),
+                Some(ReplayedMouseEvent::RightButtonReleased)
+            );
+        }
+        assert_eq!(state.take_replayed_mouse_event(), None);
     }
 
     #[test]

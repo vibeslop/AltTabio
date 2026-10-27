@@ -640,7 +640,8 @@ mod tests {
         let release = context
             .state
             .process_mouse(MouseEvent::RightButtonReleased, context.settings);
-        assert!(release.suppress);
+        // Cancellation won before the UI replay, so Windows still needs this up.
+        assert!(!release.suppress);
         assert!(release.actions().next().is_none());
     }
 
