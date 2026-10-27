@@ -223,14 +223,6 @@ impl App {
     }
 
     fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
-        if let Some(hooks) = &self.hooks
-            && let Err(error) = hooks.prepare_mouse_open(action)
-        {
-            eprintln!("{error}");
-            self.hide_overlay();
-            return;
-        }
-        // Input delivery can re-enter native code and cross a modal or desktop boundary.
         if self
             .hooks
             .as_ref()

@@ -220,7 +220,6 @@ impl DialogState {
         self.fonts = Some(Rc::new(fonts));
         self.refresh_paint_state();
         control_host::install_custom_control_painting(&self.controls, &self.paint)?;
-        self.sync_right_button_release_enabled();
         self.apply_selected_icon();
         self.apply_selected_theme();
         self.resize()?;
@@ -259,22 +258,6 @@ impl DialogState {
 
     fn selected_icon(&self) -> IconColor {
         self.selected(Selector::Icon, &ICON_CHOICES, self.settings.appearance.icon)
-    }
-
-    fn sync_right_button_release_enabled(&self) {
-        let enabled = is_checked(
-            self.controls
-                .checkbox(SettingOption::RightButtonWheelSwitching),
-        );
-        unsafe {
-            // SAFETY: both option handles are live controls owned by this dialog. The result
-            // reports the previous state, not a failure.
-            let _was_disabled = EnableWindow(
-                self.controls
-                    .checkbox(SettingOption::ReleaseRightButtonSwitches),
-                enabled,
-            );
-        }
     }
 
     fn apply_selected_theme(&mut self) {
@@ -586,11 +569,6 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
             }
             // Highlighting an open list must not re-theme or relayout its native windows.
             return Some(LRESULT(0));
-        }
-        Control::Checkbox(SettingOption::RightButtonWheelSwitching)
-            if notification == BN_CLICKED =>
-        {
-            state.sync_right_button_release_enabled();
         }
         Control::Checkbox(_) if notification == BN_CLICKED => {}
         _ => return None,

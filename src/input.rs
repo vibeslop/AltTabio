@@ -1,4 +1,4 @@
-//! Pure state machines used by the low-level keyboard and mouse hook adapter.
+//! Pure state machines used by the low-level keyboard hook adapter.
 
 mod key;
 
@@ -15,7 +15,6 @@ pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
 pub struct HookSettings {
     pub replace_alt_tab: bool,
     pub replace_win_tab: bool,
-    pub right_button_wheel_switching: bool,
     pub typed_search: bool,
     pub search_active: bool,
 }
@@ -25,7 +24,6 @@ impl Default for HookSettings {
         Self {
             replace_alt_tab: true,
             replace_win_tab: true,
-            right_button_wheel_switching: true,
             typed_search: true,
             search_active: false,
         }
@@ -62,19 +60,6 @@ impl ReplayedKeyEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MouseEvent {
-    RightButtonPressed,
-    RightButtonReleased,
-    Wheel(i16),
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReplayedMouseEvent {
-    RightButtonReleased,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Switch(i32),
     Navigate(i32),
@@ -87,10 +72,6 @@ pub enum InputAction {
     ActivateVisiblePosition(usize),
     NumberKey(usize),
     AltReleased,
-    RightButtonPressed,
-    RightButtonReleased,
-    /// Selection switching from the explicit right-button + wheel gesture.
-    MouseWheel(i32),
     AppendSearchCharacter(char),
     BackspaceSearch,
     EditSearch(TextCommand),
@@ -161,13 +142,6 @@ impl HookOutcome {
         }
     }
 
-    const fn two(suppress: bool, first: InputAction, second: InputAction) -> Self {
-        Self {
-            suppress,
-            actions: [Some(first), Some(second)],
-        }
-    }
-
     pub fn actions(&self) -> impl Iterator<Item = InputAction> + '_ {
         self.actions.iter().flatten().copied()
     }
@@ -182,12 +156,9 @@ pub struct HookState {
     pending_alt_keys: u8,
     pending_windows_keys: u8,
     replayed_key_events: [Option<ReplayedKeyEvent>; 3],
-    // Several complete gestures can arrive before the adapter drains its delivery queue.
-    pending_mouse_releases: u8,
     overlay_active: bool,
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
-    right_button: RightButtonState,
     interception: InterceptionState,
 }
 
@@ -198,17 +169,8 @@ struct InterceptionState {
     passthrough_keys: KeySet,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum RightButtonState {
-    #[default]
-    Released,
-    Pressed,
-    WheelGesture,
-    CancelledWheelGesture,
-}
-
 impl HookState {
-    /// Cancels gestures without forgetting suppressed presses or synthetic mouse releases.
+    /// Cancels gestures without forgetting suppressed key presses.
     /// The adapter calls this for every suspension generation, including a missed open/close.
     pub fn set_interception_suspended(&mut self, suspended: bool) {
         self.interception.suspended = suspended;
@@ -220,9 +182,6 @@ impl HookState {
             .passthrough_keys
             .insert_all(self.pressed_owned_keys);
         self.reset_gestures();
-        if self.right_button == RightButtonState::WheelGesture {
-            self.right_button = RightButtonState::CancelledWheelGesture;
-        }
     }
 
     pub fn set_overlay_active(&mut self, active: bool) {
@@ -260,39 +219,13 @@ impl HookState {
     }
 
     pub fn reset_gestures(&mut self) {
-        // Until the deferred replay runs, Windows still owns the original down. Cancellation
-        // must leave its physical up available, rather than retaining an unbalanced capture.
-        if self.pending_mouse_releases != 0 {
-            self.abandon_right_button_gesture();
-        }
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
-        // The synthetic release already balanced the forwarded down. Keep owning the later
-        // physical release so a rejected or dismissed overlay cannot leak a duplicate button-up.
-        if !matches!(
-            self.right_button,
-            RightButtonState::WheelGesture | RightButtonState::CancelledWheelGesture
-        ) {
-            self.right_button = RightButtonState::Released;
-        }
-    }
-
-    pub fn abandon_right_button_gesture(&mut self) {
-        self.right_button = RightButtonState::Released;
-        self.pending_mouse_releases = 0;
     }
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
         core::mem::take(&mut self.replayed_key_events)
-    }
-
-    pub fn take_replayed_mouse_event(&mut self) -> Option<ReplayedMouseEvent> {
-        if self.pending_mouse_releases == 0 {
-            return None;
-        }
-        self.pending_mouse_releases -= 1;
-        Some(ReplayedMouseEvent::RightButtonReleased)
     }
 
     #[must_use]
@@ -518,52 +451,6 @@ impl HookState {
             return Some(HookOutcome::one(true, action));
         }
         None
-    }
-
-    #[must_use]
-    pub fn process_mouse(&mut self, event: MouseEvent, settings: HookSettings) -> HookOutcome {
-        if self.interception.suspended
-            || self.right_button == RightButtonState::CancelledWheelGesture
-        {
-            let suppress = event == MouseEvent::RightButtonReleased
-                && self.right_button == RightButtonState::CancelledWheelGesture;
-            if event == MouseEvent::RightButtonReleased {
-                self.right_button = RightButtonState::Released;
-            }
-            return HookOutcome {
-                suppress,
-                ..HookOutcome::default()
-            };
-        }
-        match event {
-            MouseEvent::RightButtonPressed if settings.right_button_wheel_switching => {
-                self.right_button = RightButtonState::Pressed;
-                HookOutcome::default()
-            }
-            MouseEvent::RightButtonReleased if self.right_button != RightButtonState::Released => {
-                let suppress = self.right_button == RightButtonState::WheelGesture;
-                self.right_button = RightButtonState::Released;
-                if suppress {
-                    HookOutcome::one(true, InputAction::RightButtonReleased)
-                } else {
-                    HookOutcome::default()
-                }
-            }
-            MouseEvent::Wheel(delta)
-                if self.right_button != RightButtonState::Released
-                    && settings.right_button_wheel_switching =>
-            {
-                let wheel = InputAction::MouseWheel(i32::from(delta.signum()));
-                if self.right_button == RightButtonState::WheelGesture {
-                    HookOutcome::one(true, wheel)
-                } else {
-                    self.right_button = RightButtonState::WheelGesture;
-                    self.pending_mouse_releases = self.pending_mouse_releases.saturating_add(1);
-                    HookOutcome::two(true, InputAction::RightButtonPressed, wheel)
-                }
-            }
-            _ => HookOutcome::default(),
-        }
     }
 
     fn process_windows_key_transition(
@@ -1273,13 +1160,6 @@ mod tests {
                 HookOutcome::default()
             );
         }
-        for event in [
-            MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(120),
-            MouseEvent::RightButtonReleased,
-        ] {
-            assert_eq!(state.process_mouse(event, settings), HookOutcome::default());
-        }
         assert!(!state.switch_gesture_active());
     }
 
@@ -1417,39 +1297,6 @@ mod tests {
     }
 
     #[test]
-    fn suspension_keeps_synthetic_right_button_up_owned_even_after_resume() {
-        for resume_before_release in [false, true] {
-            let mut state = HookState::default();
-            let settings = HookSettings::default();
-            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-            assert!(
-                state
-                    .process_mouse(MouseEvent::Wheel(120), settings)
-                    .suppress
-            );
-            assert_eq!(
-                state.take_replayed_mouse_event(),
-                Some(ReplayedMouseEvent::RightButtonReleased)
-            );
-            state.set_interception_suspended(true);
-            if resume_before_release {
-                state.set_interception_suspended(false);
-            }
-            assert_eq!(
-                state.process_mouse(MouseEvent::Wheel(120), settings),
-                HookOutcome::default()
-            );
-            let release = state.process_mouse(MouseEvent::RightButtonReleased, settings);
-            assert!(release.suppress);
-            assert!(release.actions().next().is_none());
-            assert_eq!(
-                state.process_mouse(MouseEvent::RightButtonReleased, settings),
-                HookOutcome::default()
-            );
-        }
-    }
-
-    #[test]
     fn pending_modifiers_are_replayed_before_print_screen() {
         for modifier in [
             Key::LeftAlt,
@@ -1494,149 +1341,6 @@ mod tests {
         left_windows: false,
         right_windows: false,
     };
-
-    #[test]
-    fn plain_right_click_passes_through() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonPressed, settings),
-            HookOutcome::default()
-        );
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome::default()
-        );
-    }
-
-    #[test]
-    fn right_button_wheel_starts_then_advances_switcher() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonPressed, settings),
-            HookOutcome::default()
-        );
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::Wheel(120), settings),
-            HookOutcome {
-                suppress: true,
-                actions: [
-                    Some(InputAction::RightButtonPressed),
-                    Some(InputAction::MouseWheel(1)),
-                ],
-            }
-        );
-        assert_eq!(
-            state.take_replayed_mouse_event(),
-            Some(ReplayedMouseEvent::RightButtonReleased)
-        );
-        assert_eq!(
-            state.process_mouse(MouseEvent::Wheel(-120), settings),
-            HookOutcome {
-                suppress: true,
-                actions: [Some(InputAction::MouseWheel(-1)), None],
-            }
-        );
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome {
-                suppress: true,
-                actions: [Some(InputAction::RightButtonReleased), None],
-            }
-        );
-    }
-
-    #[test]
-    fn rejected_open_reset_keeps_the_replayed_right_button_release_owned() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonPressed, settings),
-            HookOutcome::default()
-        );
-        assert!(
-            state
-                .process_mouse(MouseEvent::Wheel(120), settings)
-                .suppress
-        );
-        assert_eq!(
-            state.take_replayed_mouse_event(),
-            Some(ReplayedMouseEvent::RightButtonReleased)
-        );
-
-        state.reset_gestures();
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome {
-                suppress: true,
-                actions: [Some(InputAction::RightButtonReleased), None],
-            }
-        );
-    }
-
-    #[test]
-    fn cancelling_before_deferred_mouse_replay_forwards_the_physical_release() {
-        for suspend in [false, true] {
-            let mut state = HookState::default();
-            let settings = HookSettings::default();
-            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-            assert!(
-                state
-                    .process_mouse(MouseEvent::Wheel(120), settings)
-                    .suppress
-            );
-            if suspend {
-                state.set_interception_suspended(true);
-            } else {
-                state.reset_gestures();
-            }
-            assert_eq!(state.take_replayed_mouse_event(), None);
-            assert_eq!(
-                state.process_mouse(MouseEvent::RightButtonReleased, settings),
-                HookOutcome::default()
-            );
-        }
-    }
-
-    #[test]
-    fn rapid_mouse_gestures_keep_each_pending_balancing_release() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-        for _ in 0..2 {
-            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-            let _wheel = state.process_mouse(MouseEvent::Wheel(120), settings);
-            let _up = state.process_mouse(MouseEvent::RightButtonReleased, settings);
-        }
-        for _ in 0..2 {
-            assert_eq!(
-                state.take_replayed_mouse_event(),
-                Some(ReplayedMouseEvent::RightButtonReleased)
-            );
-        }
-        assert_eq!(state.take_replayed_mouse_event(), None);
-    }
-
-    #[test]
-    fn disabled_right_button_wheel_switching_never_arms_release_activation() {
-        let mut state = HookState::default();
-        let settings = HookSettings {
-            right_button_wheel_switching: false,
-            ..HookSettings::default()
-        };
-
-        for event in [
-            MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(120),
-            MouseEvent::RightButtonReleased,
-        ] {
-            assert_eq!(state.process_mouse(event, settings), HookOutcome::default());
-        }
-    }
 
     #[test]
     fn plain_alt_release_passes_through_without_action() {
@@ -2744,7 +2448,6 @@ mod tests {
             let mut session = SwitcherSession::new(SwitcherSessionSettings {
                 typed_search: true,
                 release_alt_switches: true,
-                release_right_button_switches: true,
             });
             assert!(
                 state

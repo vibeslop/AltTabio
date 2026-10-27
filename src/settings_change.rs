@@ -10,7 +10,6 @@ pub fn hook_settings(settings: &Settings) -> HookSettings {
     HookSettings {
         replace_alt_tab: settings.general.replace_alt_tab,
         replace_win_tab: settings.general.replace_win_tab,
-        right_button_wheel_switching: settings.general.right_button_wheel_switching,
         typed_search: settings.general.typed_search,
         search_active: false,
     }
@@ -21,7 +20,6 @@ pub const fn switcher_session_settings(settings: &Settings) -> SwitcherSessionSe
     SwitcherSessionSettings {
         typed_search: settings.general.typed_search,
         release_alt_switches: settings.general.release_alt_switches,
-        release_right_button_switches: settings.general.release_right_button_switches,
     }
 }
 
@@ -510,7 +508,6 @@ mod tests {
         let mut settings = Settings::default();
         settings.general.replace_alt_tab = false;
         settings.general.replace_win_tab = true;
-        settings.general.right_button_wheel_switching = true;
         settings.general.typed_search = false;
 
         assert_eq!(
@@ -518,7 +515,6 @@ mod tests {
             HookSettings {
                 replace_alt_tab: false,
                 replace_win_tab: true,
-                right_button_wheel_switching: true,
                 typed_search: false,
                 search_active: false,
             }
@@ -530,14 +526,12 @@ mod tests {
         let mut settings = Settings::default();
         settings.general.typed_search = true;
         settings.general.release_alt_switches = false;
-        settings.general.release_right_button_switches = true;
 
         assert_eq!(
             switcher_session_settings(&settings),
             SwitcherSessionSettings {
                 typed_search: true,
                 release_alt_switches: false,
-                release_right_button_switches: true,
             }
         );
     }

@@ -223,7 +223,7 @@ mod tests {
     use crate::hook::keyboard_state::KeyboardState;
     use crate::hook::test_context;
     use alttabio::hook_flags::{HookFlags, OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE};
-    use alttabio::input::{HookSettings, HookState, KeyEvent, Modifiers, MouseEvent};
+    use alttabio::input::{HookSettings, HookState, KeyEvent, Modifiers};
     use std::sync::{Arc, atomic::AtomicBool};
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LMENU, VK_TAB};
 
@@ -423,93 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn registered_switch_keeps_mouse_and_keyboard_actions_in_physical_order() {
-        use alttabio::switcher::{
-            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
-        };
-
-        let mut context = test_context();
-        let mut pending = crate::switch_hotkey::PendingSwitch::without_registration(0);
-        let _alt = context.state.process_key(
-            KeyEvent::pressed(Key::LeftAlt, Modifiers::default()),
-            context.settings,
-        );
-        let opening = context.state.process_key(
-            KeyEvent::pressed(Key::Tab, Modifiers::default()),
-            context.settings,
-        );
-        assert!(pending.actions.push(opening));
-        context.registered_switch = Some(pending);
-        let settings = HookSettings {
-            right_button_wheel_switching: true,
-            ..context.settings
-        };
-        let _press = context
-            .state
-            .process_mouse(MouseEvent::RightButtonPressed, settings);
-        let mouse = context
-            .state
-            .process_mouse(MouseEvent::Wheel(120), settings);
-        let mut delivered = Vec::new();
-        assert!(post_context_actions(&mut context, mouse, |_, action| {
-            delivered.push(action);
-            true
-        }));
-        let release = context.state.process_key(
-            KeyEvent::released(Key::LeftAlt, Modifiers::default()),
-            context.settings,
-        );
-        let release = route_registered_switch(
-            &mut context,
-            release,
-            &KBDLLHOOKSTRUCT {
-                vkCode: u32::from(VK_LMENU.0),
-                ..KBDLLHOOKSTRUCT::default()
-            },
-            KeyTransition::Released,
-        );
-        assert!(post_context_actions(&mut context, release, |_, action| {
-            delivered.push(action);
-            true
-        }));
-        let Some(mut pending) = context.registered_switch.take() else {
-            panic!("pending switch lost")
-        };
-        for outcome in pending.actions.take() {
-            assert!(post_context_actions(&mut context, outcome, |_, action| {
-                delivered.push(action);
-                true
-            }));
-        }
-        let mut session = SwitcherSession::new(SwitcherSessionSettings {
-            typed_search: true,
-            release_alt_switches: true,
-            release_right_button_switches: true,
-        });
-        let mut activated = None;
-        for action in delivered {
-            match session.handle_input(action) {
-                SwitcherEffect::Open { selection_delta } => session.open(
-                    [
-                        SwitchTask::new(1, 10, "First", "first"),
-                        SwitchTask::new(2, 20, "Second", "second"),
-                        SwitchTask::new(3, 30, "Third", "third"),
-                    ],
-                    selection_delta,
-                ),
-                SwitcherEffect::Activate(target) => activated = Some(target),
-                SwitcherEffect::Redraw | SwitcherEffect::None => {}
-                effect => panic!("unexpected effect: {effect:?}"),
-            }
-        }
-        assert_eq!(activated, Some(30));
-        assert!(
-            !session.is_visible(),
-            "Alt release must complete the pending switch"
-        );
-    }
-
-    #[test]
     fn pending_registered_actions_are_discarded_at_cancellation_and_modal_boundaries() {
         for modal in [false, true] {
             let mut context = test_context();
@@ -615,34 +528,6 @@ mod tests {
         assert!(release.actions().next().is_none());
         assert!(!flags.update_overlay(0, false, false));
         assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
-    }
-
-    #[test]
-    fn suspension_during_mouse_action_delivery_stops_remaining_actions() {
-        let mut context = test_context();
-        let flags = Arc::clone(&context.flags);
-        let _down = context
-            .state
-            .process_mouse(MouseEvent::RightButtonPressed, context.settings);
-        let outcome = context
-            .state
-            .process_mouse(MouseEvent::Wheel(120), context.settings);
-        let mut posts = 0;
-        assert!(post_context_actions(&mut context, outcome, |_, action| {
-            posts += 1;
-            assert_eq!(action, InputAction::RightButtonPressed);
-            flags.suspend(true);
-            true
-        }));
-        assert_eq!(posts, 1);
-        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
-        assert_eq!(context.sync_interception(), 0);
-        let release = context
-            .state
-            .process_mouse(MouseEvent::RightButtonReleased, context.settings);
-        // Cancellation won before the UI replay, so Windows still needs this up.
-        assert!(!release.suppress);
-        assert!(release.actions().next().is_none());
     }
 
     #[test]

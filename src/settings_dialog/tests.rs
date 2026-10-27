@@ -67,34 +67,27 @@ fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_
     let dialog = dialog()?;
     let window = dialog.window();
     let host = dialog.host()?;
-    let (navigation, wheel, release, save, viewport) = {
+    let (navigation, hover, save, viewport) = {
         let state = host.state_mut()?;
         (
             state.controls.get(Control::Navigation(Category::Switching)),
-            state
-                .controls
-                .checkbox(SettingOption::RightButtonWheelSwitching),
-            state
-                .controls
-                .checkbox(SettingOption::ReleaseRightButtonSwitches),
+            state.controls.checkbox(SettingOption::MouseOverSelection),
             state.controls.get(Control::Button(DialogButton::Ok)),
             state.controls.get(Control::Viewport),
         )
     };
     assert!(!is_control_enabled(save));
-    assert!(!is_control_enabled(release));
     // SAFETY: these are hidden controls owned by this test; BM_CLICK performs their real native
     // state transition and sends their notifications through the viewport subclass.
     unsafe {
         SendMessageW(navigation, BM_CLICK, None, None);
-        SendMessageW(wheel, BM_CLICK, None, None);
+        SendMessageW(hover, BM_CLICK, None, None);
     }
     assert_eq!(host.state_mut()?.pages.category, Category::Switching);
-    assert!(is_checked(wheel));
-    assert!(is_control_enabled(release));
+    assert!(!is_checked(hover));
     assert!(is_control_enabled(save));
     // SAFETY: GetParent only queries the ownership of the live checkbox.
-    assert_eq!(unsafe { GetParent(wheel) }?, viewport);
+    assert_eq!(unsafe { GetParent(hover) }?, viewport);
     host.state_mut()?.select_category(Category::Appearance)?;
     let combo = host
         .state_mut()?
@@ -136,7 +129,7 @@ fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_
     host.state_mut()?.select_category(Category::Appearance)?;
     assert_eq!(host.state_mut()?.pages.offset(), offset);
     assert_eq!(host.state_mut()?.selected_theme(), Theme::Light);
-    assert!(is_checked(wheel));
+    assert!(!is_checked(hover));
     for (control, hwnd) in host.state_mut()?.controls.iter() {
         if let Some(category) = control.category() {
             // SAFETY: only the child window's own visibility style is queried, allowing the
@@ -155,12 +148,7 @@ fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_
         "Cancel must leave the saved model untouched"
     );
     host.state_mut()?.accept();
-    assert!(
-        host.state_mut()?
-            .settings
-            .general
-            .right_button_wheel_switching
-    );
+    assert!(!host.state_mut()?.settings.general.mouse_over_selection);
     assert_eq!(host.state_mut()?.settings.appearance.theme, Theme::Light);
     dialog.destroy()?;
     Ok(())

@@ -84,7 +84,6 @@ impl DeferredSwitch {
                         | InputAction::Navigate(_)
                         | InputAction::SelectFirst
                         | InputAction::SelectLast
-                        | InputAction::MouseWheel(_)
                         | InputAction::AppendSearchCharacter(_)
                         | InputAction::BackspaceSearch
                 )
@@ -135,7 +134,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         let tasks = || {
             [
@@ -239,7 +237,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         for action in deferred.take_preview_actions() {
             let SwitcherEffect::Open { selection_delta } = session.handle_input(action) else {
@@ -316,7 +313,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         let mut activation = None;
         for action in actions {

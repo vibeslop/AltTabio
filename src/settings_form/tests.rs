@@ -2,14 +2,12 @@ use super::*;
 use crate::dialog_layout::{Size, scale};
 #[test]
 fn every_checkbox_reads_only_its_bound_setting() {
-    let fields: [fn(&mut Settings) -> &mut bool; 17] = [
+    let fields: [fn(&mut Settings) -> &mut bool; 15] = [
         |s| &mut s.general.autostart,
         |s| &mut s.general.replace_alt_tab,
         |s| &mut s.general.replace_win_tab,
         |s| &mut s.general.typed_search,
         |s| &mut s.general.release_alt_switches,
-        |s| &mut s.general.release_right_button_switches,
-        |s| &mut s.general.right_button_wheel_switching,
         |s| &mut s.general.mouse_over_selection,
         |s| &mut s.general.auto_update,
         |s| &mut s.appearance.compact_list,

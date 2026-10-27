@@ -33,10 +33,7 @@ pub fn deliver(
         if !flags.generation_is_current(generation) {
             return Delivery::Stale;
         }
-        let opens_overlay = matches!(
-            action,
-            InputAction::Switch(_) | InputAction::RightButtonPressed
-        );
+        let opens_overlay = matches!(action, InputAction::Switch(_));
         if opens_overlay && !flags.update_overlay(generation, true, typed_search) {
             return Delivery::OverlayRefused;
         }
@@ -70,8 +67,8 @@ pub fn routes_tab_through_hotkey(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_flags::{INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS};
-    use crate::input::{HookSettings, HookState, KeyEvent, Modifiers, MouseEvent};
+    use crate::hook_flags::{OVERLAY_ACTIVE, OVERLAY_FLAGS};
+    use crate::input::{HookSettings, HookState, KeyEvent, Modifiers};
 
     const ALT: Modifiers = Modifiers {
         alt: true,
@@ -148,27 +145,6 @@ mod tests {
         assert_eq!(delivery, Delivery::PostFailed);
         assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
         assert!(flags.generation_is_current(generation));
-    }
-
-    #[test]
-    fn a_modal_boundary_during_delivery_stops_the_remaining_actions() {
-        let (flags, generation) = current_flags();
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-        let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-        let wheel = state.process_mouse(MouseEvent::Wheel(120), settings);
-        let mut posted = Vec::new();
-        let delivery = deliver(&flags, generation, true, wheel, |action| {
-            posted.push(action);
-            flags.suspend(true);
-            true
-        });
-        assert_eq!(delivery, Delivery::Stale);
-        assert_eq!(posted, [InputAction::RightButtonPressed]);
-        assert_eq!(
-            flags.load() & (OVERLAY_FLAGS | INTERCEPTION_SUSPENDED),
-            INTERCEPTION_SUSPENDED
-        );
     }
 
     #[test]

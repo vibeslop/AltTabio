@@ -9,7 +9,7 @@ pub const SELECTOR_ITEM_HEIGHT: i32 = 32;
 pub const SELECTOR_WIDTH: i32 = 160;
 pub const MIN_CLIENT_WIDTH: i32 = 640;
 pub const MIN_CLIENT_HEIGHT: i32 = 420;
-const OPTION_COUNT: usize = 17;
+const OPTION_COUNT: usize = 15;
 
 /// A native control identity. Page controls live in a clipping, scrolling viewport.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,9 +164,8 @@ impl Category {
         };
         use SettingOption::{
             AutoUpdate, Autostart, CompactList, CurrentMonitorFilter, FullDesktopPreview,
-            LargeIcons, MouseOverSelection, Preview, ReleaseAltSwitches,
-            ReleaseRightButtonSwitches, ReplaceAltTab, ReplaceWinTab, RightButtonWheelSwitching,
-            ShowAppNames, ShowNumbers, TypedSearch, VisibleBorders,
+            LargeIcons, MouseOverSelection, Preview, ReleaseAltSwitches, ReplaceAltTab,
+            ReplaceWinTab, ShowAppNames, ShowNumbers, TypedSearch, VisibleBorders,
         };
         match self {
             Self::General => &[C(Autostart), C(AutoUpdate)],
@@ -177,8 +176,6 @@ impl Category {
                 C(TypedSearch),
                 C(ReleaseAltSwitches),
                 S(Section::Mouse),
-                C(RightButtonWheelSwitching),
-                C(ReleaseRightButtonSwitches),
                 C(MouseOverSelection),
             ],
             Self::Appearance => &[
@@ -264,8 +261,6 @@ setting_options! {
     ReplaceWinTab: Switching, general.replace_win_tab, "Replace Win+Tab";
     TypedSearch: Switching, general.typed_search, "Type to search";
     ReleaseAltSwitches: Switching, general.release_alt_switches, "Switch when Alt is released";
-    ReleaseRightButtonSwitches: Switching, general.release_right_button_switches, "Switch when the right button is released";
-    RightButtonWheelSwitching: Switching, general.right_button_wheel_switching, "Right button + wheel";
     MouseOverSelection: Switching, general.mouse_over_selection, "Select on hover";
     AutoUpdate: General, general.auto_update, "Automatic updates";
     CompactList: Appearance, appearance.compact_list, "Compact list";
@@ -284,7 +279,6 @@ impl SettingOption {
         match self {
             Self::AutoUpdate => "Check for and install updates automatically.",
             Self::TypedSearch => "Find a window by typing while the switcher is open.",
-            Self::RightButtonWheelSwitching => "Hold the right mouse button and scroll to switch.",
             Self::MouseOverSelection => "Select a window when the pointer moves over it.",
             Self::FullDesktopPreview => "Show the window where it sits on the desktop.",
             _ => "",

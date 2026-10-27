@@ -96,7 +96,7 @@ pub(super) unsafe extern "system" fn window_proc(
     handled.unwrap_or_else(|| default_window_proc(hwnd, message, wparam, lparam))
 }
 
-/// Attaches application state during WM_NCCREATE, refusing creation if attachment fails.
+/// Attaches application state during `WM_NCCREATE`, refusing creation if attachment fails.
 fn attach_host(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
     let create = unsafe {
         // SAFETY: WM_NCCREATE guarantees lParam points to CREATESTRUCTW for this callback.

@@ -43,7 +43,7 @@ It is a practical answer for people searching for:
 - The query stays visible in a translucent capsule on the panel's top edge until cleared, without moving the list
 - Select and edit the query with the mouse, Shift and Ctrl navigation, and standard copy, cut, paste, undo, and redo shortcuts
 - Keys 1-9 switch to the corresponding visible window
-- Keyboard and mouse control, including right mouse button plus wheel switching
+- Keyboard and mouse control
 - Close, minimize, maximize, restore, end-process, and run-another-instance commands
 - Optional current-monitor filter for multi-monitor setups
 - Light, dark, or follow-Windows theme
@@ -105,7 +105,6 @@ tccutil reset All com.vibeslop.AltTabio
 | Up, Down, Tab, or Shift+Tab | Change the selected window |
 | Left, Right, Home, or End | Edit an active query; otherwise navigate the windows |
 | Mouse wheel | Scroll the window list without changing the selected window |
-| Right mouse button + wheel, when enabled | Open the switcher and change the selected window |
 | Enter or left click | Activate the selected window |
 | 1-9 or numpad 1-9 | Activate that visible window |
 | Type | Filter by title, application name, or number |

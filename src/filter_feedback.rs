@@ -53,7 +53,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open([SwitchTask::new(1, 10, "Editor", "editor")], None);
         let _effect = session.handle_input(InputAction::AppendSearchCharacter('z'));

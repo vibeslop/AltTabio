@@ -264,7 +264,6 @@ mod tests {
         let settings = alttabio::switcher::SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         };
         let mut session = SwitcherSession::new(settings);
         session.open([SwitchTask::new(1, 10, "Alpha", "editor")], None);

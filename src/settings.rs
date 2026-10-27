@@ -18,8 +18,6 @@ pub struct GeneralSettings {
     pub replace_win_tab: bool,
     pub typed_search: bool,
     pub release_alt_switches: bool,
-    pub release_right_button_switches: bool,
-    pub right_button_wheel_switching: bool,
     pub mouse_over_selection: bool,
     /// Only macOS updates itself; Windows keeps the key without reading it.
     pub auto_update: bool,
@@ -135,8 +133,6 @@ impl Default for Settings {
                 replace_win_tab: true,
                 typed_search: true,
                 release_alt_switches: true,
-                release_right_button_switches: true,
-                right_button_wheel_switching: false,
                 mouse_over_selection: true,
                 auto_update: true,
             },
@@ -256,16 +252,6 @@ impl SettingsDocument {
                     "ReleaseAltSwitches",
                     defaults.general.release_alt_switches,
                 ),
-                release_right_button_switches: self.read_bool(
-                    "General",
-                    "ReleaseRmbSwitches",
-                    defaults.general.release_right_button_switches,
-                ),
-                right_button_wheel_switching: self.read_bool(
-                    "General",
-                    "RmbWheelSwitching",
-                    defaults.general.right_button_wheel_switching,
-                ),
                 mouse_over_selection: self.read_bool(
                     "General",
                     "MouseOverSelection",
@@ -334,14 +320,6 @@ impl SettingsDocument {
             format!(
                 "ReleaseAltSwitches={}",
                 settings.general.release_alt_switches
-            ),
-            format!(
-                "ReleaseRmbSwitches={}",
-                settings.general.release_right_button_switches
-            ),
-            format!(
-                "RmbWheelSwitching={}",
-                settings.general.right_button_wheel_switching
             ),
             format!(
                 "MouseOverSelection={}",
@@ -484,7 +462,6 @@ mod tests {
         let settings = SettingsDocument::parse("").settings();
 
         assert_eq!(settings, Settings::default());
-        assert!(!settings.general.right_button_wheel_switching);
         assert_eq!(settings.appearance.icon, IconColor::Azure);
         assert!(settings.appearance.compact_list);
         assert!(!settings.appearance.show_app_names);
@@ -580,8 +557,8 @@ mod tests {
     #[test]
     fn established_user_settings_round_trip_without_changes() {
         let contents = "[General]\nAutostart=true\nReplaceAltTab=true\nReplaceWinTab=true\n\
-                        TypedSearch=true\nReleaseAltSwitches=true\nReleaseRmbSwitches=true\n\
-                        RmbWheelSwitching=true\nMouseOverSelection=true\nAutoUpdate=false\n\n\
+                        TypedSearch=true\nReleaseAltSwitches=true\n\
+                        MouseOverSelection=true\nAutoUpdate=false\n\n\
                         [Appearance]\n\
                         Icon=Azure\nTheme=Auto\nCompactList=true\nLargeIcons=true\nShowNumbers=true\n\
                         ShowAppNames=false\nVisibleBorders=false\nPreview=true\n\
@@ -602,6 +579,18 @@ mod tests {
         assert!(!rendered.contains("ShowHints"));
         assert!(!rendered.contains("IconMode"));
         assert!(rendered.contains("Theme=Dark"));
+    }
+
+    #[test]
+    fn retired_mouse_switching_keys_are_ignored_and_dropped_on_save() {
+        let document = SettingsDocument::parse(
+            "[General]\nRmbWheelSwitching=true\nReleaseRmbSwitches=true\nFutureSetting=keep\n",
+        );
+        assert_eq!(document.settings(), Settings::default());
+        let rendered = document.render(&document.settings());
+        assert!(!rendered.contains("RmbWheelSwitching"));
+        assert!(!rendered.contains("ReleaseRmbSwitches"));
+        assert!(rendered.contains("FutureSetting=keep"));
     }
 
     #[test]

@@ -124,11 +124,10 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_rdp_policy_disables_tab_replacement_but_keeps_right_button_wheel() {
+    fn fullscreen_rdp_policy_disables_tab_replacement() {
         let settings = PassthroughPolicy::RemoteDesktopFullscreen.apply(HookSettings::default());
         assert!(!settings.replace_alt_tab);
         assert!(!settings.replace_win_tab);
-        assert!(settings.right_button_wheel_switching);
         assert!(
             PassthroughPolicy::Local
                 .apply(HookSettings::default())
@@ -146,7 +145,6 @@ mod tests {
         let settings = synced.apply(HookSettings::default());
         assert!(!settings.replace_alt_tab);
         assert!(!settings.replace_win_tab);
-        assert!(settings.right_button_wheel_switching);
     }
 
     #[test]

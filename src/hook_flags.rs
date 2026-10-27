@@ -19,9 +19,6 @@ const FLAG_BITS: usize = INTERCEPTION_SUSPENDED | OVERLAY_FLAGS;
 const ACTION_SWITCH: usize = 1;
 const ACTION_ACTIVATE_POSITION: usize = 2;
 const ACTION_ALT_RELEASED: usize = 3;
-const ACTION_RIGHT_BUTTON_PRESSED: usize = 4;
-const ACTION_RIGHT_BUTTON_RELEASED: usize = 5;
-const ACTION_MOUSE_WHEEL: usize = 6;
 const ACTION_APPEND_SEARCH_CHARACTER: usize = 8;
 const ACTION_BACKSPACE_SEARCH: usize = 9;
 const ACTION_NAVIGATE: usize = 10;
@@ -69,9 +66,6 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
             isize::try_from(position).unwrap_or_default(),
         ),
         InputAction::AltReleased => (ACTION_ALT_RELEASED, 0),
-        InputAction::RightButtonPressed => (ACTION_RIGHT_BUTTON_PRESSED, 0),
-        InputAction::RightButtonReleased => (ACTION_RIGHT_BUTTON_RELEASED, 0),
-        InputAction::MouseWheel(delta) => (ACTION_MOUSE_WHEEL, delta as isize),
         InputAction::AppendSearchCharacter(character) => (
             ACTION_APPEND_SEARCH_CHARACTER,
             isize::try_from(u32::from(character)).unwrap_or_default(),
@@ -93,9 +87,6 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
             .map(InputAction::ActivateVisiblePosition),
         ACTION_NUMBER_KEY => usize::try_from(lparam).ok().map(InputAction::NumberKey),
         ACTION_ALT_RELEASED => Some(InputAction::AltReleased),
-        ACTION_RIGHT_BUTTON_PRESSED => Some(InputAction::RightButtonPressed),
-        ACTION_RIGHT_BUTTON_RELEASED => Some(InputAction::RightButtonReleased),
-        ACTION_MOUSE_WHEEL => i32::try_from(lparam).ok().map(InputAction::MouseWheel),
         ACTION_APPEND_SEARCH_CHARACTER => u32::try_from(lparam)
             .ok()
             .and_then(char::from_u32)
@@ -427,9 +418,6 @@ mod tests {
             InputAction::WindowCommand(WindowCommand::Run),
             InputAction::ActivateVisiblePosition(9),
             InputAction::AltReleased,
-            InputAction::RightButtonPressed,
-            InputAction::RightButtonReleased,
-            InputAction::MouseWheel(-1),
             InputAction::AppendSearchCharacter('é'),
             InputAction::BackspaceSearch,
         ] {

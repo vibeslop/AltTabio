@@ -100,7 +100,6 @@ pub struct Switcher {
 pub struct SwitcherSessionSettings {
     pub typed_search: bool,
     pub release_alt_switches: bool,
-    pub release_right_button_switches: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -293,9 +292,6 @@ impl SwitcherSession {
                 InputAction::Switch(delta) => SwitcherEffect::Open {
                     selection_delta: Some(delta),
                 },
-                InputAction::RightButtonPressed => SwitcherEffect::Open {
-                    selection_delta: None,
-                },
                 _ => SwitcherEffect::None,
             };
         }
@@ -347,19 +343,6 @@ impl SwitcherSession {
             InputAction::AltReleased if self.settings.release_alt_switches => {
                 self.activate_from_release()
             }
-            InputAction::RightButtonReleased if self.settings.release_right_button_switches => {
-                self.activate_from_release()
-            }
-            InputAction::RightButtonPressed => SwitcherEffect::Open {
-                selection_delta: None,
-            },
-            InputAction::MouseWheel(delta) => {
-                if delta == 0 {
-                    return SwitcherEffect::None;
-                }
-                self.switcher.select_next(-delta.signum());
-                SwitcherEffect::Redraw
-            }
             InputAction::AppendSearchCharacter(character) if self.settings.typed_search => {
                 self.switcher.append_filter_character(character);
                 SwitcherEffect::Redraw
@@ -369,7 +352,6 @@ impl SwitcherSession {
                 SwitcherEffect::Redraw
             }
             InputAction::AltReleased
-            | InputAction::RightButtonReleased
             | InputAction::AppendSearchCharacter(_)
             | InputAction::BackspaceSearch
             | InputAction::EditSearch(_) => SwitcherEffect::None,
@@ -670,7 +652,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         let identity = ProcessIdentity::new(100, 500);
         session.open(
@@ -723,7 +704,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
 
         assert_eq!(
@@ -753,7 +733,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
 
         assert_eq!(
@@ -797,7 +776,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open([SwitchTask::new(1, 10, "Last window", "app")], None);
         assert!(session.is_visible());
@@ -814,7 +792,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -853,7 +830,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -886,7 +862,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -918,7 +893,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -946,7 +920,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -983,7 +956,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -1033,7 +1005,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(tasks(), None);
         assert_eq!(
@@ -1053,14 +1024,9 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: false,
         });
         session.open(tasks(), None);
 
-        assert_eq!(
-            session.handle_input(InputAction::RightButtonReleased),
-            SwitcherEffect::None
-        );
         assert!(session.open_context_menu());
         assert_eq!(
             session.handle_input(InputAction::AltReleased),
@@ -1082,7 +1048,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [SwitchTask::new(1, 20, "Selected", "editor").with_process_identity(identity)],
@@ -1104,7 +1069,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(tasks(), None);
         assert_eq!(
@@ -1252,22 +1216,6 @@ mod tests {
     }
 
     #[test]
-    fn right_button_wheel_keeps_selection_switching() {
-        let mut session = long_list_session();
-
-        assert_eq!(
-            session.handle_input(InputAction::MouseWheel(1)),
-            SwitcherEffect::Redraw
-        );
-        assert_eq!(session.switcher().selected_visible_index(), Some(19));
-        assert_eq!(
-            session.handle_input(InputAction::MouseWheel(-1)),
-            SwitcherEffect::Redraw
-        );
-        assert_eq!(session.switcher().selected_visible_index(), Some(0));
-    }
-
-    #[test]
     fn scrolling_moves_the_hovered_list_without_selecting_a_different_task() {
         let mut session = long_list_session();
         assert!(session.switcher_mut().select_visible_position(8));
@@ -1357,7 +1305,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             (1..=20).map(|number| {
@@ -1492,7 +1439,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -1518,7 +1464,6 @@ mod tests {
         let settings = SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         };
         let tasks = [
             SwitchTask::new(1, 10, "Alpha1", "editor"),

@@ -1,14 +1,10 @@
-//! Replays suppressed input through `SendInput`, tagged so the hook lets it pass.
+//! Replays suppressed keyboard input through `SendInput`, tagged so the hook lets it pass.
 
 use super::key_pressed;
-use alttabio::hook_flags::{HookFlags, OVERLAY_FLAGS};
-use alttabio::input::{
-    HookOutcome, InputAction, Key, KeyTransition, ReplayedKeyEvent, ReplayedMouseEvent,
-};
+use alttabio::input::{HookOutcome, Key, KeyTransition, ReplayedKeyEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
-    VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
 };
 
 pub(super) const REPLAYED_INPUT_MARKER: usize = 0x0A17_AB10;
@@ -29,25 +25,6 @@ fn replayed_key_event_to_input(event: ReplayedKeyEvent) -> INPUT {
             ki: KEYBDINPUT {
                 wVk: VIRTUAL_KEY(virtual_key),
                 wScan: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: REPLAYED_INPUT_MARKER,
-            },
-        },
-    }
-}
-
-fn replayed_mouse_event_to_input(event: ReplayedMouseEvent) -> INPUT {
-    let flags = match event {
-        ReplayedMouseEvent::RightButtonReleased => MOUSEEVENTF_RIGHTUP,
-    };
-    INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT {
-                dx: 0,
-                dy: 0,
-                mouseData: 0,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: REPLAYED_INPUT_MARKER,
@@ -146,74 +123,6 @@ fn replay_key_events_with<const N: usize>(
     true
 }
 
-/// The UI thread sends the balancing release, leaving the hook-owning thread free to receive
-/// it. Sending it on the hook thread can stall while Windows waits for that thread's callback.
-pub(super) fn prepare_mouse_open(
-    action: InputAction,
-    flags: &HookFlags,
-    reset: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    prepare_mouse_open_with(
-        action,
-        flags,
-        || {
-            replay_mouse_event(
-                Some(ReplayedMouseEvent::RightButtonReleased),
-                &mut HookOutcome::default(),
-            )
-        },
-        reset,
-    )
-}
-
-fn prepare_mouse_open_with(
-    action: InputAction,
-    flags: &HookFlags,
-    replay: impl FnOnce() -> bool,
-    reset: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    if action != InputAction::RightButtonPressed || replay() {
-        return Ok(());
-    }
-    // Invalidate the queued wheel and release before the UI can apply them to an old selection.
-    // The pending, unacknowledged release makes the hook forward the physical up on reset.
-    flags.advance_generation();
-    flags.set(OVERLAY_FLAGS, false);
-    let message = "Could not release the right mouse button before opening the switcher";
-    match reset() {
-        Ok(()) => Err(message.to_owned()),
-        Err(error) => Err(format!("{message}: {error}")),
-    }
-}
-
-fn replay_mouse_event(event: Option<ReplayedMouseEvent>, outcome: &mut HookOutcome) -> bool {
-    replay_mouse_event_with(event, outcome, |inputs, input_size| unsafe {
-        // SAFETY: `replay_mouse_event_with` passes only initialized INPUT records, and
-        // SendInput copies the records synchronously without retaining the borrowed slice.
-        SendInput(inputs, input_size)
-    })
-}
-
-fn replay_mouse_event_with(
-    event: Option<ReplayedMouseEvent>,
-    outcome: &mut HookOutcome,
-    sender: impl FnOnce(&[INPUT], i32) -> u32,
-) -> bool {
-    let Some(event) = event else {
-        return true;
-    };
-    let inputs = [replayed_mouse_event_to_input(event)];
-    let Ok(input_size) = i32::try_from(core::mem::size_of::<INPUT>()) else {
-        outcome.suppress = false;
-        return false;
-    };
-    if sender(&inputs, input_size) != 1 {
-        outcome.suppress = false;
-        return false;
-    }
-    true
-}
-
 pub(super) const fn is_own_replayed_input(extra_info: usize) -> bool {
     extra_info == REPLAYED_INPUT_MARKER
 }
@@ -233,69 +142,6 @@ mod tests {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LMENU, VK_RMENU};
     use windows::Win32::UI::WindowsAndMessaging::{KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP};
-
-    #[test]
-    fn failed_ui_mouse_replay_invalidates_queued_activation_and_returns_the_physical_up() {
-        use alttabio::input::{HookState, MouseEvent};
-        let flags = HookFlags::new();
-        let generation = flags.load();
-        assert!(flags.update_overlay(generation, true, true));
-        let (release, _) =
-            alttabio::hook_flags::encode_action(InputAction::RightButtonReleased, generation);
-        let mut state = HookState::default();
-        let settings = alttabio::input::HookSettings::default();
-        let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-        let _wheel = state.process_mouse(MouseEvent::Wheel(120), settings);
-        assert!(
-            prepare_mouse_open_with(
-                InputAction::RightButtonPressed,
-                &flags,
-                || false,
-                || {
-                    state.reset_gestures();
-                    Ok(())
-                }
-            )
-            .is_err()
-        );
-        assert!(!flags.action_is_current(release));
-        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome::default()
-        );
-    }
-
-    #[test]
-    fn only_the_opening_mouse_action_replays_a_button_release() {
-        let flags = HookFlags::new();
-        for action in [
-            InputAction::MouseWheel(1),
-            InputAction::RightButtonReleased,
-            InputAction::Switch(1),
-        ] {
-            assert!(
-                prepare_mouse_open_with(
-                    action,
-                    &flags,
-                    || panic!("only an opening RMB action may inject input"),
-                    || panic!("unrelated actions must not reset gestures")
-                )
-                .is_ok()
-            );
-        }
-        let generation = flags.load();
-        assert!(
-            prepare_mouse_open_with(
-                InputAction::RightButtonPressed,
-                &flags,
-                || true,
-                || panic!("successful replay must not cancel the gesture")
-            )
-            .is_ok()
-        );
-        assert_eq!(flags.load(), generation);
-    }
 
     #[test]
     fn shell_escape_clears_suppressed_alt_context_before_escape() {
@@ -446,40 +292,6 @@ mod tests {
             assert_eq!(keyboard.dwFlags.contains(KEYEVENTF_KEYUP), expected_key_up);
             assert_eq!(keyboard.dwExtraInfo, REPLAYED_INPUT_MARKER);
         }
-    }
-
-    #[test]
-    fn replayed_right_button_release_is_tagged_mouse_input() {
-        let input = replayed_mouse_event_to_input(ReplayedMouseEvent::RightButtonReleased);
-        assert_eq!(input.r#type, INPUT_MOUSE);
-        let mouse = unsafe {
-            // SAFETY: `replayed_mouse_event_to_input` initializes the mouse union member and marks
-            // the enclosing INPUT as INPUT_MOUSE.
-            input.Anonymous.mi
-        };
-        assert_eq!(mouse.dwFlags, MOUSEEVENTF_RIGHTUP);
-        assert_eq!(mouse.dwExtraInfo, REPLAYED_INPUT_MARKER);
-    }
-
-    #[test]
-    fn failed_right_button_release_replay_reports_failure_and_clears_suppression() {
-        let mut outcome = HookOutcome::default();
-        outcome.suppress = true;
-        let replayed = replay_mouse_event_with(
-            Some(ReplayedMouseEvent::RightButtonReleased),
-            &mut outcome,
-            |inputs, input_size| {
-                assert_eq!(inputs.len(), 1);
-                assert_eq!(
-                    input_size,
-                    i32::try_from(core::mem::size_of::<INPUT>()).unwrap_or_default()
-                );
-                0
-            },
-        );
-
-        assert!(!replayed);
-        assert!(!outcome.suppress);
     }
 
     #[test]
