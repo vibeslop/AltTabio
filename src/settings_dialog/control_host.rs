@@ -22,6 +22,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, Error, Result};
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
+#[cfg(test)]
+#[path = "repaint_tests.rs"]
+mod tests;
 type SubclassProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, usize, usize) -> LRESULT;
 #[link(name = "comctl32")]
 unsafe extern "system" {

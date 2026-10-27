@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SendMessageW, SetWindowPos, WM_MOUSEWHEEL, WM_PRINTCLIENT, WS_VISIBLE,
 };
 
-fn dialog() -> Result<ModalDialog<DialogState>> {
+pub(super) fn dialog() -> Result<ModalDialog<DialogState>> {
     let instance = win32::module_instance()?;
     register_class(instance)?;
     let layout = SettingsLayout::for_dpi(BASE_DPI);

@@ -19,6 +19,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_CONTROLPARENT, WS_GROUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{Error, PCWSTR, Result, w};
+// SS_OWNERDRAW is otherwise exposed only by the broad SystemServices bindings.
+const OWNER_DRAW_STATIC: WINDOW_STYLE = WINDOW_STYLE(0x000d);
 
 /// The window of each entry of `Control::all`, in creation order.
 #[derive(Default)]
@@ -171,7 +173,10 @@ fn create_child(
             };
             (w!("BUTTON"), WINDOW_STYLE(button_style.cast_unsigned()))
         }
-        _ => (w!("STATIC"), WINDOW_STYLE::default()),
+        // These labels are fully painted by our subclass. SS_OWNERDRAW prevents
+        // STATIC's synchronous text redraw from falling back to system colors while
+        // the category command still owns the dialog state.
+        _ => (w!("STATIC"), OWNER_DRAW_STATIC),
     };
     let mut style = WS_CHILD | WS_VISIBLE | kind_style;
     if control.is_tab_stop() {
