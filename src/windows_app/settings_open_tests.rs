@@ -3,10 +3,13 @@
 use super::*;
 use crate::settings_io::SettingsStore;
 use crate::win32::{ComApartment, module_instance, wide};
+use alttabio::settings::Theme;
 use std::cell::Cell;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use windows::Win32::Foundation::{CloseHandle, E_FAIL, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Graphics::Gdi::GetUpdateRect;
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, DESKTOP_CONTROL_FLAGS, HDESK,
 };
@@ -15,10 +18,60 @@ use windows::Win32::System::Threading::{
     STARTF_USESHOWWINDOW, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, IsWindowVisible, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOWMINIMIZED,
-    WM_CLOSE, WS_EX_TOOLWINDOW, WS_POPUP,
+    CreateWindowExW, DestroyWindow, EnumChildWindows, IsWindowVisible, SHOW_WINDOW_CMD, SW_HIDE,
+    SW_SHOWMINIMIZED, WM_CLOSE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
-use windows::core::{Error, PCWSTR, PWSTR, Result};
+use windows::core::{BOOL, Error, PCWSTR, PWSTR, Result};
+
+#[derive(Default)]
+struct StartupPaint {
+    visible_children: usize,
+    pending_children: usize,
+}
+
+unsafe extern "system" fn inspect_startup_paint(window: HWND, data: LPARAM) -> BOOL {
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: EnumChildWindows borrows this fixture's writable StartupPaint for the call.
+        let paint = unsafe { &mut *(data.0 as *mut StartupPaint) };
+        // SAFETY: enumeration supplies a live descendant; both calls only query its state.
+        unsafe {
+            if IsWindowVisible(window).as_bool() {
+                paint.visible_children = paint.visible_children.saturating_add(1);
+                if GetUpdateRect(window, None, false).as_bool() {
+                    paint.pending_children = paint.pending_children.saturating_add(1);
+                }
+            }
+        }
+        BOOL(1)
+    }))
+    .unwrap_or(BOOL(0))
+}
+
+fn assert_startup_painted(window: HWND) {
+    let mut paint = StartupPaint::default();
+    unsafe {
+        // SAFETY: the fixture storage outlives synchronous enumeration. The callback
+        // only queries live children and updates bounded counters without panicking.
+        let _enumerated = EnumChildWindows(
+            Some(window),
+            Some(inspect_startup_paint),
+            LPARAM(std::ptr::from_mut(&mut paint) as isize),
+        );
+    }
+    assert!(
+        paint.visible_children > 0,
+        "Settings has no visible controls"
+    );
+    assert_eq!(
+        paint.pending_children, 0,
+        "Settings appeared with unpainted child controls before entering its message loop"
+    );
+    // SAFETY: the dialog remains live and querying its update region does not paint it.
+    assert!(
+        !unsafe { GetUpdateRect(window, None, false) }.as_bool(),
+        "Settings appeared with an unpainted background"
+    );
+}
 
 struct Desktop(HDESK);
 
@@ -62,21 +115,26 @@ fn first_settings_request_ignores_startup_show_state() -> Result<()> {
         )
     }?);
     for show_state in [SW_SHOW, SW_HIDE, SW_SHOWMINIMIZED] {
-        run_fixture(&mut desktop_name, show_state)?;
+        for fixture in [
+            "first_settings_open_fixture",
+            "first_dark_settings_open_fixture",
+        ] {
+            run_fixture(&mut desktop_name, show_state, fixture)?;
+        }
     }
     drop(desktop);
     Ok(())
 }
 
-fn run_fixture(desktop_name: &mut [u16], show_state: SHOW_WINDOW_CMD) -> Result<()> {
+fn run_fixture(desktop_name: &mut [u16], show_state: SHOW_WINDOW_CMD, fixture: &str) -> Result<()> {
     let executable =
         std::env::current_exe().map_err(|error| Error::new(E_FAIL, error.to_string()))?;
     let application: Vec<u16> = executable.as_os_str().encode_wide().chain([0]).collect();
     let mut command = std::ffi::OsString::from("\"");
     command.push(executable);
-    command.push(
-        "\" --ignored --exact windows_app::dialogs::first_open_tests::first_settings_open_fixture --quiet",
-    );
+    command.push(format!(
+        "\" --ignored --exact windows_app::dialogs::first_open_tests::{fixture} --quiet",
+    ));
     let mut command: Vec<u16> = command.encode_wide().chain([0]).collect();
     let startup = STARTUPINFOW {
         cb: u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or_default(),
@@ -126,7 +184,7 @@ fn run_fixture(desktop_name: &mut [u16], show_state: SHOW_WINDOW_CMD) -> Result<
     }
     assert_eq!(
         exit_code, 0,
-        "the first Settings request must show a non-minimized window with startup state {show_state:?}"
+        "{fixture} must show a fully painted, non-minimized Settings window with startup state {show_state:?}"
     );
     Ok(())
 }
@@ -134,8 +192,18 @@ fn run_fixture(desktop_name: &mut [u16], show_state: SHOW_WINDOW_CMD) -> Result<
 #[test]
 #[ignore = "run by the parent test in a fresh process on a private desktop"]
 fn first_settings_open_fixture() -> Result<()> {
+    check_first_settings_open(Theme::Light)
+}
+
+#[test]
+#[ignore = "run by the parent test in a fresh process on a private desktop"]
+fn first_dark_settings_open_fixture() -> Result<()> {
+    check_first_settings_open(Theme::Dark)
+}
+
+fn check_first_settings_open(theme: Theme) -> Result<()> {
     let _apartment = ComApartment::initialize()?;
-    let (store, settings) = SettingsStore::load_from(
+    let (store, mut settings) = SettingsStore::load_from(
         std::env::temp_dir().join(format!(
             "alttabio-first-settings-test-{}.ini",
             std::process::id()
@@ -143,6 +211,7 @@ fn first_settings_open_fixture() -> Result<()> {
         &Settings::default(),
     )
     .map_err(|error| Error::new(E_FAIL, error))?;
+    settings.appearance.theme = theme;
     let host = Box::new(AppHost::new(App::new(false, false, settings, store)?));
     let instance = module_instance()?;
     super::super::register_window_class(instance)?;
@@ -174,6 +243,7 @@ fn first_settings_open_fixture() -> Result<()> {
             visible.set(IsWindowVisible(window).as_bool());
             minimized.set(IsIconic(window).as_bool());
         }
+        assert_startup_painted(window);
         host.settings_window.set(Some(window));
         for _ in 0..2 {
             host.show_settings();

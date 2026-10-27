@@ -37,6 +37,7 @@ use theme::ThemePalette;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, COLOR_WINDOWTEXT, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, InvalidateRect,
+    RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -46,8 +47,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MINMAXINFO, PostMessageW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
     WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
     WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_PRINTCLIENT,
-    WM_SIZE, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
+    WM_SIZE, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 use windows::core::Result;
 
@@ -67,7 +69,10 @@ const FRAME: DialogFrame = DialogFrame {
             | WS_MAXIMIZEBOX.0
             | WS_CLIPCHILDREN.0,
     ),
-    ex_style: WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0),
+    // Buffer the entire native control tree so its separate paint messages cannot flash.
+    ex_style: WINDOW_EX_STYLE(
+        WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0 | WS_EX_COMPOSITED.0,
+    ),
 };
 
 pub fn show(
@@ -114,6 +119,18 @@ pub fn show(
     if let Err(error) = dialog_host::focus(ok_button) {
         eprintln!("Could not focus the settings category: {error}");
     }
+    // Finish the buffered first frame, including focus and every descendant, before
+    // entering the message loop. No state borrow may span this synchronous repaint.
+    unsafe {
+        // SAFETY: the dialog owns this live window and all of its child controls.
+        RedrawWindow(
+            Some(window),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        )
+    }
+    .ok()?;
     on_open(window);
     let Some(state) = dialog.run(Keyboard::DialogNavigation)? else {
         return Ok(None);
