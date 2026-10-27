@@ -30,6 +30,7 @@ impl DialogState {
     pub(super) fn place_controls(&mut self) -> Result<()> {
         let layout = self.layout();
         self.pages.scroll_to(self.pages.offset(), &layout);
+        self.refresh_paint_state();
         self.controls.apply_layout(&layout, &self.pages)?;
         self.update_scrollbar();
         self.redraw();
@@ -59,6 +60,7 @@ impl DialogState {
     pub(super) fn scroll_to(&mut self, offset: i32) -> Result<()> {
         let layout = self.layout();
         self.pages.scroll_to(offset, &layout);
+        self.refresh_paint_state();
         self.controls.scroll_page(&layout, &self.pages)?;
         self.update_scrollbar();
         self.redraw();

@@ -203,7 +203,7 @@ fn apply_control_theme(control: ThemeTarget, dark: bool, dark_mode_api: Option<&
     }
 }
 
-fn combo_list_window(combo: HWND) -> Result<HWND> {
+pub(super) fn combo_list_window(combo: HWND) -> Result<HWND> {
     let mut info = NativeComboBoxInfo {
         size: u32::try_from(size_of::<NativeComboBoxInfo>()).unwrap_or(u32::MAX),
         item_rect: RECT::default(),

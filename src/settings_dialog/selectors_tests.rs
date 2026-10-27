@@ -2,7 +2,7 @@ use super::super::test_support::RenderTarget;
 use super::*;
 use crate::dialog_host::ModalDialog;
 use crate::native_drawing::measure_text;
-use crate::settings_dialog::{register_class, theme::ThemePalette};
+use crate::settings_dialog::{DialogState, register_class, theme::ThemePalette};
 use crate::win32;
 use alttabio::dialog_layout::{Point, Size};
 use alttabio::settings::Settings;
@@ -10,8 +10,75 @@ use alttabio::settings_form::SELECTOR_ITEM_HEIGHT;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_GETCOUNT, CB_GETITEMHEIGHT, CB_SETCURSEL, SendMessageW, WM_DRAWITEM, WM_PRINTCLIENT,
+    CB_GETCOUNT, CB_GETITEMHEIGHT, CB_SETCURSEL, CB_SHOWDROPDOWN, GetClientRect, SendMessageW,
+    WM_DRAWITEM, WM_PRINTCLIENT,
 };
+
+#[test]
+fn native_popup_rows_keep_their_theme_while_dialog_state_is_in_use() -> Result<()> {
+    let dialog = crate::settings_dialog::page_tests::dialog()?;
+    let host = dialog.host()?;
+    {
+        let mut state = host.state_mut()?;
+        let theme = state.controls.get(Control::Selector(Selector::Theme));
+        // SAFETY: index two is the live Theme selector's Dark choice.
+        unsafe {
+            SendMessageW(theme, CB_SETCURSEL, Some(WPARAM(2)), None);
+        }
+        state.apply_selected_theme();
+        state.select_category(alttabio::settings_form::Category::Appearance)?;
+    }
+    for selector in [Selector::Theme, Selector::Icon] {
+        let combo = host.state_mut()?.controls.get(Control::Selector(selector));
+        let list = crate::settings_dialog::theme::combo_list_window(combo)?;
+        let busy = host.state_mut()?;
+        // SAFETY: open only this test's popup, exercising its actual native draw callbacks
+        // while the dialog is busy, as it can be during theme and layout updates.
+        unsafe {
+            SendMessageW(combo, CB_SHOWDROPDOWN, Some(WPARAM(1)), None);
+        }
+        let mut rect = RECT::default();
+        // SAFETY: the hidden native popup is live and rect is writable.
+        unsafe {
+            GetClientRect(list, &raw mut rect)?;
+        }
+        let image = RenderTarget::new(rect.right.max(1), rect.bottom.max(1))?;
+        crate::native_drawing::fill_color(
+            image.dc,
+            rect,
+            crate::native_drawing::rgb(255, 255, 255),
+        )?;
+        // SAFETY: this owned DC stays live while the real popup requests owner-drawn rows.
+        unsafe {
+            SendMessageW(
+                list,
+                WM_PRINTCLIENT,
+                Some(WPARAM(image.dc.0 as usize)),
+                Some(LPARAM(0x04)),
+            );
+        }
+        // SAFETY: close the popup opened above before checking its captured pixels.
+        unsafe {
+            SendMessageW(combo, CB_SHOWDROPDOWN, Some(WPARAM(0)), None);
+        }
+        drop(busy);
+        let visible_rows = usize::try_from(image.height / SELECTOR_ITEM_HEIGHT)
+            .unwrap_or_default()
+            .min(selector.entries().len());
+        assert!(visible_rows > 0);
+        for row in 0..visible_rows {
+            let y = i32::try_from(row).unwrap_or_default() * SELECTOR_ITEM_HEIGHT + 16;
+            let offset = usize::try_from((image.width * y + 4) * 4).unwrap_or_default();
+            let pixel = &image.pixels()?[offset..offset + 3];
+            assert!(
+                pixel == [45, 45, 45] || pixel == [58, 58, 58],
+                "{selector:?} popup row {row} fell back to system colors: {pixel:?}"
+            );
+        }
+    }
+    dialog.destroy()?;
+    Ok(())
+}
 
 #[test]
 fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<()> {
@@ -26,7 +93,7 @@ fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<
     )?;
     let window = dialog.window();
     let host = dialog.host()?;
-    host.state_mut()?.create_controls(window, instance, host)?;
+    host.state_mut()?.create_controls(window, instance)?;
     for dpi in [96, 144, 192] {
         host.state_mut()?.update_dpi(dpi)?;
         let width = scale(alttabio::settings_form::SELECTOR_WIDTH, dpi);
@@ -34,6 +101,7 @@ fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<
         let image = RenderTarget::new(width * 3, height * 11)?;
         for dark in [false, true] {
             host.state_mut()?.palette = ThemePalette::new(dark);
+            host.state_mut()?.refresh_paint_state();
             let mut row = 0;
             for selector in [Selector::Theme, Selector::Icon] {
                 let combo = host.state_mut()?.controls.get(Control::Selector(selector));

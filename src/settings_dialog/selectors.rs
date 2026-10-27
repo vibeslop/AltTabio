@@ -1,6 +1,6 @@
 //! Shared preview content for the selected fields and the native drop-down lists.
 
-use super::DialogState;
+use super::paint_state::PaintState;
 use crate::app_icon;
 use crate::native_drawing::{
     DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE, DRAW_TEXT_VCENTER,
@@ -40,7 +40,7 @@ impl Previews {
     }
 }
 
-pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &DialogState) -> Option<LRESULT> {
+pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &PaintState) -> Option<LRESULT> {
     if item.CtlType != ODT_COMBOBOX {
         return None;
     }
@@ -103,7 +103,7 @@ pub(super) fn paint_entry(
     selector: Selector,
     index: usize,
     text_color: COLORREF,
-    state: &DialogState,
+    state: &PaintState,
 ) -> Result<()> {
     let entries = selector.entries();
     let Some(label) = entries.get(index) else {

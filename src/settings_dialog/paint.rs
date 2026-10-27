@@ -1,7 +1,7 @@
 //! Drawing of Settings pages, navigation, and native controls.
-use super::DialogState;
 use super::controls::{is_checked, is_control_enabled, selected_index};
 use super::drawing::{inset, polyline, rounded};
+use super::{DialogState, paint_state::PaintState};
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
     DRAW_TEXT_VCENTER, draw_text_with_font, fill_color, frame_color,
@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Error, Result};
 const BUTTON_STATE_PUSHED: usize = 0x0004;
-pub(super) fn paint_control_message(hwnd: HWND, state: &DialogState) -> LRESULT {
+pub(super) fn paint_control_message(hwnd: HWND, state: &PaintState) -> LRESULT {
     let mut paint = PAINTSTRUCT::default();
     // SAFETY: hwnd is live for WM_PAINT and paint is writable.
     let dc = unsafe { BeginPaint(hwnd, &raw mut paint) };
@@ -71,7 +71,7 @@ fn has_rule(control: Control) -> bool {
     })
 }
 
-fn rule(dc: HDC, rect: RECT, control: Control, state: &DialogState) -> Result<()> {
+fn rule(dc: HDC, rect: RECT, control: Control, state: &PaintState) -> Result<()> {
     if has_rule(control) {
         fill_color(
             dc,
@@ -85,7 +85,7 @@ fn rule(dc: HDC, rect: RECT, control: Control, state: &DialogState) -> Result<()
     Ok(())
 }
 
-pub(super) fn paint_settings_control(hwnd: HWND, dc: HDC, state: &DialogState) {
+pub(super) fn paint_settings_control(hwnd: HWND, dc: HDC, state: &PaintState) {
     let mut client = RECT::default();
     // SAFETY: hwnd is a live child and client is writable.
     if let Err(error) = unsafe { GetClientRect(hwnd, &raw mut client) } {
@@ -97,7 +97,7 @@ pub(super) fn paint_settings_control(hwnd: HWND, dc: HDC, state: &DialogState) {
     }
 }
 
-fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &DialogState) -> Result<()> {
+fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Result<()> {
     let Some(control) = state.controls.find(hwnd) else {
         return Ok(());
     };
@@ -219,7 +219,7 @@ fn text(
     )
 }
 
-fn focus(hwnd: HWND, dc: HDC, rect: RECT, state: &DialogState) -> Result<()> {
+fn focus(hwnd: HWND, dc: HDC, rect: RECT, state: &PaintState) -> Result<()> {
     // SAFETY: GetFocus is a query; WM_QUERYUISTATE has scalar payloads on a live child.
     let visible =
         unsafe { GetFocus() == hwnd && SendMessageW(hwnd, WM_QUERYUISTATE, None, None).0 & 1 == 0 };
@@ -239,7 +239,7 @@ fn paint_navigation(
     dc: HDC,
     client: RECT,
     category: Category,
-    state: &DialogState,
+    state: &PaintState,
 ) -> Result<()> {
     let selected = state.pages.category == category;
     let surface = if selected {
@@ -298,7 +298,7 @@ fn paint_switch(
     dc: HDC,
     client: RECT,
     option: SettingOption,
-    state: &DialogState,
+    state: &PaintState,
 ) -> Result<()> {
     rule(dc, client, Control::Checkbox(option), state)?;
     let fonts = state
@@ -380,7 +380,7 @@ fn paint_push_button(
     dc: HDC,
     client: RECT,
     button: DialogButton,
-    state: &DialogState,
+    state: &PaintState,
 ) -> Result<()> {
     let enabled = is_control_enabled(hwnd);
     // SAFETY: hwnd is a live BUTTON and BM_GETSTATE has no pointer payload.
@@ -434,7 +434,7 @@ fn paint_push_button(
     focus(hwnd, dc, client, state)
 }
 
-fn paint_combo_box(dc: HDC, client: RECT, selector: Selector, state: &DialogState) -> Result<()> {
+fn paint_combo_box(dc: HDC, client: RECT, selector: Selector, state: &PaintState) -> Result<()> {
     rounded(
         dc,
         client,

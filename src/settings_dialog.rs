@@ -6,12 +6,13 @@ mod navigation;
 #[path = "settings_dialog/tests.rs"]
 mod page_tests;
 mod paint;
+mod paint_state;
 mod selectors;
 #[cfg(test)]
 mod test_support;
 mod theme;
 
-use crate::dialog_host::{self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog};
+use crate::dialog_host::{self, DialogFrame, DialogWindow, Keyboard, ModalDialog};
 use crate::native_drawing::{OwnedBrush, OwnedFont, system_color};
 use crate::win32::{self, high_word, low_word};
 use crate::{
@@ -29,6 +30,7 @@ use alttabio::theme::ResolvedTheme;
 use controls::{DialogControls, is_checked, selected_index};
 use std::cell::Cell;
 use std::ffi::c_void;
+use std::rc::Rc;
 use theme::ThemePalette;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -98,8 +100,8 @@ pub fn show(
     )?;
     let window = dialog.window();
     let host = dialog.host()?;
-    // The mutable borrow makes any synchronous callback re-entry during setup fail closed.
-    host.state_mut()?.create_controls(window, instance, host)?;
+    // Mutating callbacks remain guarded during setup; painting reads its own snapshot.
+    host.state_mut()?.create_controls(window, instance)?;
     dialog.show_in_front();
     let ok_button = host
         .state_mut()?
@@ -118,9 +120,10 @@ pub fn show(
 struct DialogState {
     hwnd: HWND,
     controls: DialogControls,
-    fonts: Option<DialogFonts>,
-    previews: Option<selectors::Previews>,
-    background: Option<OwnedBrush>,
+    fonts: Option<Rc<DialogFonts>>,
+    previews: Option<Rc<selectors::Previews>>,
+    background: Option<Rc<OwnedBrush>>,
+    paint: paint_state::PaintCache,
     background_color: COLORREF,
     text_color: COLORREF,
     palette: ThemePalette,
@@ -130,11 +133,10 @@ struct DialogState {
     dpi: u32,
     client: Size,
     pages: SettingsPages,
-    hovered: Cell<HWND>,
+    hovered: Rc<Cell<HWND>>,
     accepted: bool,
-    /// Failures of `BeginPaint` across every custom-painted control. Painting runs from the
-    /// control subclass, which only borrows the state shared.
-    begin_paint_failures: SharedFailureRun,
+    /// Shared across snapshots so repeated paint failures are logged only once.
+    begin_paint_failures: Rc<SharedFailureRun>,
 }
 
 impl DialogWindow for DialogState {
@@ -168,6 +170,7 @@ impl DialogState {
             fonts: None,
             previews: None,
             background: None,
+            paint: paint_state::PaintCache::default(),
             background_color: system_color(COLOR_WINDOW),
             text_color: system_color(COLOR_WINDOWTEXT),
             palette: ThemePalette::new(false),
@@ -177,25 +180,21 @@ impl DialogState {
             dpi,
             client: SettingsLayout::for_dpi(dpi).client,
             pages: SettingsPages::default(),
-            hovered: Cell::new(HWND::default()),
+            hovered: Rc::new(Cell::new(HWND::default())),
             accepted: false,
-            begin_paint_failures: SharedFailureRun::default(),
+            begin_paint_failures: Rc::new(SharedFailureRun::default()),
         }
     }
 
-    fn create_controls(
-        &mut self,
-        parent: HWND,
-        instance: HINSTANCE,
-        host: &DialogHost<Self>,
-    ) -> Result<()> {
+    fn create_controls(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
         let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
-        self.previews = Some(selectors::Previews::load(instance)?);
+        self.previews = Some(Rc::new(selectors::Previews::load(instance)?));
         self.controls =
             DialogControls::create(parent, instance, &layout, self.dpi, &fonts, &self.settings)?;
-        self.fonts = Some(fonts);
-        control_host::install_custom_control_painting(&self.controls, host)?;
+        self.fonts = Some(Rc::new(fonts));
+        self.refresh_paint_state();
+        control_host::install_custom_control_painting(&self.controls, &self.paint)?;
         self.sync_right_button_release_enabled();
         self.apply_selected_icon();
         self.apply_selected_theme();
@@ -208,7 +207,7 @@ impl DialogState {
     fn update_dpi(&mut self, dpi: u32) -> Result<()> {
         let fonts = DialogFonts::create(dpi)?;
         self.controls.apply_fonts(&fonts);
-        self.fonts = Some(fonts);
+        self.fonts = Some(Rc::new(fonts));
         self.pages.rescale(self.dpi, dpi);
         self.dpi = dpi;
         self.resize()
@@ -258,12 +257,13 @@ impl DialogState {
         let dark = resolve_current_theme(theme) == ResolvedTheme::Dark;
         let palette = ThemePalette::new(dark);
         match OwnedBrush::new(palette.background) {
-            Ok(brush) => self.background = Some(brush),
+            Ok(brush) => self.background = Some(Rc::new(brush)),
             Err(error) => eprintln!("Could not create the settings background brush: {error}"),
         }
         self.background_color = palette.background;
         self.text_color = palette.text;
         self.palette = palette;
+        self.refresh_paint_state();
         if let Some(api) = self.dark_mode_api.as_ref() {
             api.set_effective_theme(dark);
         }
@@ -277,6 +277,7 @@ impl DialogState {
     }
 
     fn redraw(&self) {
+        self.refresh_paint_state();
         for (_, child) in self.controls.iter() {
             // SAFETY: the child HWND is borrowed from this live dialog.
             if !unsafe { InvalidateRect(Some(child), None, false) }.as_bool() {
@@ -293,6 +294,7 @@ impl DialogState {
     }
 
     fn apply_selected_icon(&self) {
+        self.refresh_paint_state();
         if let Err(error) =
             app_icon::apply_to_window(self.hwnd, self.instance, self.selected_icon())
         {
@@ -436,7 +438,7 @@ fn handle_settings_message(
                 // callback. It is borrowed only until the handler returns.
                 (lparam.0 as *const DRAWITEMSTRUCT).as_ref()
             }?;
-            selectors::paint_list_item(item, state)
+            selectors::paint_list_item(item, &state.paint_state())
         }
         WM_DPICHANGED => {
             dialog_host::handle_dpi_changed(hwnd, wparam, lparam, FRAME.name, |dpi| {

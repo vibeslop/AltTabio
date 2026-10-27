@@ -1,9 +1,10 @@
 //! Input forwarding and lifetime of the Settings control subclasses.
 use super::controls::DialogControls;
 use super::paint::{paint_control_message, paint_settings_control};
-use super::{DialogState, WM_SETTINGS_FOCUS, WM_SETTINGS_NAVIGATE};
-use crate::dialog_host::DialogHost;
+use super::paint_state::{PaintCache, PaintCell, PaintState};
+use super::{WM_SETTINGS_FOCUS, WM_SETTINGS_NAVIGATE};
 use alttabio::settings_form::{Category, Control};
+use std::rc::Rc;
 use std::{
     ffi::c_void,
     mem::size_of,
@@ -33,22 +34,29 @@ unsafe extern "system" {
     fn RemoveWindowSubclass(hwnd: HWND, proc: Option<SubclassProc>, id: usize) -> BOOL;
 }
 
+/// Called once for newly-created children; each subclass owns one cache reference.
 pub(super) fn install_custom_control_painting(
     controls: &DialogControls,
-    host: &DialogHost<DialogState>,
+    cache: &PaintCache,
 ) -> Result<()> {
     for (_, hwnd) in controls.iter() {
-        // SAFETY: every child is owned by the dialog, whose stable host outlives its children.
+        let data = Rc::into_raw(Rc::clone(cache));
+        // SAFETY: each installed subclass owns one strong reference to the paint cache.
+        // WM_NCDESTROY releases it; failed installation releases it immediately.
         if !unsafe {
             SetWindowSubclass(
                 hwnd,
                 Some(settings_control_subclass_proc),
                 SETTINGS_CONTROL_SUBCLASS_ID,
-                std::ptr::from_ref(host) as usize,
+                data as usize,
             )
         }
         .as_bool()
         {
+            // SAFETY: installation failed, so the raw reference was never transferred.
+            unsafe {
+                drop(Rc::from_raw(data));
+            }
             return Err(Error::from_thread());
         }
     }
@@ -61,7 +69,7 @@ unsafe extern "system" fn settings_control_subclass_proc(
     wparam: WPARAM,
     lparam: LPARAM,
     _subclass_id: usize,
-    host_pointer: usize,
+    cache_pointer: usize,
 ) -> LRESULT {
     let handled = catch_unwind(AssertUnwindSafe(|| {
         if message == WM_NCDESTROY {
@@ -77,21 +85,26 @@ unsafe extern "system" fn settings_control_subclass_proc(
             {
                 eprintln!("Could not remove settings control painting during destruction");
             }
+            // SAFETY: this subclass owns the strong reference transferred at installation.
+            unsafe {
+                drop(Rc::from_raw(cache_pointer as *const PaintCell));
+            }
             return None;
         }
-        // SAFETY: installation stores the stable host pointer, live until all children are destroyed.
-        let host = unsafe { (host_pointer as *const DialogHost<DialogState>).as_ref() }?;
-        // Drop the state borrow before forwarding anything that can re-enter the parent.
-        let (root, control) = {
-            let state = host.state()?;
-            (state.hwnd, state.controls.find(hwnd))
-        };
+        // SAFETY: the installed subclass owns a cache reference until WM_NCDESTROY.
+        let cache = unsafe { (cache_pointer as *const PaintCell).as_ref() }?;
+        // Release the cache borrow before any native call. A nested command may replace
+        // the snapshot, while this callback safely retains its own resources.
+        let state = cache.try_borrow().ok()?.as_ref()?.clone();
+        let (root, control) = (state.hwnd, state.controls.find(hwnd));
         if matches!(
             message,
-            WM_COMMAND | WM_DRAWITEM | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX
+            WM_DRAWITEM | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX
         ) {
-            // SAFETY: the viewport forwards unchanged synchronous child notifications. Pointer
-            // payloads, including DRAWITEMSTRUCT, stay live until SendMessageW returns.
+            return paint_notification(message, wparam, lparam, &state);
+        }
+        if message == WM_COMMAND {
+            // SAFETY: forward this synchronous notification with unchanged scalar payloads.
             return Some(unsafe { SendMessageW(root, message, Some(wparam), Some(lparam)) });
         }
         if message == WM_VSCROLL || message == WM_MOUSEWHEEL {
@@ -122,7 +135,6 @@ unsafe extern "system" fn settings_control_subclass_proc(
         if message == WM_SETFOCUS {
             post(root, WM_SETTINGS_FOCUS, WPARAM(hwnd.0 as usize), LPARAM(0));
         }
-        let state = host.state()?;
         match message {
             WM_PAINT => Some(paint_control_message(hwnd, &state)),
             WM_PRINTCLIENT => {
@@ -166,6 +178,28 @@ unsafe extern "system" fn settings_control_subclass_proc(
     handled.unwrap_or_else(|| {
         // SAFETY: all unhandled messages retain their original payloads; no panic leaves the ABI.
         unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    })
+}
+
+fn paint_notification(
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    state: &PaintState,
+) -> Option<LRESULT> {
+    if message == WM_DRAWITEM {
+        // SAFETY: this synchronous notification supplies a live DRAWITEMSTRUCT.
+        let item =
+            unsafe { (lparam.0 as *const windows::Win32::UI::Controls::DRAWITEMSTRUCT).as_ref() }?;
+        return super::selectors::paint_list_item(item, state);
+    }
+    state.background.as_ref().map(|brush| {
+        super::theme::style_control_dc(
+            HDC(wparam.0 as *mut c_void),
+            state.palette.background,
+            state.palette.text,
+            brush.0,
+        )
     })
 }
 

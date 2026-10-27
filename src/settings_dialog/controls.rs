@@ -23,7 +23,7 @@ use windows::core::{Error, PCWSTR, Result, w};
 const OWNER_DRAW_STATIC: WINDOW_STYLE = WINDOW_STYLE(0x000d);
 
 /// The window of each entry of `Control::all`, in creation order.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct DialogControls(Vec<(Control, HWND)>);
 
 impl DialogControls {

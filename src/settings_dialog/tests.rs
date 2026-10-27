@@ -1,6 +1,7 @@
 use super::controls::is_control_enabled;
 use super::test_support::RenderTarget;
 use super::*;
+use crate::dialog_host::DialogHost;
 use alttabio::dialog_layout::{BASE_DPI, Point};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
@@ -24,7 +25,7 @@ pub(super) fn dialog() -> Result<ModalDialog<DialogState>> {
     dialog
         .host()?
         .state_mut()?
-        .create_controls(dialog.window(), instance, dialog.host()?)?;
+        .create_controls(dialog.window(), instance)?;
     Ok(dialog)
 }
 
