@@ -1,3 +1,4 @@
+use super::super::test_support::RenderTarget;
 use super::*;
 use crate::dialog_host::ModalDialog;
 use crate::native_drawing::measure_text;
@@ -6,121 +7,11 @@ use crate::win32;
 use alttabio::dialog_layout::{Point, Size};
 use alttabio::settings::Settings;
 use alttabio::settings_form::SELECTOR_ITEM_HEIGHT;
-use std::ffi::c_void;
-use std::mem::size_of;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, HBITMAP, HGDIOBJ, SRCCOPY, SelectObject,
-};
 use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_GETCOUNT, CB_GETITEMHEIGHT, CB_SETCURSEL, SendMessageW, WM_DRAWITEM, WM_PRINTCLIENT,
 };
-
-struct RenderTarget {
-    dc: HDC,
-    bitmap: HBITMAP,
-    bits: *mut c_void,
-    width: i32,
-    height: i32,
-}
-
-impl RenderTarget {
-    fn new(width: i32, height: i32) -> Result<Self> {
-        let mut image = Self {
-            // SAFETY: a private memory DC borrows no window and is uniquely owned by image.
-            dc: unsafe { CreateCompatibleDC(None) },
-            bitmap: HBITMAP::default(),
-            bits: std::ptr::null_mut(),
-            width,
-            height,
-        };
-        if image.dc.is_invalid() {
-            return Err(Error::from_thread());
-        }
-        let info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: u32::try_from(size_of::<BITMAPINFOHEADER>()).unwrap_or_default(),
-                biWidth: width,
-                biHeight: -height,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        // SAFETY: the sized header and bits output are live; positive dimensions bound the DIB.
-        image.bitmap = unsafe {
-            CreateDIBSection(
-                Some(image.dc),
-                &raw const info,
-                DIB_RGB_COLORS,
-                &raw mut image.bits,
-                None,
-                0,
-            )
-        }?;
-        // SAFETY: image uniquely owns both handles; its DC is deleted before its bitmap.
-        let previous = unsafe { SelectObject(image.dc, HGDIOBJ::from(image.bitmap)) };
-        if previous.is_invalid() {
-            return Err(Error::from_thread());
-        }
-        Ok(image)
-    }
-
-    fn pixels(&self) -> Result<&[u8]> {
-        // SAFETY: every drawing operation has finished and the memory DC is still owned.
-        if !unsafe { GdiFlush() }.as_bool() {
-            return Err(Error::from_thread());
-        }
-        let length = usize::try_from(self.width * self.height * 4).unwrap_or_default();
-        // SAFETY: the live 32-bit top-down DIB owns this bounded, flushed pixel buffer.
-        Ok(unsafe { std::slice::from_raw_parts(self.bits.cast(), length) })
-    }
-
-    fn save_for_visual_qa(&self, dpi: u32, dark: bool) -> Result<()> {
-        // Render artifacts require no visible window or desktop capture.
-        if let Some(folder) = std::env::var_os("ALTTABIO_SETTINGS_RENDER_DIR") {
-            let path = std::path::PathBuf::from(folder)
-                .join(format!("settings-choices-{dpi}-{dark}.bgra"));
-            std::fs::write(path, self.pixels()?)
-                .map_err(|error| Error::new(E_FAIL, error.to_string()))?;
-        }
-        Ok(())
-    }
-
-    fn copy_to(&self, target: &Self, x: i32, y: i32) -> Result<()> {
-        // SAFETY: both private DCs and their selected bitmaps stay live for this bounded copy.
-        unsafe {
-            BitBlt(
-                target.dc,
-                x,
-                y,
-                self.width,
-                self.height,
-                Some(self.dc),
-                0,
-                0,
-                SRCCOPY,
-            )
-        }
-    }
-}
-
-impl Drop for RenderTarget {
-    fn drop(&mut self) {
-        // SAFETY: no drawing operation remains; deleting the DC deselects its bitmap first.
-        if !self.dc.is_invalid() {
-            assert!(unsafe { DeleteDC(self.dc) }.as_bool());
-        }
-        // SAFETY: this test owns the bitmap, and its DC has already been deleted.
-        if !self.bitmap.is_invalid() {
-            assert!(unsafe { DeleteObject(HGDIOBJ::from(self.bitmap)) }.as_bool());
-        }
-    }
-}
 
 #[test]
 fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<()> {
@@ -138,7 +29,7 @@ fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<
     host.state_mut()?.create_controls(window, instance, host)?;
     for dpi in [96, 144, 192] {
         host.state_mut()?.update_dpi(dpi)?;
-        let width = scale(180, dpi);
+        let width = scale(alttabio::settings_form::SELECTOR_WIDTH, dpi);
         let height = scale(SELECTOR_ITEM_HEIGHT, dpi);
         let image = RenderTarget::new(width * 3, height * 11)?;
         for dark in [false, true] {

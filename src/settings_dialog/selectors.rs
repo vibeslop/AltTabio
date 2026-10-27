@@ -25,6 +25,12 @@ pub(super) struct Previews {
 }
 
 impl Previews {
+    pub(super) fn icon(&self, color: IconColor) -> HICON {
+        self.icons[IconColor::ALL
+            .iter()
+            .position(|candidate| *candidate == color)
+            .unwrap_or_default()]
+    }
     pub(super) fn load(instance: HINSTANCE) -> Result<Self> {
         let mut icons = [HICON::default(); IconColor::ALL.len()];
         for (slot, icon) in icons.iter_mut().zip(IconColor::ALL) {
@@ -45,8 +51,6 @@ pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &DialogState) -> Opt
         item.itemState.0 & ODS_SELECTED.0 != 0 && item.itemState.0 & ODS_COMBOBOXEDIT.0 == 0;
     let color = if item.itemState.0 & ODS_DISABLED.0 != 0 {
         state.palette.label_text(false)
-    } else if selected {
-        state.palette.accent_text
     } else {
         state.palette.text
     };
@@ -55,7 +59,7 @@ pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &DialogState) -> Opt
             item.hDC,
             item.rcItem,
             if selected {
-                state.palette.accent
+                state.palette.selected
             } else {
                 state.palette.control_surface
             },

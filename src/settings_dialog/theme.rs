@@ -8,11 +8,10 @@ use alttabio::settings_form::Control;
 use std::mem::size_of;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    COLOR_BTNFACE, COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
-    COLOR_WINDOW, COLOR_WINDOWTEXT, FillRect, HBRUSH, HDC, SetBkColor, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, HBRUSH, HDC, SetBkColor, SetBkMode,
+    SetTextColor, TRANSPARENT,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, SendMessageW, WM_THEMECHANGED};
+use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_THEMECHANGED};
 use windows::core::{Error, HRESULT, PCWSTR, Result, w};
 
 #[link(name = "uxtheme")]
@@ -51,6 +50,7 @@ struct ThemeTarget {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThemeTargetKind {
     Standard,
+    Viewport,
     ComboBox,
     ComboList,
 }
@@ -58,8 +58,12 @@ enum ThemeTargetKind {
 const fn native_theme_class(dark: bool, kind: ThemeTargetKind) -> NativeThemeClass {
     match kind {
         ThemeTargetKind::ComboBox => NativeThemeClass::Cfd,
-        ThemeTargetKind::ComboList if dark => NativeThemeClass::DarkModeExplorer,
-        ThemeTargetKind::Standard | ThemeTargetKind::ComboList => NativeThemeClass::Explorer,
+        ThemeTargetKind::ComboList | ThemeTargetKind::Viewport if dark => {
+            NativeThemeClass::DarkModeExplorer
+        }
+        ThemeTargetKind::Standard | ThemeTargetKind::ComboList | ThemeTargetKind::Viewport => {
+            NativeThemeClass::Explorer
+        }
     }
 }
 
@@ -77,13 +81,17 @@ struct NativeComboBoxInfo {
 #[derive(Clone, Copy)]
 pub(super) struct ThemePalette {
     pub(super) background: COLORREF,
+    pub(super) sidebar: COLORREF,
+    pub(super) secondary: COLORREF,
+    pub(super) selected: COLORREF,
+    pub(super) hover: COLORREF,
+    pub(super) rule: COLORREF,
     pub(super) text: COLORREF,
     disabled_text: COLORREF,
     pub(super) control_surface: COLORREF,
     pub(super) pressed_surface: COLORREF,
     pub(super) control_border: COLORREF,
     pub(super) accent: COLORREF,
-    pub(super) accent_text: COLORREF,
 }
 
 impl ThemePalette {
@@ -91,24 +99,32 @@ impl ThemePalette {
         if dark {
             Self {
                 background: dark::BACKGROUND,
+                sidebar: rgb(35, 35, 35),
+                secondary: rgb(166, 166, 166),
+                selected: rgb(58, 58, 58),
+                hover: rgb(46, 46, 46),
+                rule: rgb(45, 45, 45),
                 text: dark::TEXT,
                 disabled_text: rgb(145, 145, 145),
                 control_surface: dark::CONTROL_SURFACE,
                 pressed_surface: dark::PRESSED_SURFACE,
-                control_border: dark::CONTROL_BORDER,
+                control_border: rgb(70, 70, 70),
                 accent: system_color(COLOR_HIGHLIGHT),
-                accent_text: system_color(COLOR_HIGHLIGHTTEXT),
             }
         } else {
             Self {
-                background: system_color(COLOR_WINDOW),
-                text: system_color(COLOR_WINDOWTEXT),
+                background: rgb(250, 250, 250),
+                sidebar: rgb(243, 243, 243),
+                secondary: rgb(96, 96, 96),
+                selected: rgb(225, 225, 225),
+                hover: rgb(234, 234, 234),
+                rule: rgb(232, 232, 232),
+                text: rgb(26, 26, 26),
                 disabled_text: system_color(COLOR_GRAYTEXT),
-                control_surface: system_color(COLOR_BTNFACE),
+                control_surface: rgb(240, 240, 240),
                 pressed_surface: system_color(COLOR_BTNSHADOW),
-                control_border: system_color(COLOR_BTNSHADOW),
+                control_border: rgb(210, 210, 210),
                 accent: system_color(COLOR_HIGHLIGHT),
-                accent_text: system_color(COLOR_HIGHLIGHTTEXT),
             }
         }
     }
@@ -156,10 +172,10 @@ pub(super) fn apply_native_theme_hooks(
 fn theme_targets(controls: &DialogControls) -> impl Iterator<Item = ThemeTarget> + '_ {
     controls.iter().map(|(control, hwnd)| ThemeTarget {
         hwnd,
-        kind: if let Control::Selector(_) = control {
-            ThemeTargetKind::ComboBox
-        } else {
-            ThemeTargetKind::Standard
+        kind: match control {
+            Control::Selector(_) => ThemeTargetKind::ComboBox,
+            Control::Viewport => ThemeTargetKind::Viewport,
+            _ => ThemeTargetKind::Standard,
         },
     })
 }
@@ -205,29 +221,6 @@ fn combo_list_window(combo: HWND) -> Result<HWND> {
         Err(Error::from_thread())
     } else {
         Ok(info.list)
-    }
-}
-
-pub(super) fn paint_background(hwnd: HWND, dc: HDC, brush: HBRUSH) -> LRESULT {
-    let mut client = RECT::default();
-    let client_result = unsafe {
-        // SAFETY: hwnd and dc are the live handles supplied for WM_ERASEBKGND; client is writable.
-        GetClientRect(hwnd, &raw mut client)
-    };
-    if let Err(error) = client_result {
-        eprintln!("Could not read the settings client area for painting: {error}");
-        return LRESULT(0);
-    }
-    let filled = unsafe {
-        // SAFETY: dc is valid for this paint callback, client is initialized, and brush is owned by
-        // the dialog state for the complete synchronous call.
-        FillRect(dc, &raw const client, brush)
-    };
-    if filled == 0 {
-        eprintln!("Could not paint the settings background");
-        LRESULT(0)
-    } else {
-        LRESULT(1)
     }
 }
 
