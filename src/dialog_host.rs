@@ -17,9 +17,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, HICON, IDC_ARROW,
-    IsDialogMessageW, LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE, WM_NCDESTROY, WNDCLASSEXW,
+    IsDialogMessageW, IsIconic, IsWindowVisible, LoadCursorW, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowPos, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE,
+    WM_NCDESTROY, WNDCLASSEXW,
 };
 use windows::core::{Error, PCWSTR, Result};
 
@@ -211,9 +212,13 @@ impl<S: DialogWindow> ModalDialog<S> {
     pub(crate) fn show_in_front(&self) {
         let window = self.window();
         unsafe {
-            // SAFETY: window is the live dialog owned by this UI thread. The return value reports
-            // the previous visibility, not a failure.
+            // SAFETY: window is the live dialog owned by this UI thread. ShowWindow reports
+            // previous visibility rather than failure. Its first call can obey STARTUPINFO
+            // instead of SW_SHOW; once consumed, explicitly show and restore the dialog.
             let _was_visible = ShowWindow(window, SW_SHOW);
+            if !IsWindowVisible(window).as_bool() || IsIconic(window).as_bool() {
+                let _was_visible = ShowWindow(window, SW_SHOWNORMAL);
+            }
         }
         bring_to_front(window, S::FRAME.name);
     }

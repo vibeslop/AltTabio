@@ -11,6 +11,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsIconic, PostMessageW, SW_RESTORE, SW_SHOW, ShowWindow,
 };
 
+#[cfg(test)]
+#[path = "settings_open_tests.rs"]
+mod first_open_tests;
+
 impl AppHost {
     pub(super) fn show_settings(&self) {
         if let Some(window) = self.settings_window.get() {
