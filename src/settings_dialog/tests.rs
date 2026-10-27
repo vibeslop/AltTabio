@@ -29,7 +29,7 @@ pub(super) fn dialog() -> Result<ModalDialog<DialogState>> {
     Ok(dialog)
 }
 
-fn pump(window: HWND) {
+pub(super) fn pump(window: HWND) {
     let mut message = MSG::default();
     // SAFETY: consume only this hidden test dialog's posted messages on its owning thread.
     while unsafe { PeekMessageW(&raw mut message, Some(window), 0, 0, PM_REMOVE) }.as_bool() {

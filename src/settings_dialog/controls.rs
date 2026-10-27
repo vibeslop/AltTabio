@@ -246,14 +246,13 @@ fn fill_selector(hwnd: HWND, selector: Selector, settings: &Settings) -> Result<
             return Err(Error::from_hresult(E_FAIL));
         }
     }
+    select_index(hwnd, selector.index(settings))
+}
+
+pub(super) fn select_index(hwnd: HWND, index: usize) -> Result<()> {
     let result = unsafe {
-        // SAFETY: hwnd is a live combo box and the index refers to one of the inserted entries.
-        SendMessageW(
-            hwnd,
-            CB_SETCURSEL,
-            Some(WPARAM(selector.index(settings))),
-            Some(LPARAM(0)),
-        )
+        // SAFETY: hwnd is a live combo box; CB_SETCURSEL checks the supplied scalar index.
+        SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(index)), Some(LPARAM(0)))
     };
     if i32::try_from(result.0).unwrap_or(CB_ERR) == CB_ERR {
         Err(Error::from_hresult(E_FAIL))

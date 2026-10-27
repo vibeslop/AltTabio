@@ -97,13 +97,17 @@ unsafe extern "system" fn settings_control_subclass_proc(
         // the snapshot, while this callback safely retains its own resources.
         let state = cache.try_borrow().ok()?.as_ref()?.clone();
         let (root, control) = (state.hwnd, state.controls.find(hwnd));
-        if matches!(
-            message,
-            WM_DRAWITEM | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX
-        ) {
+        // Only the viewport forwards child notifications. Combos must first process
+        // messages from their own listboxes to commit and cancel selections correctly.
+        if control == Some(Control::Viewport)
+            && matches!(
+                message,
+                WM_DRAWITEM | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX
+            )
+        {
             return paint_notification(message, wparam, lparam, &state);
         }
-        if message == WM_COMMAND {
+        if control == Some(Control::Viewport) && message == WM_COMMAND {
             // SAFETY: forward this synchronous notification with unchanged scalar payloads.
             return Some(unsafe { SendMessageW(root, message, Some(wparam), Some(lparam)) });
         }

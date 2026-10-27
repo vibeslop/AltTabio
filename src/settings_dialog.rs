@@ -1,6 +1,8 @@
 mod control_host;
 mod controls;
 mod drawing;
+#[cfg(test)]
+mod dropdown_tests;
 mod navigation;
 #[cfg(test)]
 #[path = "settings_dialog/tests.rs"]
@@ -40,7 +42,8 @@ use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BN_CLICKED, CBN_SELCHANGE, MINMAXINFO, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
+    BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
+    MINMAXINFO, PostMessageW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
     WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
     WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_PRINTCLIENT,
     WM_SIZE, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT,
@@ -51,6 +54,7 @@ use windows::core::Result;
 pub(crate) const WINDOW_CLASS_NAME: &str = "AltTabioRustSettings";
 const WM_SETTINGS_FOCUS: u32 = WM_APP + 21;
 const WM_SETTINGS_NAVIGATE: u32 = WM_APP + 22;
+const WM_SETTINGS_SELECTOR_PREVIEW: u32 = WM_APP + 23;
 const FRAME: DialogFrame = DialogFrame {
     name: "settings",
     class: WINDOW_CLASS_NAME,
@@ -135,6 +139,8 @@ struct DialogState {
     pages: SettingsPages,
     hovered: Rc<Cell<HWND>>,
     accepted: bool,
+    pending_previews: u8,
+    dropdown_selection: [Option<usize>; 2],
     /// Shared across snapshots so repeated paint failures are logged only once.
     begin_paint_failures: Rc<SharedFailureRun>,
 }
@@ -182,6 +188,8 @@ impl DialogState {
             pages: SettingsPages::default(),
             hovered: Rc::new(Cell::new(HWND::default())),
             accepted: false,
+            pending_previews: 0,
+            dropdown_selection: [None; 2],
             begin_paint_failures: Rc::new(SharedFailureRun::default()),
         }
     }
@@ -330,6 +338,45 @@ impl DialogState {
     fn cancel(&mut self) {
         self.accepted = false;
     }
+
+    fn queue_selector_preview(&mut self, selector: Selector) {
+        let bit = selector_preview_bit(selector);
+        if self.pending_previews & bit != 0 {
+            return;
+        }
+        let id = Control::Selector(selector).id().unwrap_or_default();
+        // SAFETY: this bounded event carries only a control ID. The native combo must
+        // finish committing its selection before theme/icon changes can update it.
+        match unsafe {
+            PostMessageW(
+                Some(self.hwnd),
+                WM_SETTINGS_SELECTOR_PREVIEW,
+                WPARAM(id),
+                LPARAM(0),
+            )
+        } {
+            Ok(()) => self.pending_previews |= bit,
+            Err(error) => eprintln!("Could not queue the settings choice preview: {error}"),
+        }
+    }
+
+    fn apply_selector_preview(&mut self, selector: Selector) {
+        match selector {
+            Selector::Theme => self.apply_selected_theme(),
+            Selector::Icon => self.apply_selected_icon(),
+        }
+        self.sync_save_enabled();
+        self.redraw();
+        // Keep the bit set through native theme updates to coalesce their notifications.
+        self.pending_previews &= !selector_preview_bit(selector);
+    }
+}
+
+const fn selector_preview_bit(selector: Selector) -> u8 {
+    match selector {
+        Selector::Theme => 0b01,
+        Selector::Icon => 0b10,
+    }
 }
 
 struct DialogFonts {
@@ -400,6 +447,12 @@ fn handle_settings_message(
         WM_SETTINGS_NAVIGATE => {
             if let Some(category) = Category::ALL.get(wparam.0) {
                 report_layout(state.focus_category(*category));
+            }
+            Some(LRESULT(0))
+        }
+        WM_SETTINGS_SELECTOR_PREVIEW => {
+            if let Some(Control::Selector(selector)) = Control::with_id(wparam.0) {
+                state.apply_selector_preview(selector);
             }
             Some(LRESULT(0))
         }
@@ -490,11 +543,32 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
             state.cancel();
             request_dialog_close(hwnd);
         }
-        Control::Selector(Selector::Theme) if notification == CBN_SELCHANGE => {
-            state.apply_selected_theme();
+        Control::Selector(selector) if notification == CBN_DROPDOWN => {
+            state.dropdown_selection[selector as usize] =
+                selected_index(state.controls.get(Control::Selector(selector)));
+            return Some(LRESULT(0));
         }
-        Control::Selector(Selector::Icon) if notification == CBN_SELCHANGE => {
-            state.apply_selected_icon();
+        Control::Selector(selector) if notification == CBN_SELENDCANCEL => {
+            if let Some(index) = state.dropdown_selection[selector as usize].take()
+                && let Err(error) =
+                    controls::select_index(state.controls.get(Control::Selector(selector)), index)
+            {
+                eprintln!("Could not restore the canceled settings choice: {error}");
+            }
+            return Some(LRESULT(0));
+        }
+        Control::Selector(selector)
+            if notification == CBN_SELCHANGE || notification == CBN_SELENDOK =>
+        {
+            let combo = state.controls.get(Control::Selector(selector));
+            // SAFETY: this scalar query reads the live combo's popup state.
+            let open = unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0 != 0;
+            if notification == CBN_SELENDOK || !open {
+                state.dropdown_selection[selector as usize] = None;
+                state.queue_selector_preview(selector);
+            }
+            // Highlighting an open list must not re-theme or relayout its native windows.
+            return Some(LRESULT(0));
         }
         Control::Checkbox(SettingOption::RightButtonWheelSwitching)
             if notification == BN_CLICKED =>

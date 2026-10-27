@@ -110,7 +110,12 @@ impl DialogState {
             return Ok(());
         }
         let layout = self.layout();
+        let previous = self.pages.offset();
         self.pages.reveal(control.rect(&layout), &layout);
+        // Moving an already-visible native combo closes the popup it just opened.
+        if self.pages.offset() == previous {
+            return Ok(());
+        }
         self.scroll_to(self.pages.offset())
     }
 
