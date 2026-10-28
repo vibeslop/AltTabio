@@ -79,7 +79,7 @@ impl SettingsLayout {
             Control::Button(button) => {
                 let width = s(if button == DialogButton::Ok { 120 } else { 78 });
                 let right =
-                    self.client.width - s(if button == DialogButton::Ok { 20 } else { 149 });
+                    self.client.width - s(if button == DialogButton::Ok { 107 } else { 20 });
                 Rect::new(right - width, self.footer.y + s(12), width, s(34))
             }
             _ => control

@@ -125,8 +125,8 @@ fn layouts_keep_rows_clear_of_switches_and_footer_at_supported_sizes_and_dpis() 
                 }
                 assert_eq!(layout.viewport.bottom(), layout.footer.y);
                 assert!(
-                    Control::Button(DialogButton::Cancel).rect(&layout).right()
-                        < Control::Button(DialogButton::Ok).rect(&layout).x
+                    Control::Button(DialogButton::Ok).rect(&layout).right()
+                        < Control::Button(DialogButton::Cancel).rect(&layout).x
                 );
                 let mut previous_bottom = 0;
                 for &control in category.controls() {

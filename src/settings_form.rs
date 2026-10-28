@@ -233,7 +233,7 @@ pub enum DialogButton {
     Cancel,
 }
 impl DialogButton {
-    const ALL: [Self; 2] = [Self::Cancel, Self::Ok];
+    const ALL: [Self; 2] = [Self::Ok, Self::Cancel];
 }
 
 // Keep option identities stable while placing them in the new categories.

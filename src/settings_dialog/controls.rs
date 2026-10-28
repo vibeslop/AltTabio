@@ -183,7 +183,7 @@ fn create_child(
         style |= WS_TABSTOP;
     }
     if control == Control::Navigation(alttabio::settings_form::Category::General)
-        || control == Control::Button(DialogButton::Cancel)
+        || control == Control::Button(DialogButton::Ok)
     {
         style |= WS_GROUP;
     }
