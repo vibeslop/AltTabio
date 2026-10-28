@@ -23,6 +23,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, Error, Result};
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
+#[path = "dropdown_input.rs"]
+mod dropdown_input;
 #[cfg(test)]
 #[path = "repaint_tests.rs"]
 mod tests;
@@ -39,26 +41,34 @@ pub(super) fn install_custom_control_painting(
     controls: &DialogControls,
     cache: &PaintCache,
 ) -> Result<()> {
-    for (_, hwnd) in controls.iter() {
-        let data = Rc::into_raw(Rc::clone(cache));
-        // SAFETY: each installed subclass owns one strong reference to the paint cache.
-        // WM_NCDESTROY releases it; failed installation releases it immediately.
-        if !unsafe {
-            SetWindowSubclass(
-                hwnd,
-                Some(settings_control_subclass_proc),
-                SETTINGS_CONTROL_SUBCLASS_ID,
-                data as usize,
-            )
+    for (control, hwnd) in controls.iter() {
+        install_subclass(hwnd, cache)?;
+        if matches!(control, Control::Selector(_)) {
+            install_subclass(super::theme::combo_list_window(hwnd)?, cache)?;
         }
-        .as_bool()
-        {
-            // SAFETY: installation failed, so the raw reference was never transferred.
-            unsafe {
-                drop(Rc::from_raw(data));
-            }
-            return Err(Error::from_thread());
+    }
+    Ok(())
+}
+
+fn install_subclass(hwnd: HWND, cache: &PaintCache) -> Result<()> {
+    let data = Rc::into_raw(Rc::clone(cache));
+    // SAFETY: each installed subclass owns one strong reference to the paint cache.
+    // WM_NCDESTROY releases it; failed installation releases it immediately.
+    if !unsafe {
+        SetWindowSubclass(
+            hwnd,
+            Some(settings_control_subclass_proc),
+            SETTINGS_CONTROL_SUBCLASS_ID,
+            data as usize,
+        )
+    }
+    .as_bool()
+    {
+        // SAFETY: installation failed, so the raw reference was never transferred.
+        unsafe {
+            drop(Rc::from_raw(data));
         }
+        return Err(Error::from_thread());
     }
     Ok(())
 }
@@ -96,10 +106,15 @@ unsafe extern "system" fn settings_control_subclass_proc(
         // Release the cache borrow before any native call. A nested command may replace
         // the snapshot, while this callback safely retains its own resources.
         let state = cache.try_borrow().ok()?.as_ref()?.clone();
-        let (root, control) = (state.hwnd, state.controls.find(hwnd));
+        let root = state.hwnd;
+        // The combo's popup is not in the child-control table. Leave all its native
+        // painting and selection behavior intact, but preserve an outside press.
+        let Some(control) = state.controls.find(hwnd) else {
+            return dropdown_input::handle_message(hwnd, message, wparam, lparam, &state);
+        };
         // Only the viewport forwards child notifications. Combos must first process
         // messages from their own listboxes to commit and cancel selections correctly.
-        if control == Some(Control::Viewport)
+        if control == Control::Viewport
             && matches!(
                 message,
                 WM_DRAWITEM | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX
@@ -107,13 +122,13 @@ unsafe extern "system" fn settings_control_subclass_proc(
         {
             return paint_notification(message, wparam, lparam, &state);
         }
-        if control == Some(Control::Viewport) && message == WM_COMMAND {
+        if control == Control::Viewport && message == WM_COMMAND {
             // SAFETY: forward this synchronous notification with unchanged scalar payloads.
             return Some(unsafe { SendMessageW(root, message, Some(wparam), Some(lparam)) });
         }
         if message == WM_VSCROLL || message == WM_MOUSEWHEEL {
             // Keep the native popup's wheel handling while it is open.
-            let popup_open = matches!(control, Some(Control::Selector(_))) &&
+            let popup_open = matches!(control, Control::Selector(_)) &&
                 // SAFETY: this is a live COMBOBOX and the query has no pointer payload.
                 unsafe { SendMessageW(hwnd, CB_GETDROPPEDSTATE, None, None) }.0 != 0;
             if !popup_open {
@@ -121,7 +136,7 @@ unsafe extern "system" fn settings_control_subclass_proc(
                 return Some(LRESULT(0));
             }
         }
-        if let Some(Control::Navigation(category)) = control {
+        if let Control::Navigation(category) = control {
             if message == WM_GETDLGCODE {
                 // SAFETY: the original button processes the unmodified query.
                 let original = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
@@ -177,8 +192,7 @@ unsafe extern "system" fn settings_control_subclass_proc(
             _ => None,
         }
     }))
-    .ok()
-    .flatten();
+    .unwrap_or_default();
     handled.unwrap_or_else(|| {
         // SAFETY: all unhandled messages retain their original payloads; no panic leaves the ABI.
         unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }

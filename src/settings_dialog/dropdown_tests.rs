@@ -11,6 +11,166 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
 
+// Exercise capture routing instead of sending the press straight to the target.
+fn captured_click(window: HWND, combo: HWND, target: HWND) -> Result<()> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
+
+    // SAFETY: open this test's real native popup.
+    unsafe { SendMessageW(combo, CB_SHOWDROPDOWN, Some(WPARAM(1)), None) };
+    let list = theme::combo_list_window(combo)?;
+    let mut point = POINT { x: 8, y: 8 };
+    let mut rect = RECT::default();
+    // SAFETY: convert a point on the target to the capturing list's client space.
+    unsafe {
+        ClientToScreen(target, &raw mut point).ok()?;
+        ScreenToClient(list, &raw mut point).ok()?;
+        GetClientRect(list, &raw mut rect)?;
+    }
+    assert!(
+        point.x < rect.left
+            || point.x >= rect.right
+            || point.y < rect.top
+            || point.y >= rect.bottom,
+        "the target must be outside the popup, not a covered control"
+    );
+    let packed = LPARAM(isize::try_from((point.x & 0xffff) | (point.y << 16)).unwrap_or_default());
+    // SAFETY: the capturing list receives the press; after dismissal the release
+    // reaches the target. Queue it first to support native combo tracking loops.
+    unsafe {
+        PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), LPARAM((8 << 16) | 8))?;
+        SendMessageW(list, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(packed));
+    }
+    pump(window);
+    // SAFETY: the original list must have released capture and closed.
+    assert_eq!(
+        unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn captured_outside_click_activates_the_settings_control() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    host.state_mut()?.select_category(Category::Appearance)?;
+    for selector in [Selector::Theme, Selector::Icon] {
+        let (combo, checkbox) = {
+            let state = host.state_mut()?;
+            (
+                state.controls.get(Control::Selector(selector)),
+                state.controls.checkbox(SettingOption::ShowNumbers),
+            )
+        };
+        let original = is_checked(checkbox);
+        captured_click(dialog.window(), combo, checkbox)?;
+        assert_ne!(
+            is_checked(checkbox),
+            original,
+            "{selector:?} swallowed the click"
+        );
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn captured_outside_click_selects_a_category() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    for selector in [Selector::Theme, Selector::Icon] {
+        host.state_mut()?.select_category(Category::Appearance)?;
+        let (combo, navigation) = {
+            let state = host.state_mut()?;
+            (
+                state.controls.get(Control::Selector(selector)),
+                state.controls.get(Control::Navigation(Category::General)),
+            )
+        };
+        captured_click(dialog.window(), combo, navigation)?;
+        assert_eq!(host.state_mut()?.pages.category, Category::General);
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn captured_outside_click_opens_the_other_dropdown() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    host.state_mut()?.select_category(Category::Appearance)?;
+    let (icon, theme) = {
+        let state = host.state_mut()?;
+        (
+            state.controls.get(Control::Selector(Selector::Icon)),
+            state.controls.get(Control::Selector(Selector::Theme)),
+        )
+    };
+    captured_click(dialog.window(), icon, theme)?;
+    // SAFETY: the same click must leave the second popup open, then close it for cleanup.
+    unsafe {
+        assert_ne!(SendMessageW(theme, CB_GETDROPPEDSTATE, None, None).0, 0);
+        SendMessageW(theme, CB_SHOWDROPDOWN, Some(WPARAM(0)), None);
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn captured_click_on_the_open_combo_only_closes_it() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    host.state_mut()?.select_category(Category::Appearance)?;
+    for selector in [Selector::Theme, Selector::Icon] {
+        let combo = host.state_mut()?.controls.get(Control::Selector(selector));
+        captured_click(dialog.window(), combo, combo)?;
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn captured_click_on_disabled_save_only_closes_the_dropdown() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    host.state_mut()?.select_category(Category::Appearance)?;
+    let (combo, save) = {
+        let state = host.state_mut()?;
+        (
+            state.controls.get(Control::Selector(Selector::Theme)),
+            state.controls.get(Control::Button(DialogButton::Ok)),
+        )
+    };
+    assert!(!controls::is_control_enabled(save));
+    captured_click(dialog.window(), combo, save)?;
+    assert!(!host.state_mut()?.accepted);
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn captured_outside_click_activates_cancel() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    host.state_mut()?.select_category(Category::Appearance)?;
+    let (combo, cancel) = {
+        let state = host.state_mut()?;
+        (
+            state.controls.get(Control::Selector(Selector::Theme)),
+            state.controls.get(Control::Button(DialogButton::Cancel)),
+        )
+    };
+    captured_click(dialog.window(), combo, cancel)?;
+    // SAFETY: Cancel must close the actual native dialog from this one click.
+    assert!(
+        !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(dialog.window())) }
+            .as_bool()
+    );
+    dialog.destroy()?;
+    Ok(())
+}
+
 #[test]
 fn queued_focus_reveal_keeps_the_open_dropdown_open() -> Result<()> {
     let dialog = dialog()?;
