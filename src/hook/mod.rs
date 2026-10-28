@@ -17,7 +17,7 @@ use alttabio::input::{
     decode_virtual_key,
 };
 use alttabio::passthrough::PassthroughPolicy;
-use delivery::{dispatch_registered_switch, post_actions, route_registered_switch};
+use delivery::post_actions;
 use keyboard_state::{KeyboardState, translate_search_character};
 use recovery::{KeyboardRecoveryWatcher, publish_recovery_flags, recover_keyboard_state};
 use replay::{is_own_replayed_input, replay_key_events};
@@ -37,12 +37,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
     KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WH_MOUSE_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_QUIT, WM_SYSKEYDOWN,
-    WM_SYSKEYUP,
+    WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::Error;
 
-pub use replay::send_shell_escape;
+pub use replay::{send_activation_alt, send_shell_escape};
 
 // Thread messages for the hook thread's own queue, kept together so a test can check that they
 // are distinct. The app window never receives them, so they may reuse numbers from `app_messages`.
@@ -52,11 +51,8 @@ const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
 const HOOK_ERROR_POST_ACTION: u8 = 2;
-const HOOK_ERROR_REGISTERED_SWITCH: u8 = 4;
 
 struct HookContext {
-    registered_switch: Option<crate::switch_hotkey::PendingSwitch>,
-    registered_tab_down: bool,
     target: HWND,
     state: HookState,
     settings: HookSettings,
@@ -77,7 +73,6 @@ impl HookContext {
         let recovering = self.flags.recovery_pending();
         let suspended = flags & INTERCEPTION_SUSPENDED != 0 || recovering;
         if generation != self.interception_generation || recovering != self.recovering {
-            self.registered_switch = None;
             self.state.set_interception_suspended(suspended);
             self.interception_generation = generation;
             self.recovering = recovering;
@@ -141,8 +136,6 @@ impl HookThread {
                 let target = HWND(target_value as *mut core::ffi::c_void);
                 if let Err(error) = run_hook_thread(
                     HookContext {
-                        registered_switch: None,
-                        registered_tab_down: false,
                         target,
                         target_thread_id,
                         settings,
@@ -312,11 +305,6 @@ fn run_hook_thread(
         if result.0 == 0 {
             break Ok(());
         }
-        dispatch_registered_switch(None);
-        if message.message == WM_HOTKEY && crate::switch_hotkey::owns_id(message.wParam.0) {
-            dispatch_registered_switch(Some(message.wParam.0));
-            continue;
-        }
         if recovery.handles(&message) {
             recover_keyboard_state(message.time);
             continue;
@@ -484,9 +472,6 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     if !replay_key_events(replayed_key_events, &mut outcome) {
         record_callback_error(HOOK_ERROR_REPLAY_INPUT);
     }
-    outcome =
-        process_with_context(|context| route_registered_switch(context, outcome, data, transition))
-            .unwrap_or(outcome);
     Some(outcome)
 }
 
@@ -551,7 +536,6 @@ fn finish_callback_with(
 
 fn reset_context() {
     let _outcome = process_with_context(|context| {
-        context.registered_switch = None;
         context.state.reset_gestures();
         HookOutcome::default()
     });
@@ -562,12 +546,6 @@ fn record_callback_error(error: u8) {
 }
 
 fn report_callback_errors() {
-    if let Some(error) = crate::switch_hotkey::take_registration_error() {
-        eprintln!("Could not register physical switch hotkey: {error}");
-    }
-    if let Some(error) = crate::switch_hotkey::take_cleanup_error() {
-        eprintln!("Could not unregister physical switch hotkey: {error}");
-    }
     let pending = process_with_context(|context| core::mem::take(&mut context.pending_errors))
         .unwrap_or_default();
     if pending & HOOK_ERROR_REPLAY_INPUT != 0 {
@@ -575,9 +553,6 @@ fn report_callback_errors() {
     }
     if pending & HOOK_ERROR_POST_ACTION != 0 {
         eprintln!("Could not post an input action from the input hook");
-    }
-    if pending & HOOK_ERROR_REGISTERED_SWITCH != 0 {
-        eprintln!("Could not route physical Tab through a registered switch hotkey");
     }
 }
 
@@ -598,8 +573,6 @@ fn key_pressed(virtual_key: u16) -> bool {
 #[cfg(test)]
 fn test_context() -> HookContext {
     HookContext {
-        registered_switch: None,
-        registered_tab_down: false,
         target: HWND::default(),
         state: HookState::default(),
         settings: HookSettings::default(),

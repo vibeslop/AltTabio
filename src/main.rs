@@ -39,8 +39,6 @@ mod single_instance;
 #[cfg(windows)]
 mod startup;
 #[cfg(windows)]
-mod switch_hotkey;
-#[cfg(windows)]
 mod task_icon;
 #[cfg(windows)]
 mod task_query;

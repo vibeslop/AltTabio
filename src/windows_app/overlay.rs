@@ -60,7 +60,11 @@ impl App {
         // SAFETY: the HWND is live and owned by this UI thread.
         unsafe {
             if !request_foreground(self.hwnd) {
-                eprintln!("Could not bring the overlay to the foreground");
+                match crate::hook::send_activation_alt() {
+                    Ok(()) if request_foreground(self.hwnd) => {}
+                    Ok(()) => eprintln!("Could not bring the overlay to the foreground"),
+                    Err(error) => eprintln!("Could not retry overlay activation: {error}"),
+                }
             }
             if let Err(error) = SetFocus(Some(self.hwnd)) {
                 eprintln!("Could not focus the overlay: {error}");

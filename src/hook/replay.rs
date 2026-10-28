@@ -4,7 +4,8 @@ use super::key_pressed;
 use alttabio::input::{HookOutcome, Key, KeyTransition, ReplayedKeyEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RSHIFT,
+    VK_RWIN,
 };
 
 pub(super) const REPLAYED_INPUT_MARKER: usize = 0x0A17_AB10;
@@ -54,6 +55,64 @@ pub fn send_shell_escape() -> Result<(), String> {
             SendInput(inputs, input_size)
         },
     )
+}
+
+/// Retries activation only for a user-requested switch whose physical Alt was suppressed.
+/// This runs on the UI thread, never inside a native input callback.
+pub fn send_activation_alt() -> Result<(), String> {
+    send_activation_alt_with(
+        |key| key_pressed(key.0),
+        |inputs, input_size| unsafe {
+            // SAFETY: the helper supplies initialized keyboard INPUT records; SendInput copies
+            // them synchronously and retains no borrowed storage.
+            SendInput(inputs, input_size)
+        },
+    )
+}
+
+fn send_activation_alt_with(
+    mut is_down: impl FnMut(VIRTUAL_KEY) -> bool,
+    mut sender: impl FnMut(&[INPUT], i32) -> u32,
+) -> Result<(), String> {
+    // The switcher owns the suppressed Alt gesture. Leave forwarded Alt/Ctrl/Win alone.
+    if [VK_MENU, VK_CONTROL, VK_LWIN, VK_RWIN]
+        .into_iter()
+        .any(&mut is_down)
+    {
+        return Err("Cannot retry activation while a system modifier is forwarded".to_owned());
+    }
+    let left_shift = is_down(VK_LSHIFT);
+    let right_shift = is_down(VK_RSHIFT);
+    // SendInput serializes this entire batch. Restore both Shift keys after the Alt tap so
+    // reverse switching cannot synthesize the system's Alt+Shift keyboard-layout shortcut.
+    let events = [
+        left_shift.then_some(ReplayedKeyEvent::released(Key::LeftShift)),
+        right_shift.then_some(ReplayedKeyEvent::released(Key::RightShift)),
+        Some(ReplayedKeyEvent::pressed(Key::LeftAlt)),
+        Some(ReplayedKeyEvent::released(Key::LeftAlt)),
+        left_shift.then_some(ReplayedKeyEvent::pressed(Key::LeftShift)),
+        right_shift.then_some(ReplayedKeyEvent::pressed(Key::RightShift)),
+    ];
+    let mut inserted = 0;
+    if replay_key_events_with(events, &mut HookOutcome::default(), |inputs, size| {
+        let sent = sender(inputs, size);
+        inserted += sent;
+        sent
+    }) {
+        Ok(())
+    } else {
+        if inserted != 0 {
+            let restore = [
+                Some(ReplayedKeyEvent::released(Key::LeftAlt)),
+                left_shift.then_some(ReplayedKeyEvent::pressed(Key::LeftShift)),
+                right_shift.then_some(ReplayedKeyEvent::pressed(Key::RightShift)),
+            ];
+            if !replay_key_events_with(restore, &mut HookOutcome::default(), sender) {
+                return Err("Could not restore modifiers after failed activation input".to_owned());
+            }
+        }
+        Err("Could not send the activation Alt key".to_owned())
+    }
 }
 
 fn send_shell_escape_with(
@@ -142,6 +201,85 @@ mod tests {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LMENU, VK_RMENU};
     use windows::Win32::UI::WindowsAndMessaging::{KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP};
+
+    #[test]
+    fn activation_alt_preserves_forwarded_modifiers_and_reverse_switching() {
+        for held in [VK_MENU, VK_CONTROL, VK_LWIN, VK_RWIN] {
+            assert!(
+                send_activation_alt_with(
+                    |key| key == held,
+                    |_, _| panic!("a forwarded modifier must not be changed"),
+                )
+                .is_err()
+            );
+        }
+        for shifts in [[false, false], [true, false], [false, true], [true, true]] {
+            let mut held = shifts;
+            let mut alt = false;
+            assert!(
+                send_activation_alt_with(
+                    |key| (key == VK_LSHIFT && shifts[0]) || (key == VK_RSHIFT && shifts[1]),
+                    |inputs, _| {
+                        for input in inputs {
+                            // SAFETY: the adapter initializes each record's keyboard union member.
+                            let keyboard = unsafe { input.Anonymous.ki };
+                            assert_eq!(keyboard.dwExtraInfo, REPLAYED_INPUT_MARKER);
+                            let down = !keyboard.dwFlags.contains(KEYEVENTF_KEYUP);
+                            match keyboard.wVk {
+                                VK_LSHIFT => held[0] = down,
+                                VK_RSHIFT => held[1] = down,
+                                VK_LMENU => alt = down,
+                                other => panic!("unexpected activation key: {other:?}"),
+                            }
+                            assert!(
+                                !alt || held == [false, false],
+                                "activation synthesized Alt+Shift"
+                            );
+                        }
+                        u32::try_from(inputs.len()).unwrap_or_default()
+                    },
+                )
+                .is_ok()
+            );
+            assert_eq!(held, shifts, "reverse switching changed held Shift keys");
+            assert!(!alt, "activation left Alt pressed");
+        }
+    }
+
+    #[test]
+    fn partial_activation_input_restores_alt_and_shift() {
+        let mut calls = 0;
+        let mut shift = true;
+        let mut alt = false;
+        assert!(
+            send_activation_alt_with(
+                |key| key == VK_LSHIFT,
+                |inputs, _| {
+                    calls += 1;
+                    let count = match calls {
+                        1 => 2,
+                        2 => 0,
+                        _ => inputs.len(),
+                    };
+                    for input in &inputs[..count] {
+                        // SAFETY: the helper only supplies initialized keyboard INPUT records.
+                        let keyboard = unsafe { input.Anonymous.ki };
+                        let down = !keyboard.dwFlags.contains(KEYEVENTF_KEYUP);
+                        match keyboard.wVk {
+                            VK_LSHIFT => shift = down,
+                            VK_LMENU => alt = down,
+                            other => panic!("unexpected recovery key: {other:?}"),
+                        }
+                    }
+                    u32::try_from(count).unwrap_or_default()
+                },
+            )
+            .is_err()
+        );
+        assert!(shift);
+        assert!(!alt);
+        assert_eq!(calls, 3, "partial input must attempt modifier restoration");
+    }
 
     #[test]
     fn shell_escape_clears_suppressed_alt_context_before_escape() {
