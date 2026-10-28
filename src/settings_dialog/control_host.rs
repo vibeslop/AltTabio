@@ -17,9 +17,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_GETDROPPEDSTATE, PostMessageW, SendMessageW, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ENABLE, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_VSCROLL,
+    CB_GETDROPPEDSTATE, PostMessageW, SendMessageW, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETDLGCODE,
+    WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT,
+    WM_SETFOCUS, WM_VSCROLL,
 };
 use windows::core::{BOOL, Error, Result};
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
@@ -36,11 +37,13 @@ unsafe extern "system" {
     fn RemoveWindowSubclass(hwnd: HWND, proc: Option<SubclassProc>, id: usize) -> BOOL;
 }
 
-/// Called once for newly-created children; each subclass owns one cache reference.
+/// Called once for the dialog and its children; each subclass owns one cache reference.
 pub(super) fn install_custom_control_painting(
+    root: HWND,
     controls: &DialogControls,
     cache: &PaintCache,
 ) -> Result<()> {
+    install_subclass(root, cache)?;
     for (control, hwnd) in controls.iter() {
         install_subclass(hwnd, cache)?;
         if matches!(control, Control::Selector(_)) {
@@ -83,21 +86,9 @@ unsafe extern "system" fn settings_control_subclass_proc(
 ) -> LRESULT {
     let handled = catch_unwind(AssertUnwindSafe(|| {
         if message == WM_NCDESTROY {
-            // SAFETY: this removes only the currently executing subclass before destruction.
-            if !unsafe {
-                RemoveWindowSubclass(
-                    hwnd,
-                    Some(settings_control_subclass_proc),
-                    SETTINGS_CONTROL_SUBCLASS_ID,
-                )
-            }
-            .as_bool()
-            {
-                eprintln!("Could not remove settings control painting during destruction");
-            }
-            // SAFETY: this subclass owns the strong reference transferred at installation.
+            // SAFETY: destruction consumes the cache reference owned by this subclass.
             unsafe {
-                drop(Rc::from_raw(cache_pointer as *const PaintCell));
+                detach_paint_cache(hwnd, cache_pointer);
             }
             return None;
         }
@@ -107,6 +98,9 @@ unsafe extern "system" fn settings_control_subclass_proc(
         // the snapshot, while this callback safely retains its own resources.
         let state = cache.try_borrow().ok()?.as_ref()?.clone();
         let root = state.hwnd;
+        if hwnd == root {
+            return paint_dialog_message(message, wparam, lparam, &state);
+        }
         // The combo's popup is not in the child-control table. Leave all its native
         // painting and selection behavior intact, but preserve an outside press.
         let Some(control) = state.controls.find(hwnd) else {
@@ -197,6 +191,49 @@ unsafe extern "system" fn settings_control_subclass_proc(
         // SAFETY: all unhandled messages retain their original payloads; no panic leaves the ABI.
         unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
     })
+}
+
+unsafe fn detach_paint_cache(hwnd: HWND, cache_pointer: usize) {
+    // SAFETY: this removes only the currently executing subclass before destruction.
+    if !unsafe {
+        RemoveWindowSubclass(
+            hwnd,
+            Some(settings_control_subclass_proc),
+            SETTINGS_CONTROL_SUBCLASS_ID,
+        )
+    }
+    .as_bool()
+    {
+        eprintln!("Could not remove settings control painting during destruction");
+    }
+    // SAFETY: the caller transfers the subclass's sole raw cache reference at WM_NCDESTROY.
+    unsafe {
+        drop(Rc::from_raw(cache_pointer as *const PaintCell));
+    }
+}
+
+fn paint_dialog_message(
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    state: &PaintState,
+) -> Option<LRESULT> {
+    match message {
+        WM_ERASEBKGND | WM_PRINTCLIENT => {
+            // Scrolling and combo resizing can repaint the parent synchronously while
+            // DialogHost holds mutable state. Use the same snapshot as child painting.
+            if let Err(error) =
+                super::paint::paint_window_background(HDC(wparam.0 as *mut c_void), state)
+            {
+                eprintln!("Could not paint the settings background: {error}");
+            }
+            Some(LRESULT(1))
+        }
+        WM_DRAWITEM | WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX => {
+            paint_notification(message, wparam, lparam, state)
+        }
+        _ => None,
+    }
 }
 
 fn paint_notification(

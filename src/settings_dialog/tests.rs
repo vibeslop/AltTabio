@@ -177,7 +177,7 @@ fn render_page(host: &DialogHost<DialogState>) -> Result<RenderTarget> {
     let state = host.state_mut()?;
     let layout = state.layout();
     let image = RenderTarget::new(layout.client.width, layout.client.height)?;
-    paint::paint_window_background(image.dc, &state)?;
+    paint::paint_window_background(image.dc, &state.paint_state())?;
     let viewport = state.controls.get(Control::Viewport);
     let category = state.pages.category;
     let offset = state.pages.offset();

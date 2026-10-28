@@ -1,12 +1,13 @@
-//! Capture native repainting while the real category command still owns dialog state.
+//! Capture nested native repainting while a category or scroll command owns dialog state.
 use super::*;
-use crate::settings_dialog::{page_tests::dialog, test_support::RenderTarget};
+use crate::dialog_host::ModalDialog;
+use crate::settings_dialog::{DialogState, page_tests::dialog, test_support::RenderTarget};
 use alttabio::settings_form::Selector;
 use std::cell::Cell;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CB_SETCURSEL, CB_SETITEMHEIGHT, GWL_STYLE, GetClientRect, GetWindowLongPtrW,
-    GetWindowTextW, WM_SETTEXT, WS_VISIBLE,
+    GetWindowTextW, WM_SETTEXT, WM_WINDOWPOSCHANGED, WS_VISIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{WM_KILLFOCUS, WM_SETFOCUS};
 
@@ -16,6 +17,8 @@ struct RepaintProbe {
     image: RenderTarget,
     captures: Cell<usize>,
     trigger: u32,
+    capture_window: HWND,
+    paint_message: u32,
 }
 
 impl RepaintProbe {
@@ -24,18 +27,30 @@ impl RepaintProbe {
     }
 
     fn install_trigger(hwnd: HWND, trigger: u32, surface: u8) -> Result<Box<Self>> {
+        Self::install_capture(hwnd, trigger, hwnd, WM_PRINTCLIENT, surface)
+    }
+
+    fn install_capture(
+        hwnd: HWND,
+        trigger: u32,
+        capture_window: HWND,
+        paint_message: u32,
+        surface: u8,
+    ) -> Result<Box<Self>> {
         let mut rect = RECT::default();
-        // SAFETY: hwnd is one of this test's live heading controls and rect is writable.
+        // SAFETY: capture_window belongs to this live test dialog and rect is writable.
         unsafe {
-            GetClientRect(hwnd, &raw mut rect)?;
+            GetClientRect(capture_window, &raw mut rect)?;
         }
         let probe = Box::new(Self {
             hwnd,
             image: RenderTarget::new(rect.right, rect.bottom)?,
             captures: Cell::new(0),
             trigger,
+            capture_window,
+            paint_message,
         });
-        // The visible header already has its dark background before the category changes.
+        // Seed the capture with the previous surface, or a sentinel for background probes.
         crate::native_drawing::fill_color(
             probe.image.dc,
             rect,
@@ -82,11 +97,11 @@ unsafe extern "system" fn repaint_probe(
         let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
         if message == probe.trigger {
             // SAFETY: this private DC remains live through the synchronous print. It forces
-            // native repaint re-entry at the same point as SetWindowText during category change.
+            // native repaint re-entry during the real text update or control move.
             unsafe {
                 SendMessageW(
-                    hwnd,
-                    WM_PRINTCLIENT,
+                    probe.capture_window,
+                    probe.paint_message,
                     Some(WPARAM(probe.image.dc.0 as usize)),
                     None,
                 );
@@ -96,6 +111,88 @@ unsafe extern "system" fn repaint_probe(
         result
     }))
     .unwrap_or(LRESULT(0))
+}
+
+#[test]
+fn scrolling_keeps_the_dialog_background_themed_during_dropdown_moves() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    for dpi in [96, 144, 192] {
+        host.state_mut()?.update_dpi(dpi)?;
+        for theme_index in [1, 2] {
+            {
+                let mut state = host.state_mut()?;
+                let combo = state.controls.get(Control::Selector(Selector::Theme));
+                // SAFETY: indices one and two are the live selector's Light and Dark choices.
+                unsafe {
+                    SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(theme_index)), None);
+                }
+                state.apply_selected_theme();
+                state.select_category(Category::Appearance)?;
+            }
+            for selector in [Selector::Theme, Selector::Icon] {
+                for message in [WM_ERASEBKGND, WM_PRINTCLIENT] {
+                    check_scrolling_background(&dialog, selector, message)?;
+                }
+            }
+        }
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+fn check_scrolling_background(
+    dialog: &ModalDialog<DialogState>,
+    selector: Selector,
+    message: u32,
+) -> Result<()> {
+    let host = dialog.host()?;
+    let combo = host.state_mut()?.controls.get(Control::Selector(selector));
+    let probe =
+        RepaintProbe::install_capture(combo, WM_WINDOWPOSCHANGED, dialog.window(), message, 0)?;
+    for delta in [-120_i16, 120, -120, 120] {
+        let previous = probe.captures.get();
+        crate::native_drawing::fill_color(
+            probe.image.dc,
+            RECT {
+                right: probe.image.width,
+                bottom: probe.image.height,
+                ..Default::default()
+            },
+            crate::native_drawing::rgb(0, 0, 0),
+        )?;
+        // SAFETY: the real wheel handler moves the dropdown while owning dialog state.
+        unsafe {
+            SendMessageW(
+                dialog.window(),
+                WM_MOUSEWHEEL,
+                Some(WPARAM(usize::from(delta.cast_unsigned()) << 16)),
+                None,
+            );
+        }
+        assert!(
+            probe.captures.get() > previous,
+            "the dropdown must move during scrolling"
+        );
+        let state = host.state_mut()?;
+        let layout = state.layout();
+        let palette = state.palette;
+        for (name, x, y, expected) in [
+            ("page", layout.viewport.x, 4, palette.background),
+            ("sidebar", 4, 4, palette.sidebar),
+            ("footer", 4, layout.footer.y + 4, palette.sidebar),
+        ] {
+            let offset = usize::try_from((y * probe.image.width + x) * 4).unwrap_or_default();
+            assert_eq!(
+                &probe.image.pixels()?[offset..offset + 3],
+                &expected.0.to_le_bytes()[..3],
+                "{name} background lost its theme during {selector:?} scrolling at {} DPI",
+                layout.dpi,
+            );
+        }
+    }
+    drop(probe);
+    Ok(())
 }
 
 #[test]

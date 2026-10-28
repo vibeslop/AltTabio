@@ -15,7 +15,7 @@ mod test_support;
 mod theme;
 
 use crate::dialog_host::{self, DialogFrame, DialogWindow, Keyboard, ModalDialog};
-use crate::native_drawing::{OwnedBrush, OwnedFont, system_color};
+use crate::native_drawing::{OwnedBrush, OwnedFont};
 use crate::win32::{self, high_word, low_word};
 use crate::{
     app_icon,
@@ -34,22 +34,19 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::rc::Rc;
 use theme::ThemePalette;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, COLOR_WINDOWTEXT, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, InvalidateRect,
-    RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+    COLOR_WINDOW, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT, InvalidateRect, RDW_ALLCHILDREN,
+    RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
 };
-use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
     MINMAXINFO, PostMessageW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_PRINTCLIENT,
-    WM_SIZE, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
-    WS_THICKFRAME,
+    WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_SIZE, WM_VSCROLL, WS_CAPTION,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+    WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::Result;
 
@@ -145,8 +142,6 @@ struct DialogState {
     previews: Option<Rc<selectors::Previews>>,
     background: Option<Rc<OwnedBrush>>,
     paint: paint_state::PaintCache,
-    background_color: COLORREF,
-    text_color: COLORREF,
     palette: ThemePalette,
     dark_mode_api: Option<DarkModeApi>,
     settings: Settings,
@@ -194,8 +189,6 @@ impl DialogState {
             previews: None,
             background: None,
             paint: paint_state::PaintCache::default(),
-            background_color: system_color(COLOR_WINDOW),
-            text_color: system_color(COLOR_WINDOWTEXT),
             palette: ThemePalette::new(false),
             dark_mode_api,
             settings,
@@ -219,7 +212,7 @@ impl DialogState {
             DialogControls::create(parent, instance, &layout, self.dpi, &fonts, &self.settings)?;
         self.fonts = Some(Rc::new(fonts));
         self.refresh_paint_state();
-        control_host::install_custom_control_painting(&self.controls, &self.paint)?;
+        control_host::install_custom_control_painting(parent, &self.controls, &self.paint)?;
         self.apply_selected_icon();
         self.apply_selected_theme();
         self.resize()?;
@@ -268,8 +261,6 @@ impl DialogState {
             Ok(brush) => self.background = Some(Rc::new(brush)),
             Err(error) => eprintln!("Could not create the settings background brush: {error}"),
         }
-        self.background_color = palette.background;
-        self.text_color = palette.text;
         self.palette = palette;
         self.refresh_paint_state();
         if let Some(api) = self.dark_mode_api.as_ref() {
@@ -485,36 +476,11 @@ fn handle_settings_message(
             }
             Some(LRESULT(0))
         }
-        WM_DRAWITEM => {
-            let item = unsafe {
-                // SAFETY: WM_DRAWITEM supplies a DRAWITEMSTRUCT valid for this synchronous
-                // callback. It is borrowed only until the handler returns.
-                (lparam.0 as *const DRAWITEMSTRUCT).as_ref()
-            }?;
-            selectors::paint_list_item(item, &state.paint_state())
-        }
         WM_DPICHANGED => {
             dialog_host::handle_dpi_changed(hwnd, wparam, lparam, FRAME.name, |dpi| {
                 state.update_dpi(dpi)
             });
             Some(LRESULT(0))
-        }
-        WM_ERASEBKGND | WM_PRINTCLIENT => {
-            if let Err(error) = paint::paint_window_background(HDC(wparam.0 as *mut c_void), state)
-            {
-                eprintln!("Could not paint the settings background: {error}");
-            }
-            Some(LRESULT(1))
-        }
-        WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX => {
-            state.background.as_ref().map(|brush| {
-                theme::style_control_dc(
-                    HDC(wparam.0 as *mut c_void),
-                    state.background_color,
-                    state.text_color,
-                    brush.0,
-                )
-            })
         }
         WM_CLOSE => {
             state.cancel();

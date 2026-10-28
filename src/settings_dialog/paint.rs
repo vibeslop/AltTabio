@@ -1,7 +1,7 @@
 //! Drawing of Settings pages, navigation, and native controls.
 use super::controls::{is_checked, is_control_enabled, selected_index};
 use super::drawing::{inset, polyline, rounded};
-use super::{DialogState, paint_state::PaintState};
+use super::paint_state::PaintState;
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
     DRAW_TEXT_VCENTER, draw_text_with_font, fill_color, frame_color,
@@ -35,7 +35,7 @@ pub(super) fn paint_control_message(hwnd: HWND, state: &PaintState) -> LRESULT {
     LRESULT(0)
 }
 
-pub(super) fn paint_window_background(dc: HDC, state: &DialogState) -> Result<()> {
+pub(super) fn paint_window_background(dc: HDC, state: &PaintState) -> Result<()> {
     let layout = state.layout();
     fill_color(
         dc,
