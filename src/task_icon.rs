@@ -157,6 +157,9 @@ fn shell_app_icon(app_id: &str) -> Result<Option<OwnedIcon>> {
 }
 
 fn window_icon(hwnd: HWND) -> Option<OwnedIcon> {
+    // Busy render/load threads cannot answer WM_GETICON promptly. Give each size 1 ms
+    // and stop at the first timeout. Responsive replies without an icon still allow the
+    // next size, even if scheduling delayed the previous reply.
     for size in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
         let mut icon = 0_usize;
         let sent = unsafe {
@@ -167,13 +170,15 @@ fn window_icon(hwnd: HWND) -> Option<OwnedIcon> {
                 WPARAM(size as usize),
                 LPARAM(0),
                 SMTO_BLOCK | SMTO_ABORTIFHUNG,
-                75,
+                1,
                 Some(&raw mut icon),
             )
         };
-        if sent.0 != 0
-            && let Some(copy) = OwnedIcon::copy_borrowed(icon)
-        {
+        if sent.0 == 0 {
+            // A timeout or vanished/inaccessible window cannot answer another size reliably.
+            break;
+        }
+        if let Some(copy) = OwnedIcon::copy_borrowed(icon) {
             return Some(copy);
         }
     }
@@ -188,6 +193,10 @@ fn window_icon(hwnd: HWND) -> Option<OwnedIcon> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "task_icon/latency_tests.rs"]
+mod latency_tests;
 
 #[cfg(test)]
 mod tests {
@@ -283,6 +292,30 @@ mod tests {
         assert!(
             unsafe { DrawIconEx(dc.0, 0, 0, snapshot, 32, 32, 0, None, DI_NORMAL) }.is_ok(),
             "the next Tab repaint must still draw the snapshot after the app destroys its icon"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn small_window_icon_is_tried_when_the_large_icon_is_absent() -> Result<()> {
+        let window = TestWindow::new()?;
+        // SAFETY: this stock icon is shared and stays valid for the hidden window's lifetime.
+        let stock = unsafe { LoadIconW(None, IDI_APPLICATION) }?;
+        // SAFETY: this thread owns the hidden window; WM_SETICON borrows the shared icon.
+        unsafe {
+            SendMessageW(
+                window.0,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(stock.0 as isize)),
+            );
+        }
+        let mut icons = TaskIcons::default();
+        assert_ne!(icons.resolve(window.0, ""), 0);
+        assert_eq!(icons.window_icons.len(), 1);
+        assert!(
+            icons.icons.is_empty(),
+            "the window icon must win over fallbacks"
         );
         Ok(())
     }
