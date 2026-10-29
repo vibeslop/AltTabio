@@ -77,6 +77,15 @@ fn create_switch_task(
     index: usize,
     icons: &mut TaskIcons,
 ) -> Option<SwitchTask> {
+    // Most top-level windows are hidden helpers. Reject them before reading titles,
+    // classes, ownership and DWM attributes for the switcher's synchronous snapshot.
+    let is_visible = unsafe {
+        // SAFETY: HWND is borrowed from EnumWindows; a vanished window is not visible.
+        IsWindowVisible(hwnd).as_bool()
+    };
+    if !is_visible {
+        return None;
+    }
     let title = window_title(hwnd);
     let class_name = window_class_name(hwnd);
     let mut process_id = 0;
@@ -105,10 +114,7 @@ fn create_switch_task(
     let eligibility = WindowEligibility {
         title: &title,
         class_name: &class_name,
-        is_visible: unsafe {
-            // SAFETY: HWND is supplied by EnumWindows.
-            IsWindowVisible(hwnd).as_bool()
-        },
+        is_visible,
         is_current_process: excludes_current_process_window(
             process_id,
             current_process_id,
