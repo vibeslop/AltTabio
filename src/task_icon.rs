@@ -1,5 +1,6 @@
 use crate::win32::wide;
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 use windows::Win32::Foundation::{HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::UI::Shell::PropertiesSystem::{
     IPropertyStore, PSGetPropertyKeyFromName, SHGetPropertyStoreForWindow,
@@ -16,12 +17,18 @@ use windows::core::{BSTR, Error, PCWSTR, Result, w};
 #[derive(Default)]
 /// Owns task icons for one task-list snapshot. Keep it alive until that list is replaced.
 pub struct TaskIcons {
+    identity: Rc<()>,
     window_icons: Vec<OwnedIcon>,
     icons: HashMap<String, Option<OwnedIcon>>,
     app_icons: HashMap<String, Option<OwnedIcon>>,
 }
 
 impl TaskIcons {
+    /// Keeping a weak identity prevents an expired snapshot's address from being reused by a cache.
+    pub(crate) fn identity(&self) -> Weak<()> {
+        Rc::downgrade(&self.identity)
+    }
+
     pub fn resolve(&mut self, hwnd: HWND, executable: &str) -> isize {
         if let Some(icon) = window_icon(hwnd) {
             let handle = icon.0.0 as isize;

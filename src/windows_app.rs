@@ -272,6 +272,13 @@ impl App {
     fn initialize(&mut self, hwnd: HWND, install_hooks: bool) -> std::result::Result<(), String> {
         self.hwnd = hwnd;
         self.recreate_preview();
+        if let Err(error) = display::position_on_cursor_monitor(hwnd) {
+            eprintln!("Could not position the hidden overlay: {error}");
+        }
+        if let Err(error) = self.renderer.prepare(hwnd) {
+            // Drawing retries device creation if the display was temporarily unavailable.
+            eprintln!("Could not prepare the overlay renderer: {error}");
+        }
         if install_hooks {
             let instance = module_instance().map_err(|error| {
                 format!("Could not resolve the executable module for the tray icon: {error}")

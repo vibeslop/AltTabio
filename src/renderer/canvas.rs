@@ -30,7 +30,8 @@ impl Canvas<'_> {
         switcher: &Switcher,
         preview_frame: Option<PreviewFrame>,
         utf16: &mut Vec<u16>,
-    ) -> Result<()> {
+        icons: &mut super::IconBitmaps,
+    ) -> Result<Option<super::IconPassFailure>> {
         let target = &self.resources.target;
         let size = unsafe {
             // SAFETY: the target is valid for this UI-thread paint operation.
@@ -83,11 +84,20 @@ impl Canvas<'_> {
             visible_range,
             switcher.visible_task_count(),
         ));
-        unsafe {
+        // Icons share the text/selection frame; no window-DC pass or full-frame GDI copy follows.
+        let icon_failure = icons.draw(target, switcher, self.options, size.height);
+        let presented = unsafe {
             // SAFETY: the target is valid on this UI thread, and this ends the BeginDraw above on
             // it; nothing between them returns early, so every BeginDraw gets its EndDraw.
             target.EndDraw(None, None)
+        };
+        if let Err(error) = presented {
+            if let Some(failure) = icon_failure {
+                eprintln!("{failure}");
+            }
+            return Err(error);
         }
+        Ok(icon_failure)
     }
 
     fn draw_scroll_indicators(&self, indicators: [Option<LogicalRect>; 2]) {

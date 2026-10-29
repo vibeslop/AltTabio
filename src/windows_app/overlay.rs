@@ -133,18 +133,18 @@ impl App {
         if let Err(error) = self.renderer.draw(
             self.hwnd,
             switcher,
+            &self.task_icons,
             self.preview.as_ref().and_then(DwmPreview::frame),
             render_options,
             self.close_button.visual_state(selected_target),
         ) {
             eprintln!("Could not render the overlay: {error}");
         }
-        // Direct2D draws through its own window target; only the GDI icons need the paint DC.
+        // The renderer presents the complete frame, including icons, through its own target.
+        // Only a successful BeginPaint needs a matching EndPaint.
         if begin_failed {
             return;
         }
-        self.renderer
-            .draw_icons(self.hwnd, dc, switcher, render_options);
         unsafe {
             // SAFETY: paint was filled by the successful BeginPaint above for this hwnd.
             // EndPaint is documented to always return nonzero, so there is no failure to handle.
