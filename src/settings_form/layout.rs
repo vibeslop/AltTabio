@@ -113,6 +113,12 @@ impl SettingsLayout {
                         *y += s(20);
                         s(50)
                     }
+                    Control::AboutCopyright => {
+                        *y += s(24);
+                        s(28)
+                    }
+                    Control::AboutLicense => s(28),
+                    Control::AboutRepository => s(34),
                     _ => s(57),
                 };
                 let row = Rect::new(self.content_x, *y, self.content_width, height);
@@ -129,6 +135,7 @@ impl SettingsLayout {
                     Control::Label(_) => {
                         Rect::new(row.x, row.y, row.width - s(SELECTOR_WIDTH + 20), row.height)
                     }
+                    Control::AboutRepository => Rect::new(row.x, row.y, s(140), row.height),
                     _ => row,
                 };
                 Some((control, rect))

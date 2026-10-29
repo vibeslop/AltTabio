@@ -205,7 +205,6 @@ struct App {
     settings: Settings,
     settings_store: SettingsStore,
     settings_dialog_open: bool,
-    about_dialog_open: bool,
     win_event_watcher: Option<WinEventWatcher>,
     listed_refresh_retry_timer_armed: bool,
     updates: update::Updates,
@@ -261,7 +260,6 @@ impl App {
             settings,
             settings_store,
             settings_dialog_open: false,
-            about_dialog_open: false,
             win_event_watcher: None,
             listed_refresh_retry_timer_armed: false,
             updates: update::Updates::default(),
@@ -347,13 +345,13 @@ impl App {
     const fn dialog_state(&self) -> DialogState {
         DialogState {
             settings_dialog: self.settings_dialog_open,
-            blocking_dialog: self.about_dialog_open || self.update_dialog_open,
+            blocking_dialog: self.update_dialog_open,
             context_menu: self.session.context_menu_open(),
         }
     }
 }
 
-fn show_error_for_window(owner: HWND, message: &str) {
+pub(crate) fn show_error_for_window(owner: HWND, message: &str) {
     show_error_box(Some(owner), message);
 }
 

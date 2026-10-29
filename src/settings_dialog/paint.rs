@@ -135,7 +135,9 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
         Control::Navigation(category) => paint_navigation(hwnd, dc, client, category, state),
         Control::Checkbox(option) => paint_switch(hwnd, dc, client, option, state),
         Control::Selector(selector) => paint_combo_box(dc, client, selector, state),
-        Control::Button(button) => paint_push_button(hwnd, dc, client, button, state),
+        Control::Button(_) | Control::AboutRepository => {
+            paint_push_button(hwnd, dc, client, control, state)
+        }
         Control::AboutIdentity => {
             if let Some(previews) = state.previews.as_ref() {
                 // SAFETY: the shared executable icon and memory/window DC stay live during painting.
@@ -379,7 +381,7 @@ fn paint_push_button(
     hwnd: HWND,
     dc: HDC,
     client: RECT,
-    button: DialogButton,
+    control: Control,
     state: &PaintState,
 ) -> Result<()> {
     let enabled = is_control_enabled(hwnd);
@@ -389,7 +391,7 @@ fn paint_push_button(
         .cast_unsigned()
         & BUTTON_STATE_PUSHED
         != 0;
-    let save = button == DialogButton::Ok;
+    let save = control == Control::Button(DialogButton::Ok);
     let background = if save && enabled {
         state.palette.text
     } else if pressed {
@@ -421,7 +423,7 @@ fn paint_push_button(
         .ok_or_else(|| Error::from_hresult(E_FAIL))?;
     draw_text_with_font(
         dc,
-        Control::Button(button).text(),
+        control.text(),
         client,
         if save && enabled {
             state.palette.background

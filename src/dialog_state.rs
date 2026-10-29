@@ -1,6 +1,6 @@
 //! Which open dialogs and menus block the switcher.
 
-/// Settings stays independent; About, update prompts, and context menus own switcher input.
+/// Settings stays independent; update prompts and context menus own switcher input.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DialogState {
     pub settings_dialog: bool,

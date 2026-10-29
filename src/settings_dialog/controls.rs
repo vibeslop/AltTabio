@@ -165,6 +165,7 @@ fn create_child(
                 ),
         ),
         Control::Checkbox(_) => (w!("BUTTON"), WINDOW_STYLE(BS_AUTOCHECKBOX as u32)),
+        Control::AboutRepository => (w!("BUTTON"), WINDOW_STYLE(BS_PUSHBUTTON.cast_unsigned())),
         Control::Button(button) => {
             let button_style = if button == DialogButton::Ok {
                 BS_DEFPUSHBUTTON

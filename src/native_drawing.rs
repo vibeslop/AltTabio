@@ -198,6 +198,7 @@ impl Drop for TextStyle {
 pub(crate) struct OwnedFont(pub(crate) HFONT);
 
 impl OwnedFont {
+    #[cfg(test)]
     pub(crate) fn new(dpi: u32, points: u32, weight: i32, underline: bool) -> Result<Self> {
         let point_height = i32::try_from((u64::from(points) * u64::from(dpi) + 36) / 72)
             .unwrap_or(i32::MAX)

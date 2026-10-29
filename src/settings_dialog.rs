@@ -14,7 +14,7 @@ mod selectors;
 mod test_support;
 mod theme;
 
-use crate::dialog_host::{self, DialogFrame, DialogWindow, Keyboard, ModalDialog};
+use crate::dialog_host::{self, DialogFrame, DialogWindow, ModalDialog};
 use crate::native_drawing::{OwnedBrush, OwnedFont};
 use crate::win32::{self, high_word, low_word};
 use crate::{
@@ -26,7 +26,7 @@ use alttabio::failure_run::SharedFailureRun;
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
     Category, Choices, Control, DialogButton, ICON_CHOICES, MIN_CLIENT_HEIGHT, MIN_CLIENT_WIDTH,
-    Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
+    REPOSITORY_URL, Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
 };
 use alttabio::theme::ResolvedTheme;
 use controls::{DialogControls, is_checked, selected_index};
@@ -41,19 +41,21 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
-    MINMAXINFO, PostMessageW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_SIZE, WM_VSCROLL, WS_CAPTION,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
-    WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
+    MINMAXINFO, PostMessageW, SW_SHOWNORMAL, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_SIZE, WM_VSCROLL,
+    WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
 };
-use windows::core::Result;
+use windows::core::{PCWSTR, Result, w};
 
 pub(crate) const WINDOW_CLASS_NAME: &str = "AltTabioRustSettings";
 const WM_SETTINGS_FOCUS: u32 = WM_APP + 21;
 const WM_SETTINGS_NAVIGATE: u32 = WM_APP + 22;
 const WM_SETTINGS_SELECTOR_PREVIEW: u32 = WM_APP + 23;
+const WM_SETTINGS_OPEN_REPOSITORY: u32 = WM_APP + 24;
 const FRAME: DialogFrame = DialogFrame {
     name: "settings",
     class: WINDOW_CLASS_NAME,
@@ -75,6 +77,7 @@ const FRAME: DialogFrame = DialogFrame {
 pub fn show(
     owner: HWND,
     settings: &Settings,
+    category: Category,
     on_open: impl FnOnce(HWND),
 ) -> Result<Option<Settings>> {
     let instance = win32::module_instance()?;
@@ -108,11 +111,12 @@ pub fn show(
     let host = dialog.host()?;
     // Mutating callbacks remain guarded during setup; painting reads its own snapshot.
     host.state_mut()?.create_controls(window, instance)?;
+    host.state_mut()?.select_category(category)?;
     dialog.show_in_front();
     let ok_button = host
         .state_mut()?
         .controls
-        .get(Control::Navigation(Category::General));
+        .get(Control::Navigation(category));
     if let Err(error) = dialog_host::focus(ok_button) {
         eprintln!("Could not focus the settings category: {error}");
     }
@@ -129,10 +133,57 @@ pub fn show(
     }
     .ok()?;
     on_open(window);
-    let Some(state) = dialog.run(Keyboard::DialogNavigation)? else {
+    let Some(state) = dialog.run(|message| {
+        if message.hwnd != window || message.message != WM_SETTINGS_OPEN_REPOSITORY {
+            return false;
+        }
+        // The browser may run a nested native loop. No dialog-state borrow spans this action.
+        if let Err(error) = open_repository(window) {
+            crate::windows_app::show_error_for_window(window, &error);
+        }
+        true
+    })?
+    else {
         return Ok(None);
     };
     Ok(state.accepted.then_some(state.settings))
+}
+
+/// Select a page in the existing Settings window without recreating its controls or edits.
+pub(crate) fn navigate(window: HWND, category: Category) -> Result<()> {
+    // SAFETY: the application owns this live Settings window; the request carries only an index.
+    unsafe {
+        PostMessageW(
+            Some(window),
+            WM_SETTINGS_NAVIGATE,
+            WPARAM(category as usize),
+            LPARAM(0),
+        )
+    }
+}
+
+fn open_repository(owner: HWND) -> std::result::Result<(), String> {
+    let url = win32::wide(REPOSITORY_URL);
+    // SAFETY: the owner and terminated URL remain live for this call; other strings are static
+    // or null. This runs in the message loop, outside the native callback and state borrow.
+    let result = unsafe {
+        ShellExecuteW(
+            Some(owner),
+            w!("open"),
+            PCWSTR(url.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as usize;
+    if code <= 32 {
+        Err(format!(
+            "Could not open the AltTabio GitHub page (ShellExecuteW returned {code})"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 struct DialogState {
@@ -497,6 +548,20 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
     match control {
         Control::Navigation(category) if notification == BN_CLICKED => {
             report_layout(state.select_category(category));
+        }
+        Control::AboutRepository if notification == BN_CLICKED => {
+            // SAFETY: the bounded action is handled outside the callback by this dialog's loop.
+            if let Err(error) = unsafe {
+                PostMessageW(
+                    Some(hwnd),
+                    WM_SETTINGS_OPEN_REPOSITORY,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+            } {
+                eprintln!("Could not request the AltTabio GitHub page: {error}");
+            }
+            return Some(LRESULT(0));
         }
         Control::Button(DialogButton::Ok) => {
             if state.current_settings() == state.settings {

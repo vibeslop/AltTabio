@@ -9,6 +9,7 @@ pub const SELECTOR_ITEM_HEIGHT: i32 = 32;
 pub const SELECTOR_WIDTH: i32 = 160;
 pub const MIN_CLIENT_WIDTH: i32 = 640;
 pub const MIN_CLIENT_HEIGHT: i32 = 420;
+pub const REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OPTION_COUNT: usize = 15;
 
 /// A native control identity. Page controls live in a clipping, scrolling viewport.
@@ -25,6 +26,9 @@ pub enum Control {
     Checkbox(SettingOption),
     AboutIdentity,
     AboutDescription,
+    AboutRepository,
+    AboutCopyright,
+    AboutLicense,
     Button(DialogButton),
 }
 
@@ -51,7 +55,11 @@ impl Control {
     pub const fn is_tab_stop(self) -> bool {
         matches!(
             self,
-            Self::Navigation(_) | Self::Selector(_) | Self::Checkbox(_) | Self::Button(_)
+            Self::Navigation(_)
+                | Self::Selector(_)
+                | Self::Checkbox(_)
+                | Self::AboutRepository
+                | Self::Button(_)
         )
     }
 
@@ -61,7 +69,11 @@ impl Control {
             Self::Section(section) => Some(section.category()),
             Self::Label(_) | Self::Selector(_) => Some(Category::Appearance),
             Self::Checkbox(option) => Some(option.category()),
-            Self::AboutIdentity | Self::AboutDescription => Some(Category::About),
+            Self::AboutIdentity
+            | Self::AboutDescription
+            | Self::AboutRepository
+            | Self::AboutCopyright
+            | Self::AboutLicense => Some(Category::About),
             _ => None,
         }
     }
@@ -71,6 +83,7 @@ impl Control {
         match self {
             Self::Navigation(category) => Some(300 + category as usize),
             Self::Selector(selector) => Some(selector.control_id()),
+            Self::AboutRepository => Some(400),
             Self::Checkbox(option) => Some(option.control_id()),
             Self::Button(DialogButton::Ok) => Some(1),
             Self::Button(DialogButton::Cancel) => Some(2),
@@ -87,7 +100,10 @@ impl Control {
             Self::Label(selector) => selector.label(),
             Self::Checkbox(option) => option.label(),
             Self::AboutIdentity => concat!("AltTabio\nVersion ", env!("CARGO_PKG_VERSION")),
-            Self::AboutDescription => "A window switcher for Windows and macOS.",
+            Self::AboutDescription => "Open-source window switcher for Windows and macOS.",
+            Self::AboutRepository => "View on GitHub",
+            Self::AboutCopyright => "Copyright (c) 2026 VibeSlop",
+            Self::AboutLicense => "MIT License",
             Self::Button(DialogButton::Ok) => "Save changes",
             Self::Button(DialogButton::Cancel) => "Cancel",
             _ => "",
@@ -160,7 +176,8 @@ impl Category {
     #[must_use]
     pub const fn controls(self) -> &'static [Control] {
         use Control::{
-            AboutDescription, AboutIdentity, Checkbox as C, Label, Section as S, Selector as D,
+            AboutCopyright, AboutDescription, AboutIdentity, AboutLicense, AboutRepository,
+            Checkbox as C, Label, Section as S, Selector as D,
         };
         use SettingOption::{
             AutoUpdate, Autostart, CompactList, CurrentMonitorFilter, FullDesktopPreview,
@@ -194,7 +211,13 @@ impl Category {
                 C(FullDesktopPreview),
             ],
             Self::Display => &[C(CurrentMonitorFilter)],
-            Self::About => &[AboutIdentity, AboutDescription],
+            Self::About => &[
+                AboutIdentity,
+                AboutDescription,
+                AboutRepository,
+                AboutCopyright,
+                AboutLicense,
+            ],
         }
     }
 }

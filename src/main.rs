@@ -4,8 +4,6 @@
 compile_error!("AltTabio requires panic=unwind to contain panics at native callback boundaries");
 
 #[cfg(windows)]
-mod about_dialog;
-#[cfg(windows)]
 mod app_icon;
 #[cfg(windows)]
 mod app_messages;

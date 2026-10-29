@@ -1,6 +1,6 @@
 use crate::process_info::ProcessInfo;
+use crate::settings_dialog;
 use crate::task_icon::TaskIcons;
-use crate::{about_dialog, settings_dialog};
 use alttabio::settings::Settings;
 use alttabio::switcher::{SwitchTask, WindowCloaking, WindowEligibility, is_switchable_window};
 use std::ffi::c_void;
@@ -153,11 +153,7 @@ fn excludes_current_process_window(
     current_process_id: u32,
     class_name: &str,
 ) -> bool {
-    process_id == current_process_id
-        && !matches!(
-            class_name,
-            about_dialog::WINDOW_CLASS_NAME | settings_dialog::WINDOW_CLASS_NAME
-        )
+    process_id == current_process_id && class_name != settings_dialog::WINDOW_CLASS_NAME
 }
 
 fn hosted_app_executable(hwnd: HWND, class_name: &str) -> Option<PathBuf> {
@@ -379,11 +375,6 @@ mod tests {
     fn own_visible_dialogs_are_not_excluded_from_switching() {
         let current_process_id = 42;
 
-        assert!(!excludes_current_process_window(
-            current_process_id,
-            current_process_id,
-            about_dialog::WINDOW_CLASS_NAME,
-        ));
         assert!(!excludes_current_process_window(
             current_process_id,
             current_process_id,

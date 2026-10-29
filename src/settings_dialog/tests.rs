@@ -125,6 +125,7 @@ fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_
             .control_rect(Control::PageHeading),
         heading
     );
+    assert_about_preserves_edits(host, window, hover, save)?;
     host.state_mut()?.select_category(Category::General)?;
     host.state_mut()?.select_category(Category::Appearance)?;
     assert_eq!(host.state_mut()?.pages.offset(), offset);
@@ -151,6 +152,43 @@ fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_
     assert!(!host.state_mut()?.settings.general.mouse_over_selection);
     assert_eq!(host.state_mut()?.settings.appearance.theme, Theme::Light);
     dialog.destroy()?;
+    Ok(())
+}
+
+fn assert_about_preserves_edits(
+    host: &DialogHost<DialogState>,
+    window: HWND,
+    hover: HWND,
+    save: HWND,
+) -> Result<()> {
+    navigate(window, Category::About)?;
+    pump(window);
+    assert_eq!(host.state_mut()?.pages.category, Category::About);
+    assert_eq!(host.state_mut()?.selected_theme(), Theme::Light);
+    assert!(!is_checked(hover));
+    assert!(is_control_enabled(save));
+    let repository = host.state_mut()?.controls.get(Control::AboutRepository);
+    // SAFETY: this test clicks its own hidden native button. It must queue the external action
+    // without opening a browser, closing Settings, or committing any edited values.
+    unsafe { SendMessageW(repository, BM_CLICK, None, None) };
+    let mut action = MSG::default();
+    // SAFETY: inspect and remove only this test window's deferred browser action.
+    assert!(
+        unsafe {
+            PeekMessageW(
+                &raw mut action,
+                Some(window),
+                WM_SETTINGS_OPEN_REPOSITORY,
+                WM_SETTINGS_OPEN_REPOSITORY,
+                PM_REMOVE,
+            )
+        }
+        .as_bool()
+    );
+    assert_eq!(action.hwnd, window);
+    assert_eq!(host.state_mut()?.settings.appearance.theme, Theme::Auto);
+    assert!(!host.state_mut()?.accepted);
+    assert!(Control::AboutRepository.is_tab_stop());
     Ok(())
 }
 

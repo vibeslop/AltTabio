@@ -4,6 +4,7 @@ use super::*;
 use crate::settings_io::SettingsStore;
 use crate::win32::{ComApartment, module_instance, wide};
 use alttabio::settings::Theme;
+use alttabio::settings_form::Control;
 use std::cell::Cell;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
@@ -18,8 +19,9 @@ use windows::Win32::System::Threading::{
     STARTF_USESHOWWINDOW, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, EnumChildWindows, IsWindowVisible, SHOW_WINDOW_CMD, SW_HIDE,
-    SW_SHOWMINIMIZED, WM_CLOSE, WS_EX_TOOLWINDOW, WS_POPUP,
+    BM_GETCHECK, CreateWindowExW, DestroyWindow, DispatchMessageW, EnumChildWindows, GetDlgItem,
+    IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, SHOW_WINDOW_CMD, SW_HIDE, SW_MINIMIZE,
+    SW_SHOWMINIMIZED, SendMessageW, WM_CLOSE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{BOOL, Error, PCWSTR, PWSTR, Result};
 
@@ -118,6 +120,7 @@ fn first_settings_request_ignores_startup_show_state() -> Result<()> {
         for fixture in [
             "first_settings_open_fixture",
             "first_dark_settings_open_fixture",
+            "first_about_open_fixture",
         ] {
             run_fixture(&mut desktop_name, show_state, fixture)?;
         }
@@ -192,16 +195,37 @@ fn run_fixture(desktop_name: &mut [u16], show_state: SHOW_WINDOW_CMD, fixture: &
 #[test]
 #[ignore = "run by the parent test in a fresh process on a private desktop"]
 fn first_settings_open_fixture() -> Result<()> {
-    check_first_settings_open(Theme::Light)
+    check_first_settings_open(Theme::Light, Category::General)
 }
 
 #[test]
 #[ignore = "run by the parent test in a fresh process on a private desktop"]
 fn first_dark_settings_open_fixture() -> Result<()> {
-    check_first_settings_open(Theme::Dark)
+    check_first_settings_open(Theme::Dark, Category::General)
 }
 
-fn check_first_settings_open(theme: Theme) -> Result<()> {
+#[test]
+#[ignore = "run by the parent test in a fresh process on a private desktop"]
+fn first_about_open_fixture() -> Result<()> {
+    check_first_settings_open(Theme::Dark, Category::About)
+}
+
+fn assert_selected_page(window: HWND, category: Category) -> Result<()> {
+    for candidate in Category::ALL {
+        let id = Control::Navigation(candidate).id().unwrap_or_default();
+        // SAFETY: the live dialog owns navigation buttons with these bounded control IDs.
+        let navigation =
+            unsafe { GetDlgItem(Some(window), i32::try_from(id).unwrap_or_default()) }?;
+        // SAFETY: this is the live native radio button, queried without pointer payloads.
+        assert_eq!(
+            unsafe { SendMessageW(navigation, BM_GETCHECK, None, None) }.0 != 0,
+            candidate == category
+        );
+    }
+    Ok(())
+}
+
+fn check_first_settings_open(theme: Theme, category: Category) -> Result<()> {
     let _apartment = ComApartment::initialize()?;
     let (store, mut settings) = SettingsStore::load_from(
         std::env::temp_dir().join(format!(
@@ -237,13 +261,14 @@ fn check_first_settings_open(theme: Theme) -> Result<()> {
     };
     let visible = Cell::new(false);
     let minimized = Cell::new(false);
-    let result = settings_dialog::show(owner, &settings, |window| {
+    let result = settings_dialog::show(owner, &settings, category, |window| {
         unsafe {
             // SAFETY: Settings owns this live window on the fixture's UI thread.
             visible.set(IsWindowVisible(window).as_bool());
             minimized.set(IsIconic(window).as_bool());
         }
         assert_startup_painted(window);
+        assert!(assert_selected_page(window, category).is_ok());
         host.settings_window.set(Some(window));
         for _ in 0..2 {
             host.show_settings();
@@ -258,6 +283,38 @@ fn check_first_settings_open(theme: Theme) -> Result<()> {
                     "reopening Settings minimized it"
                 );
             }
+        }
+        assert!(
+            assert_selected_page(window, category).is_ok(),
+            "ordinary Settings requests must retain the selected page"
+        );
+        for show_state in [SW_HIDE, SW_MINIMIZE] {
+            // SAFETY: only this fixture's private-desktop dialog changes visibility.
+            unsafe {
+                let _previous = ShowWindow(window, show_state);
+            }
+            // Use the same overlay message as the tray's About command.
+            // SAFETY: the overlay and host belong to this fixture; no state borrow spans dispatch.
+            unsafe {
+                SendMessageW(owner, crate::app_messages::WM_SHOW_ABOUT, None, None);
+            }
+            let mut message = MSG::default();
+            // SAFETY: drain only this fixture's Settings events on the owning UI thread.
+            while unsafe { PeekMessageW(&raw mut message, Some(window), 0, 0, PM_REMOVE) }.as_bool()
+            {
+                // SAFETY: PeekMessageW initialized this scalar event and target window.
+                unsafe {
+                    DispatchMessageW(&raw const message);
+                }
+            }
+            assert_eq!(host.settings_window.get(), Some(window));
+            assert!(assert_selected_page(window, Category::About).is_ok());
+            // SAFETY: both queries read the same fixture-owned window's visibility.
+            unsafe {
+                assert!(IsWindowVisible(window).as_bool());
+                assert!(!IsIconic(window).as_bool());
+            }
+            assert!(!host.state.borrow().dialog_state().blocks_switcher());
         }
         unsafe {
             // SAFETY: the close request contains no borrowed data and runs on this UI thread.
