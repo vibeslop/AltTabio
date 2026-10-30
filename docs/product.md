@@ -72,7 +72,7 @@ It is a practical answer for people searching for:
 ### Windows
 
 1. Download the latest Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases/latest).
-2. Extract it to a folder you will keep. For autostart, use a folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
+2. Extract it to a folder you will keep. For autostart and updates, use a folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
 3. Run `AltTabio.exe` and accept the Windows administrator prompt.
 
 Windows asks for permission because AltTabio installs a global input hook (so it can handle Alt+Tab before Windows does) and window-management commands (so it can close a frozen program when you ask). That approval is for those jobs only.

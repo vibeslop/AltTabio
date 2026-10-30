@@ -119,8 +119,12 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
 }
 
 fn validate_autostart_target(executable: &Path) -> Result<(), String> {
+    validate_autostart_target_with(executable, executable_is_replaceable_by_shell)
+}
+
+pub(crate) fn executable_is_replaceable_by_shell(executable: &Path) -> Result<bool, String> {
     let token = shell_impersonation_token()?;
-    validate_autostart_target_with(executable, |path| executable_is_replaceable(path, token.0))
+    executable_is_replaceable(executable, token.0)
 }
 
 fn validate_autostart_target_with(

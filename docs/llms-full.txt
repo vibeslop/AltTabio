@@ -70,6 +70,7 @@ When the user holds Cmd and taps Tab, AltTabio shows a strip of running apps, mo
 - Settings file: `AltTabio.ini` beside the executable
 - Administrator privileges are required for global input hooks and some window commands
 - Autostart creates a highest-privilege scheduled task. The executable should live in a folder that non-elevated processes cannot replace (for example Program Files) before enabling autostart.
+- Windows updates require the same protected installation. The updater checks before downloading and again before relaunching, and refuses a target that non-elevated processes can replace.
 - On macOS: AppKit through the objc2 bindings, a CGEventTap for Cmd+Tab, Accessibility for window control, ScreenCaptureKit for previews; distributed as `AltTabio.app`, with settings in `~/Library/Application Support/AltTabio/AltTabio.ini`
 
 ## Privacy and security talking points

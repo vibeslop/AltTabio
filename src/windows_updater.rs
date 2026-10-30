@@ -75,6 +75,7 @@ pub fn stage(update: &Update) -> Result<StagedUpdate, String> {
         return Err("Development builds cannot install updates".to_owned());
     }
     let target = std::env::current_exe().map_err(|error| error.to_string())?;
+    validate_update_target(&target)?;
     let work = WorkFolder::create(&target)?;
     let hash = run_script(&format!(
         "$Mode = 'stage'\n$Version = '{}'\n$Work = {}\n{DOWNLOAD_SCRIPT}",
@@ -90,6 +91,7 @@ pub fn stage(update: &Update) -> Result<StagedUpdate, String> {
 
 /// Returns only once the helper has acquired this process and is waiting for it to exit.
 pub fn relaunch(staged: &mut StagedUpdate) -> Result<(), String> {
+    validate_update_target(&staged.target)?;
     let script = format!(
         "$Work = {}\n$Target = {}\n$Hash = '{}'\n$ParentId = {}\n{RELAUNCH_SCRIPT}",
         literal(&staged.work.path)?,
@@ -128,6 +130,24 @@ pub fn relaunch(staged: &mut StagedUpdate) -> Result<(), String> {
     // directory's protected ACL prevents another account from changing the staged payload.
     staged.work.helper_owns = true;
     Ok(())
+}
+
+fn validate_update_target(target: &Path) -> Result<(), String> {
+    validate_update_target_with(target, crate::startup::executable_is_replaceable_by_shell)
+}
+
+fn validate_update_target_with(
+    target: &Path,
+    is_replaceable: impl FnOnce(&Path) -> Result<bool, String>,
+) -> Result<(), String> {
+    if is_replaceable(target)? {
+        Err(format!(
+            "Updates are disabled because non-elevated processes can replace {}. Move AltTabio to an administrator-writable-only folder first.",
+            target.display()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn read_releases(text: &str) -> Result<Vec<Release>, String> {
@@ -288,6 +308,17 @@ impl Drop for WorkFolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updates_require_a_target_protected_from_non_elevated_replacement() {
+        let target = Path::new(r"C:\Users\Example\Downloads\AltTabio.exe");
+        assert!(validate_update_target_with(target, |_| Ok(true)).is_err());
+        assert_eq!(validate_update_target_with(target, |_| Ok(false)), Ok(()));
+        assert_eq!(
+            validate_update_target_with(target, |_| Err("Access check failed".to_owned())),
+            Err("Access check failed".to_owned())
+        );
+    }
 
     #[test]
     fn release_metadata_is_read_without_treating_text_as_code() {
