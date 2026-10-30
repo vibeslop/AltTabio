@@ -6,7 +6,7 @@ A free, open-source window switcher. It replaces Alt+Tab on 64-bit Windows 10 an
 
 ![AltTabio on Windows, showing a numbered list of File Explorer windows beside a live preview of the selected one](docs/images/hero-switcher.png)
 
-On Windows it shows a numbered list of open windows and a live preview of the selected one, and filters the list as you type. On macOS it lists every window of the selected app, including minimized windows, windows of hidden apps, and windows on other Spaces, which the system Cmd+Tab leaves out.
+On Windows it shows a list of open windows and a live preview of the selected one, and filters the list as you type. Number labels for the first nine rows are optional and hidden by default. On macOS it lists every window of the selected app, including minimized windows, windows of hidden apps, and windows on other Spaces, which the system Cmd+Tab leaves out.
 
 It was created because Alt+Tab Terminator has had a critical issue for years that causes Alt+Tab to stop working correctly. The issue was reported, but never fixed.
 
@@ -22,7 +22,7 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 
 AltTabio needs administrator rights. With **Autostart** on, it gets them at every logon, and so would anyone who replaced `AltTabio.exe`. That is why it belongs in a folder only administrators can change.
 
-Release builds check for updates automatically, verify the Windows archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input. Settings has an automatic-update toggle, and the tray menu has **Check for Updates** and **Relaunch to Update**. Updates replace the executable in its current folder and preserve `AltTabio.ini` and the startup task. Builds from source do not install published updates.
+Release builds check GitHub for updates about a minute after startup and then daily, download newer releases, verify the Windows archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. You can turn off automatic updates in Settings and still use **Check for Updates** or **Relaunch to Update** in the tray menu. Updates replace the executable in its current folder and preserve `AltTabio.ini` and the startup task. Ordinary Windows builds from source do not check for or install published updates.
 
 ### macOS
 
@@ -47,9 +47,10 @@ AltTabio is not notarized, so macOS blocks a copy downloaded in a browser. The [
 | Left, Right, Home, or End | Edit an active query; otherwise navigate the windows |
 | Mouse wheel | Scroll the window list without changing the selected window |
 | Enter or click | Switch to the selected window |
-| 1-9, on the number row or the number pad | Switch to that window directly |
+| 1-9, on the number row or the number pad | Switch to that window directly when the query is empty; otherwise type the digit |
 | Type | Filter by window title, app name, or number |
 | Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V | Select, copy, cut, or paste query text |
+| Ctrl+Z or Ctrl+Y | Undo or redo a query edit |
 | Escape or click outside | Close the switcher |
 | F4 to F9 | Close, minimize, maximize, or restore the selected window, end its process, or start another instance of its app |
 

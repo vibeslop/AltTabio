@@ -1,6 +1,6 @@
 # AltTabio
 
-AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11** it replaces **Alt+Tab** (and optionally Win+Tab) with a numbered list of open windows, a live preview, and search that starts the moment you type. On **macOS 26 and later** it replaces **Cmd+Tab** and lists every window of the selected app, including minimized windows, windows of hidden apps, and windows on other desktops.
+AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11** it replaces **Alt+Tab** (and optionally Win+Tab) with a list of open windows, optional number labels, a live preview, and search that starts the moment you type. On **macOS 26 and later** it replaces **Cmd+Tab** and lists every window of the selected app, including minimized windows, windows of hidden apps, and windows on other desktops.
 
 - **Website:** https://vibeslop.github.io/AltTabio/
 - **Windows page:** https://vibeslop.github.io/AltTabio/windows/
@@ -12,7 +12,7 @@ AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11**
 - **Version:** 1.3.0
 - **Platforms:** 64-bit Windows 10 and 11; macOS 26 or later on Apple silicon and Intel
 - **Language:** Native Rust. Win32, Direct2D, DirectWrite, and DWM on Windows; AppKit and ScreenCaptureKit on macOS.
-- **Network:** None on Windows. The Mac app asks GitHub for its release list once a day to update itself, unless Update automatically is turned off. No analytics on either platform.
+- **Network:** Release builds on Windows and macOS contact GitHub to check for and download updates. Automatic checks run after startup and then daily, with retries after failures, and can be turned off in Settings. Manual update checks remain available. No analytics on either platform.
 
 AltTabio is an independent project. It is not affiliated with Microsoft, Apple, or Alt+Tab Terminator. Windows is a trademark of Microsoft Corporation; macOS is a trademark of Apple Inc.
 
@@ -36,13 +36,13 @@ It is a practical answer for people searching for:
 ## Features on Windows
 
 - Replaces Alt+Tab and, optionally, Win+Tab
-- Application icons, window titles, optional application names, optional numbers
+- Application icons, window titles, optional application names, and optional number labels for the first nine visible rows, hidden by default
 - Live preview of the selected window, or a full-desktop preview that shows it in place
 - Compact task list by default so the preview has room
 - Type to filter by window title, application name, or number
 - The query stays visible in a translucent capsule on the panel's top edge until cleared, without moving the list
 - Select and edit the query with the mouse, Shift and Ctrl navigation, and standard copy, cut, paste, undo, and redo shortcuts
-- Keys 1-9 switch to the corresponding visible window
+- Keys 1-9 switch to the corresponding visible window when the query is empty; otherwise they enter digits
 - Keyboard and mouse control
 - Close, minimize, maximize, restore, end-process, and run-another-instance commands
 - Optional current-monitor filter for multi-monitor setups
@@ -50,6 +50,7 @@ It is a practical answer for people searching for:
 - Eight app-icon colors (Azure default, plus Copper, Ember, Indigo, Orchid, Rosewood, Vermilion, Violet)
 - Portable settings in `AltTabio.ini` next to the executable
 - Optional start with Windows via a scheduled task
+- Automatic updates from GitHub Releases, with SHA-256 verification and a restart after five minutes without keyboard or mouse input
 - Single self-contained `AltTabio.exe`
 
 ## Features on macOS
@@ -75,6 +76,8 @@ It is a practical answer for people searching for:
 3. Run `AltTabio.exe` and accept the Windows administrator prompt.
 
 Windows asks for permission because AltTabio installs a global input hook (so it can handle Alt+Tab before Windows does) and window-management commands (so it can close a frozen program when you ask). That approval is for those jobs only.
+
+Release builds check GitHub for updates about a minute after startup and then daily, retrying after an hour if a check fails. Updates are downloaded automatically, verified against GitHub's SHA-256 digest, and applied after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder; `AltTabio.ini` and the startup task are preserved. Settings lets you turn off automatic updates. **Check for Updates** in the tray menu checks immediately and offers to install a newer release; **Relaunch to Update** applies an already downloaded update. Ordinary Windows builds from source do not check for or install published updates.
 
 To uninstall: turn off start-with-Windows if you enabled it, exit from the tray icon, and delete the folder.
 
@@ -106,7 +109,7 @@ tccutil reset All com.vibeslop.AltTabio
 | Left, Right, Home, or End | Edit an active query; otherwise navigate the windows |
 | Mouse wheel | Scroll the window list without changing the selected window |
 | Enter or left click | Activate the selected window |
-| 1-9 or numpad 1-9 | Activate that visible window |
+| 1-9 or numpad 1-9 | Activate that visible window when the query is empty; otherwise type the digit |
 | Type | Filter by title, application name, or number |
 | Backspace | Remove a filter character |
 | Escape or click outside | Close the switcher |
@@ -137,13 +140,13 @@ tccutil reset All com.vibeslop.AltTabio
 
 ## Privacy
 
-AltTabio contains no telemetry and no ads. It goes online only for the Mac app's daily update check on GitHub, which **Update automatically** in the settings turns off. Settings stay in a local INI file. Window previews are drawn in memory and never saved or sent. Source code is public so this can be verified.
+AltTabio contains no telemetry and no ads. Release builds on both platforms go online to check for and download updates from GitHub. You can turn off automatic updates in Settings and still check manually. Update requests contain no window titles, query text, previews, or settings. Settings stay in a local INI file. Window previews are drawn in memory and never saved or sent. Source code is public so this can be verified.
 
 ## FAQ
 
 **Is it really free?** Yes. MIT-licensed, no trial, no ads, no account, no premium version.
 
-**Will it slow the computer down?** It is one small native program. It waits until you press the shortcut. There is no background sync and no phoning home.
+**Will it slow the computer down?** It is one small native program. The switcher waits for the shortcut; update checks and downloads run in the background.
 
 **Does it collect data?** No.
 

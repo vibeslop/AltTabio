@@ -19,7 +19,7 @@ pub struct GeneralSettings {
     pub typed_search: bool,
     pub release_alt_switches: bool,
     pub mouse_over_selection: bool,
-    /// Only macOS updates itself; Windows keeps the key without reading it.
+    /// Enables automatic update checks on both platforms; Windows requires a release build.
     pub auto_update: bool,
 }
 

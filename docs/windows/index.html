@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AltTabio for Windows: free Alt+Tab replacement for Windows 11 and 10</title>
-<meta name="description" content="Replace the Windows Alt+Tab switcher with a numbered list of open windows, a large live preview, and search as you type. Free and open source, one small .exe for Windows 10 and 11." />
+<meta name="description" content="Replace the Windows Alt+Tab switcher with a window list, optional number labels, a large live preview, and editable search. Free and open source, one small .exe for Windows 10 and 11." />
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
@@ -18,7 +18,7 @@
 <meta property="og:site_name" content="AltTabio" />
 <meta property="og:locale" content="en_US" />
 <meta property="og:title" content="AltTabio for Windows: a better Alt+Tab for Windows 11 and 10" />
-<meta property="og:description" content="A numbered list of open windows, a large live preview, and search as you type. Free and open source." />
+<meta property="og:description" content="A window list with optional number labels, a large live preview, and editable search. Free and open source." />
 <meta property="og:url" content="https://vibeslop.github.io/AltTabio/windows/" />
 <meta property="og:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
 <meta property="og:image:type" content="image/jpeg" />
@@ -27,7 +27,7 @@
 <meta property="og:image:alt" content="AltTabio: Stop tabbing past the window you want. Free for Windows and Mac. A dark keyboard with the Tab key lit." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="AltTabio for Windows: a better Alt+Tab for Windows 11 and 10" />
-<meta name="twitter:description" content="A numbered list of open windows, a large live preview, and search as you type. Free and open source." />
+<meta name="twitter:description" content="A window list with optional number labels, a large live preview, and editable search. Free and open source." />
 <meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
 <link rel="stylesheet" href="../site.css" />
 <script>
@@ -78,7 +78,7 @@
       "url": "https://vibeslop.github.io/AltTabio/windows/",
       "image": "https://vibeslop.github.io/AltTabio/alttabio-icon.png",
       "screenshot": "https://vibeslop.github.io/AltTabio/images/hero-switcher.png",
-      "description": "A free, open-source Alt+Tab replacement for 64-bit Windows 10 and 11. It shows a numbered list of open windows, a live preview of the selected window, and filters the list as you type.",
+      "description": "A free, open-source Alt+Tab replacement for 64-bit Windows 10 and 11. It shows a list of open windows with optional number labels, a live preview of the selected window, and an editable search query.",
       "applicationCategory": "UtilitiesApplication",
       "applicationSubCategory": "Window switcher",
       "operatingSystem": "Windows 10, Windows 11",
@@ -91,13 +91,14 @@
       "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD", "availability": "https://schema.org/InStock"},
       "featureList": [
         "Replaces Alt+Tab and optionally Win+Tab",
-        "Numbered list of open windows with app icons",
+        "List of open windows with app icons and optional number labels for the first nine rows",
         "Live preview of the selected window, alone or in place on the full desktop",
         "Type to filter by window title, app name, or number",
         "Keys 1 to 9 switch to a window at once",
         "Close, minimize, maximize, restore, or end a window's program from the switcher",
         "Optional filter for the current monitor",
-        "Portable settings in an INI file next to the executable"
+        "Portable settings in an INI file next to the executable",
+        "Automatic updates from GitHub Releases with SHA-256 verification"
       ]
     },
     {
@@ -163,7 +164,7 @@
     <div class="wrap">
       <span class="eyebrow">AltTabio for Windows 11 and 10</span>
       <h1 id="hero-title">Find the right window on the first Alt+Tab.</h1>
-      <p class="sub">AltTabio replaces the Windows switcher with a numbered list of your open windows and a large live preview. Type a few letters and the list narrows.</p>
+      <p class="sub">AltTabio replaces the Windows switcher with a list of your open windows and a large live preview. Type a few letters and the list narrows; number labels are optional.</p>
       <div class="cta">
         <a class="btn" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
         <a class="link only-mac" href="../mac/">On a Mac? <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
@@ -185,9 +186,9 @@
         </picture>
       </figure>
       <dl class="promises three">
-        <div><dt>Numbered windows</dt><dd>Press 1 to 9 and you're on that window, with no stepping through thumbnails.</dd></div>
+        <div><dt>Number shortcuts</dt><dd>Press 1 to 9 when the query is empty to switch to that window. Turn on Number shortcuts in Settings to show the labels, which are hidden by default.</dd></div>
         <div><dt>Large live preview</dt><dd>See the selected window alone, or in its place on the full desktop.</dd></div>
-        <div><dt>Type to filter</dt><dd>Start typing while you hold Alt. The list narrows by title, app, or number.</dd></div>
+        <div><dt>Type to filter</dt><dd>Start typing while you hold Alt. The list narrows by title, app, or number. The query stays visible above the list and supports selection, copy, paste, undo, and redo.</dd></div>
         <div><dt>The shortcut you know</dt><dd>Alt+Tab opens it and letting go of Alt switches. Win+Tab can open it too.</dd></div>
         <div><dt>Fix a stuck window</dt><dd>F4 closes it, F5 to F7 minimize, maximize, and restore, and F8 ends a frozen program.</dd></div>
         <div><dt>Works across monitors</dt><dd>It scales per monitor, and can list only the windows on the one you're using.</dd></div>
@@ -205,7 +206,7 @@
           <table class="compare">
             <thead><tr><th scope="col"><span class="sr-only">Feature</span></th><th scope="col">Windows Alt+Tab</th><th scope="col" class="us">AltTabio</th></tr></thead>
             <tbody>
-              <tr><th scope="row">What you see</th><td class="">Thumbnails of open windows</td><td class="us">A numbered list of titles and one large live preview</td></tr>
+              <tr><th scope="row">What you see</th><td class="">Thumbnails of open windows</td><td class="us">A list of titles with optional number labels and one large live preview</td></tr>
               <tr><th scope="row">Find a window by typing</th><td class="no">No</td><td class="us">By title, app name, or number</td></tr>
               <tr><th scope="row">Jump with a number key</th><td class="no">No</td><td class="us">1 to 9</td></tr>
               <tr><th scope="row">See the window in place on the desktop</th><td class="no">No</td><td class="us">Optional</td></tr>
@@ -233,10 +234,12 @@
           <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Shift</kbd> <kbd>Tab</kbd></th><td>Change the selected window.</td></tr>
           <tr><th scope="row">Mouse wheel</th><td>Scroll the window list without changing the selected window.</td></tr>
           <tr><th scope="row"><kbd>Enter</kbd>, click</th><td>Switch to the selected window</td></tr>
-          <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Switch to that window at once</td></tr>
+          <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Switch to that window when the query is empty; otherwise type the digit</td></tr>
           <tr><th scope="row">Type</th><td>Filter by window title, app name, or number</td></tr>
           <tr><th scope="row"><kbd>Backspace</kbd></th><td>Remove a filter character</td></tr>
-          <tr><th scope="row"><kbd>Home</kbd> <kbd>End</kbd></th><td>First or last window</td></tr>
+          <tr><th scope="row"><kbd>←</kbd> <kbd>→</kbd> <kbd>Home</kbd> <kbd>End</kbd></th><td>Edit an active query; otherwise navigate the windows</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + <kbd>A</kbd>, <kbd>C</kbd>, <kbd>X</kbd>, <kbd>V</kbd></th><td>Select, copy, cut, or paste query text</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Y</kbd></th><td>Undo / redo a query edit</td></tr>
           <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the switcher</td></tr>
           <tr><th scope="row"><kbd>F4</kbd></th><td>Close the selected window</td></tr>
           <tr><th scope="row"><kbd>F5</kbd> <kbd>F6</kbd> <kbd>F7</kbd></th><td>Minimize, maximize, restore</td></tr>
@@ -256,11 +259,11 @@
         <p>Open them from the tray icon. They are saved in <code class="inline">AltTabio.ini</code> next to the executable, so a copy on a USB stick keeps its setup.</p>
       </div>
       <ul class="chips">
-        <li>Start with Windows</li><li>Replace Alt+Tab</li><li>Replace Win+Tab</li><li>Type to search</li>
-        <li>Switch when Alt is released</li><li>Select on mouse-over</li>
-        <li>Live preview</li><li>Full-desktop preview</li><li>Only this monitor</li><li>Compact list</li>
-        <li>Large icons</li><li>Number labels</li><li>App names</li><li>Visible borders</li>
-        <li>Light, dark, or system theme</li><li>Eight icon colors</li>
+        <li>Start at sign-in</li><li>Replace Alt+Tab</li><li>Replace Win+Tab</li><li>Type to search</li>
+        <li>Switch when Alt is released</li><li>Select on hover</li>
+        <li>Live window preview</li><li>Preview in desktop position</li><li>Only show windows on the current monitor</li><li>Compact list</li>
+        <li>Large icons</li><li>Number shortcuts</li><li>App names under titles</li><li>Visible borders</li>
+        <li>Light, dark, or system theme</li><li>Eight icon colors</li><li>Automatic updates</li>
       </ul>
     </div>
   </section>
@@ -280,6 +283,10 @@
             <li><span>Unzip it into a folder you'll keep, such as <code class="inline">C:\Program Files\AltTabio</code>.</span></li>
             <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
           </ol>
+          <div class="prose">
+            <p>Release builds check GitHub for updates about a minute after startup and then daily. They download newer releases, verify the archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. Your settings and startup task are preserved.</p>
+            <p>Turn off automatic updates in Settings if you prefer to check yourself. The tray menu has <strong>Check for Updates</strong> and, when an update is ready, <strong>Relaunch to Update</strong>. Ordinary Windows source builds do not check for or install published updates.</p>
+          </div>
           <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
         </div>
         <div>
