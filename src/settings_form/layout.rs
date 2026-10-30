@@ -43,7 +43,7 @@ impl SettingsLayout {
                 main_width,
                 (footer_y - viewport_y).max(1),
             ),
-            content_x: (usable_width - content_width) / 2,
+            content_x: scale(28, dpi),
             content_width,
         }
     }

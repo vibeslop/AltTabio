@@ -20,14 +20,29 @@ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON,
     CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_GETITEMHEIGHT, CB_SETCURSEL, CB_SETITEMHEIGHT,
-    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, GetWindowRect, HMENU,
-    MoveWindow, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, GetMenuState,
+    GetSystemMenu, GetWindowRect, HMENU, MF_BYCOMMAND, MoveWindow, RemoveMenu, SC_MAXIMIZE,
+    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 use windows::core::{Error, PCWSTR, PWSTR, Result, w};
 // SS_OWNERDRAW is otherwise exposed only by the broad SystemServices bindings.
 const OWNER_DRAW_STATIC: WINDOW_STYLE = WINDOW_STYLE(0x000d);
+
+pub(super) fn remove_maximize_command(window: HWND) -> Result<()> {
+    // SAFETY: Settings owns this live window; Windows retains ownership of its system menu.
+    unsafe {
+        let menu = GetSystemMenu(window, false);
+        if menu.is_invalid() {
+            return Err(Error::from_thread());
+        }
+        if GetMenuState(menu, SC_MAXIMIZE, MF_BYCOMMAND) != u32::MAX {
+            RemoveMenu(menu, SC_MAXIMIZE, MF_BYCOMMAND)?;
+        }
+    }
+    Ok(())
+}
 
 /// The window of each entry of `Control::all`, in creation order.
 #[derive(Clone, Default)]

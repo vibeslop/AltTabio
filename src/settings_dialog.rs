@@ -44,10 +44,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
-    MINMAXINFO, PostMessageW, SW_SHOWNORMAL, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_SIZE, WM_VSCROLL,
-    WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_MAXIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
+    MINMAXINFO, PostMessageW, SC_MAXIMIZE, SW_SHOWNORMAL, SendMessageW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL,
+    WM_SIZE, WM_SYSCOMMAND, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_EX_COMPOSITED, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MINIMIZEBOX, WS_OVERLAPPED,
+    WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -65,7 +66,7 @@ const FRAME: DialogFrame = DialogFrame {
             | WS_CAPTION.0
             | WS_SYSMENU.0
             | WS_THICKFRAME.0
-            | WS_MAXIMIZEBOX.0
+            | WS_MINIMIZEBOX.0
             | WS_CLIPCHILDREN.0,
     ),
     // Buffer the entire native control tree so its separate paint messages cannot flash.
@@ -256,6 +257,7 @@ impl DialogState {
     }
 
     fn create_controls(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+        controls::remove_maximize_command(parent)?;
         let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
         self.previews = Some(Rc::new(selectors::Previews::load(instance, self.dpi)?));
@@ -483,6 +485,7 @@ fn handle_settings_message(
     lparam: LPARAM,
 ) -> Option<LRESULT> {
     match message {
+        WM_SYSCOMMAND if wparam.0 & 0xfff0 == SC_MAXIMIZE as usize => Some(LRESULT(0)),
         WM_COMMAND => handle_command(hwnd, state, wparam),
         WM_SIZE if state.fonts.is_some() && wparam.0 != 1 => {
             report_layout(state.resize());
@@ -638,6 +641,30 @@ mod tests {
         let app_window = windows::Win32::UI::WindowsAndMessaging::WS_EX_APPWINDOW;
 
         assert_ne!(FRAME.ex_style.0 & app_window.0, 0);
+    }
+
+    #[test]
+    fn maximize_request_keeps_settings_at_its_current_size() -> Result<()> {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsZoomed};
+        let dialog = super::page_tests::dialog()?;
+        let mut before = RECT::default();
+        let mut after = RECT::default();
+        // SAFETY: the test owns this hidden dialog; the command and output rectangles are valid.
+        unsafe {
+            GetWindowRect(dialog.window(), &raw mut before)?;
+            SendMessageW(
+                dialog.window(),
+                WM_SYSCOMMAND,
+                Some(WPARAM(SC_MAXIMIZE as usize)),
+                None,
+            );
+            assert!(!IsZoomed(dialog.window()).as_bool());
+            GetWindowRect(dialog.window(), &raw mut after)?;
+        }
+        assert_eq!(before, after);
+        dialog.destroy()?;
+        Ok(())
     }
 
     #[test]

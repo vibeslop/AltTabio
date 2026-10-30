@@ -152,6 +152,31 @@ fn layouts_keep_rows_clear_of_switches_and_footer_at_supported_sizes_and_dpis() 
 }
 
 #[test]
+fn resizing_keeps_page_headings_and_content_beside_the_sidebar() {
+    for dpi in [96, 120, 144, 168, 192] {
+        for category in Category::ALL {
+            let standard =
+                SettingsLayout::for_client(Size::new(728, 600).scaled(dpi), dpi, category);
+            let first_row = category.controls()[0];
+            for width in [640, 1000, 1920, 3840] {
+                let resized =
+                    SettingsLayout::for_client(Size::new(width, 600).scaled(dpi), dpi, category);
+                assert_eq!(
+                    Control::PageHeading.rect(&resized).x,
+                    Control::PageHeading.rect(&standard).x,
+                    "{category:?} heading at {width}px, {dpi} DPI"
+                );
+                assert_eq!(
+                    first_row.rect(&resized).x,
+                    first_row.rect(&standard).x,
+                    "{category:?} content at {width}px, {dpi} DPI"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn navigation_restores_each_page_scroll_and_clamps_after_resize() {
     let mut pages = SettingsPages::default();
     let layout = SettingsLayout::for_client(Size::new(640, 420), 96, Category::Appearance);
