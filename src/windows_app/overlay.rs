@@ -73,18 +73,12 @@ impl App {
     }
 
     pub(super) fn hide_overlay(&mut self) {
-        self.hide_overlay_with_reset(true);
-    }
-
-    pub(super) fn hide_overlay_with_reset(&mut self, reset_hook: bool) {
         self.hide_filter_feedback();
         self.stop_shell_dismissal();
         self.task_refresh.clear_notices();
         self.session.hide();
         self.set_hook_search_active(false);
-        if reset_hook {
-            self.reset_hook_gestures();
-        }
+        self.reset_hook_gestures();
         if let Some(preview) = &mut self.preview {
             preview.clear();
         }

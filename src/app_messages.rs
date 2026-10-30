@@ -7,7 +7,6 @@ use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 
 // Posted by the hook thread.
 pub(crate) const WM_HOOK_ACTION: u32 = WM_APP + 1;
-pub(crate) const WM_HOOK_HOTKEY_ACTION: u32 = WM_APP + 21;
 
 // Sent by the Shell on behalf of the tray icon.
 pub(crate) const WM_TRAY_CALLBACK: u32 = WM_APP + 2;
@@ -38,7 +37,6 @@ mod tests {
     fn app_window_messages_are_distinct() {
         let messages = [
             WM_HOOK_ACTION,
-            WM_HOOK_HOTKEY_ACTION,
             WM_TRAY_CALLBACK,
             WM_FOREGROUND_CHECK,
             WM_LISTED_WINDOW_REFRESH,

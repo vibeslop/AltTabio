@@ -2,7 +2,7 @@
 //! platform call that posts each one.
 
 use crate::hook_flags::HookFlags;
-use crate::input::{HookOutcome, InputAction, Key, KeyTransition};
+use crate::input::{HookOutcome, InputAction};
 
 /// What became of an outcome's actions.
 #[must_use]
@@ -47,28 +47,11 @@ pub fn deliver(
     Delivery::Posted
 }
 
-/// Whether a key event may take the registered-hotkey route: a physical Tab press, not injected
-/// input, whose outcome starts or cycles a switch.
-#[must_use]
-pub fn routes_tab_through_hotkey(
-    key: Key,
-    transition: KeyTransition,
-    injected: bool,
-    outcome: HookOutcome,
-) -> bool {
-    key == Key::Tab
-        && transition == KeyTransition::Pressed
-        && !injected
-        && outcome
-            .actions()
-            .any(|action| matches!(action, InputAction::Switch(_)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hook_flags::{OVERLAY_ACTIVE, OVERLAY_FLAGS};
-    use crate::input::{HookSettings, HookState, KeyEvent, Modifiers};
+    use crate::input::{HookSettings, HookState, Key, KeyEvent, Modifiers};
 
     const ALT: Modifiers = Modifiers {
         alt: true,
@@ -145,44 +128,5 @@ mod tests {
         assert_eq!(delivery, Delivery::PostFailed);
         assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
         assert!(flags.generation_is_current(generation));
-    }
-
-    #[test]
-    fn only_a_physical_tab_press_that_switches_takes_the_hotkey_route() {
-        let switching = alt_tab();
-        assert!(routes_tab_through_hotkey(
-            Key::Tab,
-            KeyTransition::Pressed,
-            false,
-            switching
-        ));
-        assert!(!routes_tab_through_hotkey(
-            Key::Tab,
-            KeyTransition::Pressed,
-            true,
-            switching
-        ));
-        assert!(!routes_tab_through_hotkey(
-            Key::Tab,
-            KeyTransition::Released,
-            false,
-            switching
-        ));
-        assert!(!routes_tab_through_hotkey(
-            Key::Escape,
-            KeyTransition::Pressed,
-            false,
-            switching
-        ));
-        let plain_tab = HookState::default().process_key(
-            KeyEvent::pressed(Key::Tab, Modifiers::default()),
-            HookSettings::default(),
-        );
-        assert!(!routes_tab_through_hotkey(
-            Key::Tab,
-            KeyTransition::Pressed,
-            false,
-            plain_tab
-        ));
     }
 }

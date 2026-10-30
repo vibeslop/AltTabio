@@ -2,9 +2,8 @@ use super::App;
 use super::mouse::WM_MOUSE_LEAVE;
 use crate::app_messages::{
     CLOSE_REFRESH_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID, SHELL_DISMISS_TIMER_ID, WM_CLEAR_FILTER,
-    WM_FILTER_POINTER, WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION,
-    WM_LISTED_WINDOW_REFRESH, WM_OUTSIDE_POINTER, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
-    WM_TRAY_CALLBACK,
+    WM_FILTER_POINTER, WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_LISTED_WINDOW_REFRESH,
+    WM_OUTSIDE_POINTER, WM_SHOW_ABOUT, WM_SHOW_SETTINGS, WM_TRAY_CALLBACK,
 };
 use crate::hook::{HookThread, decode_action};
 use crate::shell_menu;
@@ -130,7 +129,7 @@ impl App {
             return Some(LRESULT(0));
         }
         match message {
-            WM_HOOK_ACTION | WM_HOOK_HOTKEY_ACTION => {
+            WM_HOOK_ACTION => {
                 if !self.dialog_state().blocks_switcher()
                     && self
                         .hooks
@@ -138,12 +137,7 @@ impl App {
                         .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
-                    if message == WM_HOOK_HOTKEY_ACTION && matches!(action, InputAction::Switch(_))
-                    {
-                        self.resume_shell_switch_with_hotkey(action);
-                    } else {
-                        self.handle_hook_input(action, wparam);
-                    }
+                    self.handle_hook_input(action, wparam);
                 }
                 Some(LRESULT(0))
             }
@@ -242,10 +236,6 @@ impl App {
     }
 
     pub(super) fn apply_input_action(&mut self, action: InputAction) {
-        self.apply_input_action_with_reset(action, true);
-    }
-
-    pub(super) fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
         if let InputAction::EditSearch(
             command @ (alttabio::text_edit::TextCommand::Copy
             | alttabio::text_edit::TextCommand::Cut
@@ -259,9 +249,9 @@ impl App {
         match effect {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
-            SwitcherEffect::Hide => self.hide_overlay_with_reset(reset_hook),
+            SwitcherEffect::Hide => self.hide_overlay(),
             SwitcherEffect::Redraw => self.request_redraw(),
-            SwitcherEffect::Activate(target) => self.activate_target(target, reset_hook),
+            SwitcherEffect::Activate(target) => self.activate_target(target),
             SwitcherEffect::Execute(request) => {
                 let outcome = self.execute_window_command(request);
                 self.task_refresh.apply_command_outcome(outcome);
