@@ -153,9 +153,12 @@ mod tests {
     use alttabio::settings::Settings;
     use alttabio::switcher::SwitchTask;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyboardState, SetKeyboardState, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_MENU, VK_RMENU,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, GetWindowRect, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
-        WM_KEYDOWN, WS_EX_TOOLWINDOW, WS_POPUP,
+        WM_KEYDOWN, WM_SYSKEYDOWN, WS_EX_TOOLWINDOW, WS_POPUP,
     };
     use windows::core::{Error, w};
 
@@ -165,6 +168,50 @@ mod tests {
             // SAFETY: this test uniquely owns its hidden window on the creating thread.
             assert!(unsafe { DestroyWindow(self.0) }.is_ok());
         }
+    }
+
+    struct KeyboardState([u8; 256]);
+
+    impl Drop for KeyboardState {
+        fn drop(&mut self) {
+            // SAFETY: this restores only this test thread's original input-queue key state.
+            assert!(unsafe { SetKeyboardState(&self.0) }.is_ok());
+        }
+    }
+
+    fn assert_altgr_preserves_the_query(app: &mut App) -> Result<()> {
+        let mut original = KeyboardState([0; 256]);
+        // SAFETY: the complete writable buffer belongs to this test thread.
+        unsafe { GetKeyboardState(&mut original.0) }?;
+        for (left_alt, right_alt) in [(false, false), (true, false), (false, true)] {
+            let mut keys = [0; 256];
+            for key in [VK_CONTROL, VK_LCONTROL] {
+                keys[usize::from(key.0)] = 0x80;
+            }
+            if right_alt {
+                for key in [VK_MENU, VK_RMENU] {
+                    keys[usize::from(key.0)] = 0x80;
+                }
+            }
+            if left_alt {
+                for key in [VK_MENU, VK_LMENU] {
+                    keys[usize::from(key.0)] = 0x80;
+                }
+            }
+            // SAFETY: the buffer contains all 256 key states and affects only this thread.
+            unsafe { SetKeyboardState(&keys) }?;
+            app.session.clear_filter();
+            app.apply_input_action(InputAction::AppendSearchCharacter('a'));
+            let message = if right_alt { WM_SYSKEYDOWN } else { WM_KEYDOWN };
+            let _handled = app.handle_message(message, WPARAM(0x41), LPARAM(0));
+            if right_alt {
+                let _handled = app.handle_message(WM_CHAR, WPARAM('ą' as usize), LPARAM(0));
+                assert_eq!(app.session.switcher().filter(), "aą");
+            } else {
+                assert_eq!(app.session.switcher().filter_editor().selected_text(), "a");
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -227,6 +274,7 @@ mod tests {
             let _handled = app.handle_message(WM_CHAR, WPARAM(character as usize), LPARAM(0));
             assert_eq!(app.session.switcher().filter(), expected);
         }
+        assert_altgr_preserves_the_query(&mut app)?;
         app.clear_filter();
         assert!(!app.session.filter_visible());
         assert_eq!(app.session.switcher().visible_task_count(), 2);

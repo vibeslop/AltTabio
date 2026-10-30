@@ -13,7 +13,7 @@ use crate::win32::{high_word, low_word};
 use alttabio::input::{InputAction, OverlayKeyEvent, decode_virtual_key, overlay_key_action};
 use alttabio::switcher::SwitcherEffect;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_CONTROL, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_CONTROL, VK_RMENU, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_CHAR, WM_DISPLAYCHANGE, WM_DPICHANGED,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -282,8 +282,12 @@ impl App {
         let control = key_is_down(VK_CONTROL.0);
         if self.session.search_active()
             && (virtual_key != u32::from(VK_BACK.0) || control)
-            && let Some(command) =
-                alttabio::text_edit::TextCommand::for_key(virtual_key, control, event.shift)
+            && let Some(command) = alttabio::text_edit::TextCommand::for_key(
+                virtual_key,
+                control,
+                event.shift,
+                key_is_down(VK_RMENU.0),
+            )
         {
             self.handle_input_action(InputAction::EditSearch(command));
             return;

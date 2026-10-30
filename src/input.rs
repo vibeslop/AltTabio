@@ -738,6 +738,7 @@ impl HookState {
             u32::from(event.key.virtual_key()),
             event.modifiers.control,
             event.modifiers.shift,
+            self.owned_key_is_down(Key::RightAlt),
         )?;
         // Plain navigation also moves through windows when the query is empty. Preserve the
         // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
@@ -869,6 +870,30 @@ fn windows_keys(mask: u8) -> impl Iterator<Item = Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn altgr_text_is_not_a_control_editing_shortcut() {
+        let settings = HookSettings {
+            search_active: true,
+            ..HookSettings::default()
+        };
+        let modifiers = Modifiers {
+            alt: true,
+            control: true,
+            ..Modifiers::default()
+        };
+        let mut state = HookState::default();
+        state.rebase_modifier(Key::RightAlt, true);
+        let outcome = state.process_key(
+            KeyEvent::pressed(Key::Other(u16::from(b'A')), modifiers).with_text('ą'),
+            settings,
+        );
+        assert!(outcome.suppress);
+        assert_eq!(
+            outcome.actions().collect::<Vec<_>>(),
+            [InputAction::AppendSearchCharacter('ą')]
+        );
+    }
 
     #[test]
     fn editing_shortcuts_are_commands_and_own_their_key_releases() {
