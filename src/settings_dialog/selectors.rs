@@ -9,7 +9,7 @@ use crate::native_drawing::{
 use alttabio::dialog_layout::{Point, hairline, scale};
 use alttabio::settings::{IconColor, Theme};
 use alttabio::settings_form::{Control, Selector, THEME_CHOICES};
-use alttabio::theme::ResolvedTheme;
+use alttabio::theme::{ResolvedTheme, Rgb8};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HINSTANCE, LRESULT, RECT};
 use windows::Win32::Graphics::Gdi::{DrawFocusRect, HDC};
 use windows::Win32::UI::Controls::{
@@ -233,21 +233,8 @@ fn paint_theme_preview(dc: HDC, rect: RECT, theme: Theme, dpi: u32) -> Result<()
 }
 
 fn paint_theme_sample(dc: HDC, rect: RECT, theme: ResolvedTheme, dpi: u32) -> Result<()> {
-    let (background, selected, ink, border) = match theme {
-        ResolvedTheme::Light => (
-            rgb(244, 244, 244),
-            rgb(221, 221, 221),
-            rgb(96, 96, 96),
-            rgb(166, 166, 166),
-        ),
-        ResolvedTheme::Dark => (
-            rgb(40, 40, 40),
-            rgb(74, 74, 74),
-            rgb(212, 212, 212),
-            rgb(119, 119, 119),
-        ),
-    };
-    fill_color(dc, rect, background)?;
+    let palette = theme.palette();
+    fill_color(dc, rect, rgb_color(palette.background))?;
     let inset = scale(3, dpi);
     let row = RECT {
         left: rect.left + inset,
@@ -255,8 +242,8 @@ fn paint_theme_sample(dc: HDC, rect: RECT, theme: ResolvedTheme, dpi: u32) -> Re
         right: rect.right - inset,
         bottom: rect.top + scale(9, dpi),
     };
-    fill_color(dc, row, selected)?;
-    for y in [5, 13] {
+    fill_color(dc, row, rgb_color(palette.selected))?;
+    for (y, ink) in [(5, palette.primary), (13, palette.secondary)] {
         fill_color(
             dc,
             RECT {
@@ -265,10 +252,14 @@ fn paint_theme_sample(dc: HDC, rect: RECT, theme: ResolvedTheme, dpi: u32) -> Re
                 right: row.right - scale(2, dpi),
                 bottom: rect.top + scale(y + 1, dpi),
             },
-            ink,
+            rgb_color(ink),
         )?;
     }
-    frame_color(dc, rect, border, hairline(dpi))
+    frame_color(dc, rect, rgb_color(palette.window_border), hairline(dpi))
+}
+
+const fn rgb_color(color: Rgb8) -> COLORREF {
+    rgb(color.red, color.green, color.blue)
 }
 
 #[cfg(test)]
