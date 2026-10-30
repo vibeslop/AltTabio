@@ -1,4 +1,5 @@
 use super::App;
+use crate::app_messages::FilterPointerAction;
 use crate::filter_popup::FilterPopup;
 use alttabio::switcher::SwitcherSession;
 use alttabio::text_edit::TextCommand;
@@ -44,11 +45,11 @@ impl App {
         }
     }
 
-    pub(super) fn handle_filter_pointer(&mut self, x: usize, mode: isize) {
+    pub(super) fn handle_filter_pointer(&mut self, x: usize, action: FilterPointerAction) {
         if !self.session.filter_visible() || self.dialog_state().blocks_switcher() {
             return;
         }
-        if mode == 2 {
+        if action == FilterPointerAction::SelectAll {
             let _effect = self
                 .session
                 .handle_input(alttabio::input::InputAction::EditSearch(
@@ -56,7 +57,10 @@ impl App {
                 ));
         } else if let Some(popup) = &self.filter_popup {
             match popup.hit_test(i32::try_from(x).unwrap_or(i32::MAX)) {
-                Ok(position) => self.session.select_filter_position(position, mode == 1),
+                Ok(position) => self.session.select_filter_position(
+                    position,
+                    action == FilterPointerAction::ExtendSelection,
+                ),
                 Err(error) => eprintln!("Could not position the filter caret: {error}"),
             }
         }

@@ -4,7 +4,7 @@ mod paint;
 mod surface;
 mod text;
 
-use crate::app_messages::{WM_CLEAR_FILTER, WM_FILTER_POINTER};
+use crate::app_messages::{FilterPointerAction, WM_CLEAR_FILTER, WM_FILTER_POINTER};
 use crate::win32::{
     module_instance, point_from_lparam, rect_from_native, set_window_user_data,
     work_area_near_window,
@@ -21,6 +21,7 @@ use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION};
+use windows::Win32::System::SystemServices::{MK_LBUTTON, MK_SHIFT};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
@@ -344,16 +345,22 @@ fn handle_window_message(
                     events,
                     x,
                     if message == WM_LBUTTONDBLCLK {
-                        2
+                        FilterPointerAction::SelectAll
+                    } else if wparam.0 & MK_SHIFT.0 as usize != 0 {
+                        FilterPointerAction::ExtendSelection
                     } else {
-                        isize::from(wparam.0 & 4 != 0)
+                        FilterPointerAction::PlaceCaret
                     },
                 );
             }
             Some(LRESULT(0))
         }
-        WM_MOUSEMOVE if events.selecting.get() && wparam.0 & 1 != 0 => {
-            post_pointer(events, point_from_lparam(lparam).x, 1);
+        WM_MOUSEMOVE if events.selecting.get() && wparam.0 & MK_LBUTTON.0 as usize != 0 => {
+            post_pointer(
+                events,
+                point_from_lparam(lparam).x,
+                FilterPointerAction::ExtendSelection,
+            );
             Some(LRESULT(0))
         }
         WM_LBUTTONUP => {
@@ -373,7 +380,7 @@ fn handle_window_message(
     }
 }
 
-fn post_pointer(events: &Events, x: i32, mode: isize) {
+fn post_pointer(events: &Events, x: i32, action: FilterPointerAction) {
     if let Err(error) = unsafe {
         // SAFETY: the owner outlives this callback's popup. Coordinates and selection mode are
         // scalar values; text measurement and model changes happen later on the app thread.
@@ -381,7 +388,7 @@ fn post_pointer(events: &Events, x: i32, mode: isize) {
             Some(events.owner),
             WM_FILTER_POINTER,
             WPARAM(usize::try_from(x).unwrap_or_default()),
-            LPARAM(mode),
+            LPARAM(action as isize),
         )
     } {
         events.post_failure.set(Some(error));

@@ -1,9 +1,10 @@
 use super::App;
 use super::mouse::WM_MOUSE_LEAVE;
 use crate::app_messages::{
-    CLOSE_REFRESH_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID, SHELL_DISMISS_TIMER_ID, WM_CLEAR_FILTER,
-    WM_FILTER_POINTER, WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_LISTED_WINDOW_REFRESH,
-    WM_OUTSIDE_POINTER, WM_SHOW_ABOUT, WM_SHOW_SETTINGS, WM_TRAY_CALLBACK,
+    CLOSE_REFRESH_TIMER_ID, FilterPointerAction, LISTED_REFRESH_RETRY_TIMER_ID,
+    SHELL_DISMISS_TIMER_ID, WM_CLEAR_FILTER, WM_FILTER_POINTER, WM_FOREGROUND_CHECK,
+    WM_HOOK_ACTION, WM_LISTED_WINDOW_REFRESH, WM_OUTSIDE_POINTER, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
+    WM_TRAY_CALLBACK,
 };
 use crate::hook::{HookThread, decode_action};
 use crate::shell_menu;
@@ -170,7 +171,9 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_FILTER_POINTER => {
-                self.handle_filter_pointer(wparam.0, lparam.0);
+                if let Some(action) = FilterPointerAction::from_code(lparam.0) {
+                    self.handle_filter_pointer(wparam.0, action);
+                }
                 Some(LRESULT(0))
             }
             WM_OUTSIDE_POINTER => {

@@ -23,6 +23,25 @@ pub(crate) const WM_CLEAR_FILTER: u32 = WM_APP + 8;
 pub(crate) const WM_FILTER_POINTER: u32 = WM_APP + 9;
 pub(crate) const WM_OUTSIDE_POINTER: u32 = WM_APP + 10;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(isize)]
+pub(crate) enum FilterPointerAction {
+    PlaceCaret = 0,
+    ExtendSelection = 1,
+    SelectAll = 2,
+}
+
+impl FilterPointerAction {
+    pub(crate) const fn from_code(code: isize) -> Option<Self> {
+        match code {
+            0 => Some(Self::PlaceCaret),
+            1 => Some(Self::ExtendSelection),
+            2 => Some(Self::SelectAll),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) const CLOSE_REFRESH_TIMER_ID: usize = 1;
 pub(crate) const LISTED_REFRESH_RETRY_TIMER_ID: usize = 2;
 pub(crate) const SHELL_DISMISS_TIMER_ID: usize = 3;
