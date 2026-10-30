@@ -53,17 +53,21 @@ enum ThemeTargetKind {
     Viewport,
     ComboBox,
     ComboList,
+    Tooltip,
 }
 
 const fn native_theme_class(dark: bool, kind: ThemeTargetKind) -> NativeThemeClass {
     match kind {
         ThemeTargetKind::ComboBox => NativeThemeClass::Cfd,
-        ThemeTargetKind::ComboList | ThemeTargetKind::Viewport if dark => {
+        ThemeTargetKind::ComboList | ThemeTargetKind::Viewport | ThemeTargetKind::Tooltip
+            if dark =>
+        {
             NativeThemeClass::DarkModeExplorer
         }
-        ThemeTargetKind::Standard | ThemeTargetKind::ComboList | ThemeTargetKind::Viewport => {
-            NativeThemeClass::Explorer
-        }
+        ThemeTargetKind::Standard
+        | ThemeTargetKind::ComboList
+        | ThemeTargetKind::Viewport
+        | ThemeTargetKind::Tooltip => NativeThemeClass::Explorer,
     }
 }
 
@@ -80,6 +84,7 @@ struct NativeComboBoxInfo {
 
 #[derive(Clone, Copy)]
 pub(super) struct ThemePalette {
+    pub(super) dark: bool,
     pub(super) background: COLORREF,
     pub(super) sidebar: COLORREF,
     pub(super) secondary: COLORREF,
@@ -98,6 +103,7 @@ impl ThemePalette {
     pub(super) fn new(dark: bool) -> Self {
         if dark {
             Self {
+                dark: true,
                 background: dark::BACKGROUND,
                 sidebar: rgb(35, 35, 35),
                 secondary: rgb(166, 166, 166),
@@ -113,6 +119,7 @@ impl ThemePalette {
             }
         } else {
             Self {
+                dark: false,
                 background: rgb(250, 250, 250),
                 sidebar: rgb(243, 243, 243),
                 secondary: rgb(96, 96, 96),
@@ -170,14 +177,20 @@ pub(super) fn apply_native_theme_hooks(
 }
 
 fn theme_targets(controls: &DialogControls) -> impl Iterator<Item = ThemeTarget> + '_ {
-    controls.iter().map(|(control, hwnd)| ThemeTarget {
-        hwnd,
-        kind: match control {
-            Control::Selector(_) => ThemeTargetKind::ComboBox,
-            Control::Viewport => ThemeTargetKind::Viewport,
-            _ => ThemeTargetKind::Standard,
-        },
-    })
+    controls
+        .iter()
+        .map(|(control, hwnd)| ThemeTarget {
+            hwnd,
+            kind: match control {
+                Control::Selector(_) => ThemeTargetKind::ComboBox,
+                Control::Viewport => ThemeTargetKind::Viewport,
+                _ => ThemeTargetKind::Standard,
+            },
+        })
+        .chain(std::iter::once(ThemeTarget {
+            hwnd: controls.repository_tooltip(),
+            kind: ThemeTargetKind::Tooltip,
+        }))
 }
 
 fn apply_control_theme(control: ThemeTarget, dark: bool, dark_mode_api: Option<&DarkModeApi>) {

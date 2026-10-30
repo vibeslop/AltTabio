@@ -135,7 +135,7 @@ impl SettingsLayout {
                     Control::Label(_) => {
                         Rect::new(row.x, row.y, row.width - s(SELECTOR_WIDTH + 20), row.height)
                     }
-                    Control::AboutRepository => Rect::new(row.x, row.y, s(140), row.height),
+                    Control::AboutRepository => Rect::new(row.x, row.y, s(90), row.height),
                     _ => row,
                 };
                 Some((control, rect))

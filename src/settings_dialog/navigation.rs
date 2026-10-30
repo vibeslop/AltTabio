@@ -7,8 +7,7 @@ use std::mem::size_of;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetScrollInfo, SB_VERT, SCROLLINFO, SIF_ALL, SIF_DISABLENOSCROLL, SIF_TRACKPOS,
-    SetWindowTextW,
+    GetClientRect, GetScrollInfo, SB_VERT, SCROLLINFO, SIF_ALL, SIF_TRACKPOS, SetWindowTextW,
 };
 use windows::core::{PCWSTR, Result};
 
@@ -123,7 +122,7 @@ impl DialogState {
         let layout = self.layout();
         let info = SCROLLINFO {
             cbSize: u32::try_from(size_of::<SCROLLINFO>()).unwrap_or_default(),
-            fMask: SIF_ALL | SIF_DISABLENOSCROLL,
+            fMask: SIF_ALL,
             nMax: layout.content_height(self.pages.category) - 1,
             nPage: u32::try_from(layout.viewport.height).unwrap_or_default(),
             nPos: self.pages.offset(),

@@ -214,6 +214,14 @@ impl OwnedFont {
         )
     }
 
+    pub(crate) fn underlined_pixels(dpi: u32, height: i32, weight: i32) -> Result<Self> {
+        Self::with_height(
+            alttabio::dialog_layout::scale(height, dpi).max(1),
+            weight,
+            true,
+        )
+    }
+
     fn with_height(point_height: i32, weight: i32, underline: bool) -> Result<Self> {
         let font = unsafe {
             // SAFETY: scalar values describe a standard Segoe UI font and the face name is static.

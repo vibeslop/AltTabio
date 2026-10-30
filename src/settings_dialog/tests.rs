@@ -211,6 +211,108 @@ fn render_control(window: HWND) -> Result<RenderTarget> {
     Ok(image)
 }
 
+#[test]
+fn about_header_leaves_the_logo_unobscured() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    host.state_mut()?.update_dpi(168)?;
+    host.state_mut()?.select_category(Category::About)?;
+    let state = host.state_mut()?;
+    let intro = state.controls.get(Control::PageIntro);
+    let identity = state.controls.get(Control::AboutIdentity);
+    let mut intro_bounds = RECT::default();
+    let mut icon_bounds = RECT::default();
+    // SAFETY: the test owns both live native child windows and writable rectangles.
+    unsafe {
+        GetWindowRect(intro, &raw mut intro_bounds)?;
+        GetWindowRect(identity, &raw mut icon_bounds)?;
+    }
+    icon_bounds.top += alttabio::dialog_layout::scale(3, state.dpi);
+    // SAFETY: only this live child's visibility style is queried, without showing the dialog.
+    let visible =
+        unsafe { GetWindowLongPtrW(intro, GWL_STYLE) }.cast_unsigned() & WS_VISIBLE.0 as usize != 0;
+    assert!(
+        !visible || intro_bounds.bottom <= icon_bounds.top,
+        "the empty About intro overlaps the top of the app icon"
+    );
+    drop(state);
+    host.state_mut()?.select_category(Category::General)?;
+    // SAFETY: the dialog still owns the intro label, which General needs to show again.
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(intro, GWL_STYLE) }.cast_unsigned() & WS_VISIBLE.0 as usize,
+        0
+    );
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn scrollbar_is_hidden_when_the_selected_page_fits() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    for category in Category::ALL {
+        host.state_mut()?.select_category(category)?;
+        let state = host.state_mut()?;
+        let viewport = state.controls.get(Control::Viewport);
+        let overflow = state.layout().max_scroll(category) > 0;
+        // SAFETY: the test owns this live native viewport; the query reads only its style.
+        let style = unsafe { GetWindowLongPtrW(viewport, GWL_STYLE) }.cast_unsigned();
+        assert_eq!(
+            style & windows::Win32::UI::WindowsAndMessaging::WS_VSCROLL.0 as usize != 0,
+            overflow,
+            "{category:?}: show a scrollbar only when the page overflows"
+        );
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn github_tooltip_exposes_the_full_url_and_closes_with_settings() -> Result<()> {
+    use windows::Win32::UI::Controls::{TTM_GETTOOLINFOW, TTTOOLINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    let (tooltip, link) = {
+        let state = host.state_mut()?;
+        (
+            state.controls.repository_tooltip(),
+            state.controls.get(Control::AboutRepository),
+        )
+    };
+    let mut text = [0_u16; 512];
+    let mut tool = TTTOOLINFOW {
+        cbSize: u32::try_from(std::mem::size_of::<TTTOOLINFOW>()).unwrap_or_default(),
+        hwnd: dialog.window(),
+        uId: link.0 as usize,
+        lpszText: windows::core::PWSTR(text.as_mut_ptr()),
+        ..Default::default()
+    };
+    // SAFETY: the live tooltip writes the sized tool structure and copies its URL into the
+    // supplied buffer, which exceeds the native TOOLINFO query's 260-character requirement.
+    assert_ne!(
+        unsafe {
+            SendMessageW(
+                tooltip,
+                TTM_GETTOOLINFOW,
+                None,
+                Some(LPARAM(std::ptr::from_mut(&mut tool) as isize)),
+            )
+        }
+        .0,
+        0
+    );
+    // SAFETY: the successful query returned the terminated URL in the supplied live buffer.
+    assert_eq!(
+        unsafe { windows::core::PCWSTR(tool.lpszText.0).to_string() }?,
+        REPOSITORY_URL
+    );
+    dialog.destroy()?;
+    // SAFETY: this query verifies that destroying the owner also destroyed its tooltip.
+    assert!(!unsafe { IsWindow(Some(tooltip)) }.as_bool());
+    Ok(())
+}
+
 fn render_page(host: &DialogHost<DialogState>) -> Result<RenderTarget> {
     let state = host.state_mut()?;
     let layout = state.layout();
@@ -243,7 +345,7 @@ fn render_page(host: &DialogHost<DialogState>) -> Result<RenderTarget> {
 fn native_pages_render_in_both_themes_at_each_dpi() -> Result<()> {
     let dialog = dialog()?;
     let host = dialog.host()?;
-    for dpi in [96, 144, 192] {
+    for dpi in [96, 144, 168, 192] {
         let layout = SettingsLayout::for_dpi(dpi);
         let mut outer = RECT::default();
         let mut client = RECT::default();
@@ -287,7 +389,10 @@ fn native_pages_render_in_both_themes_at_each_dpi() -> Result<()> {
                         .any(|pixel| pixel[..3] != [0, 0, 0])
                 );
                 image.save_named(&format!("settings-page-{category:?}-{dark}"))?;
-                if dpi == 96 && dark && category == Category::Appearance {
+                if dark
+                    && ((dpi == 96 && category == Category::Appearance)
+                        || (dpi == 168 && category == Category::About))
+                {
                     let mut frame = RECT::default();
                     // SAFETY: the hidden dialog is live and frame is writable.
                     unsafe {
@@ -306,7 +411,7 @@ fn native_pages_render_in_both_themes_at_each_dpi() -> Result<()> {
                             Some(LPARAM(0x02 | 0x04 | 0x10 | 0x08)),
                         );
                     }
-                    native_image.save_named("settings-native-hierarchy")?;
+                    native_image.save_named(&format!("settings-native-{category:?}-{dpi}"))?;
                 }
                 let bottom = host.state_mut()?.layout().max_scroll(category);
                 if bottom > 0 {

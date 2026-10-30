@@ -42,7 +42,7 @@ pub struct TrayIcon {
     data: NOTIFYICONDATAW,
     /// Owns the icon in `data.hIcon`. Fields drop after `Drop::drop` deletes the notification
     /// icon, so the shell has let go of it by then.
-    icon: app_icon::TrayImage,
+    icon: app_icon::OwnedIcon,
     menu: HMENU,
     instance: HINSTANCE,
     recreation_message: u32,

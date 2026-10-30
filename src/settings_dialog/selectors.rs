@@ -22,22 +22,43 @@ use windows::core::{Error, Result};
 pub(super) struct Previews {
     // LoadIconW borrows shared executable resources, so these handles must not be destroyed.
     icons: [HICON; IconColor::ALL.len()],
+    logos: Vec<app_icon::OwnedIcon>,
+    github: [app_icon::OwnedIcon; 2],
 }
 
 impl Previews {
-    pub(super) fn icon(&self, color: IconColor) -> HICON {
-        self.icons[IconColor::ALL
-            .iter()
-            .position(|candidate| *candidate == color)
-            .unwrap_or_default()]
+    pub(super) fn logo(&self, color: IconColor) -> HICON {
+        self.logos[icon_index(color)].handle()
     }
-    pub(super) fn load(instance: HINSTANCE) -> Result<Self> {
+    pub(super) fn github(&self, dark: bool) -> HICON {
+        self.github[usize::from(dark)].handle()
+    }
+    pub(super) fn load(instance: HINSTANCE, dpi: u32) -> Result<Self> {
         let mut icons = [HICON::default(); IconColor::ALL.len()];
         for (slot, icon) in icons.iter_mut().zip(IconColor::ALL) {
             *slot = app_icon::load_app(instance, icon)?;
         }
-        Ok(Self { icons })
+        let logos = IconColor::ALL
+            .into_iter()
+            .map(|color| app_icon::load_app_sized(instance, color, scale(42, dpi)))
+            .collect::<Result<Vec<_>>>()?;
+        let github = [
+            app_icon::load_github(instance, false, scale(18, dpi))?,
+            app_icon::load_github(instance, true, scale(18, dpi))?,
+        ];
+        Ok(Self {
+            icons,
+            logos,
+            github,
+        })
     }
+}
+
+fn icon_index(color: IconColor) -> usize {
+    IconColor::ALL
+        .iter()
+        .position(|candidate| *candidate == color)
+        .unwrap_or_default()
 }
 
 pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &PaintState) -> Option<LRESULT> {

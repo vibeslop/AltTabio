@@ -15,6 +15,8 @@
 #define IDI_TRAY_ROSEWOOD 106
 #define IDI_TRAY_VERMILION 107
 #define IDI_TRAY_VIOLET 108
+#define IDI_GITHUB_LIGHT 201
+#define IDI_GITHUB_DARK 202
 
 IDI_APP_AZURE ICON "assets/icons/azure/AltTabio-azure.ico"
 IDI_APP_COPPER ICON "assets/icons/copper/AltTabio-copper.ico"
@@ -32,6 +34,8 @@ IDI_TRAY_ORCHID ICON "assets/icons/orchid/AltTabio-orchid-tray.ico"
 IDI_TRAY_ROSEWOOD ICON "assets/icons/rosewood/AltTabio-rosewood-tray.ico"
 IDI_TRAY_VERMILION ICON "assets/icons/vermilion/AltTabio-vermilion-tray.ico"
 IDI_TRAY_VIOLET ICON "assets/icons/violet/AltTabio-violet-tray.ico"
+IDI_GITHUB_LIGHT ICON "assets/icons/github/github-light.ico"
+IDI_GITHUB_DARK ICON "assets/icons/github/github-dark.ico"
 #ifdef DEVELOPMENT_BUILD
 1 RT_MANIFEST "app.dev.manifest"
 #else

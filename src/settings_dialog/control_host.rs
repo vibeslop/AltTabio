@@ -17,10 +17,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_GETDROPPEDSTATE, PostMessageW, SendMessageW, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETDLGCODE,
-    WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT,
-    WM_SETFOCUS, WM_VSCROLL,
+    CB_GETDROPPEDSTATE, IDC_HAND, LoadCursorW, PostMessageW, SendMessageW, SetCursor, WM_COMMAND,
+    WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ENABLE,
+    WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT, WM_SETCURSOR, WM_SETFOCUS, WM_VSCROLL,
 };
 use windows::core::{BOOL, Error, Result};
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
@@ -106,6 +106,9 @@ unsafe extern "system" fn settings_control_subclass_proc(
         let Some(control) = state.controls.find(hwnd) else {
             return dropdown_input::handle_message(hwnd, message, wparam, lparam, &state);
         };
+        if control == Control::AboutRepository && message == WM_SETCURSOR {
+            return link_cursor();
+        }
         // Only the viewport forwards child notifications. Combos must first process
         // messages from their own listboxes to commit and cancel selections correctly.
         if control == Control::Viewport
@@ -193,6 +196,22 @@ unsafe extern "system" fn settings_control_subclass_proc(
     })
 }
 
+fn link_cursor() -> Option<LRESULT> {
+    // SAFETY: IDC_HAND is a shared system cursor; SetCursor borrows it without ownership.
+    match unsafe { LoadCursorW(None, IDC_HAND) } {
+        Ok(cursor) => {
+            // SAFETY: the loaded system cursor remains live for the process lifetime.
+            unsafe {
+                let _previous = SetCursor(Some(cursor));
+            }
+            Some(LRESULT(1))
+        }
+        Err(error) => {
+            eprintln!("Could not load the link cursor: {error}");
+            None
+        }
+    }
+}
 unsafe fn detach_paint_cache(hwnd: HWND, cache_pointer: usize) {
     // SAFETY: this removes only the currently executing subclass before destruction.
     if !unsafe {

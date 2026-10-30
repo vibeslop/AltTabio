@@ -101,7 +101,7 @@ impl Control {
             Self::Checkbox(option) => option.label(),
             Self::AboutIdentity => concat!("AltTabio\nVersion ", env!("CARGO_PKG_VERSION")),
             Self::AboutDescription => "Open-source window switcher for Windows and macOS.",
-            Self::AboutRepository => "View on GitHub",
+            Self::AboutRepository => "GitHub",
             Self::AboutCopyright => "Copyright (c) 2026 VibeSlop",
             Self::AboutLicense => "MIT License",
             Self::Button(DialogButton::Ok) => "Save changes",

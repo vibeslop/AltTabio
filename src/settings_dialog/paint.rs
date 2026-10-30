@@ -135,18 +135,17 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
         Control::Navigation(category) => paint_navigation(hwnd, dc, client, category, state),
         Control::Checkbox(option) => paint_switch(hwnd, dc, client, option, state),
         Control::Selector(selector) => paint_combo_box(dc, client, selector, state),
-        Control::Button(_) | Control::AboutRepository => {
-            paint_push_button(hwnd, dc, client, control, state)
-        }
+        Control::Button(_) => paint_push_button(hwnd, dc, client, control, state),
+        Control::AboutRepository => paint_repository_link(hwnd, dc, client, state),
         Control::AboutIdentity => {
             if let Some(previews) = state.previews.as_ref() {
-                // SAFETY: the shared executable icon and memory/window DC stay live during painting.
+                // SAFETY: the snapshot retains the owned icon, and the borrowed DC stays live.
                 unsafe {
                     DrawIconEx(
                         dc,
                         0,
                         scale(3, state.dpi),
-                        previews.icon(state.selected_icon()),
+                        previews.logo(state.selected_icon()),
                         scale(42, state.dpi),
                         scale(42, state.dpi),
                         0,
@@ -373,6 +372,44 @@ fn paint_switch(
         } else {
             state.palette.secondary
         },
+    )?;
+    focus(hwnd, dc, client, state)
+}
+
+fn paint_repository_link(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Result<()> {
+    let fonts = state
+        .fonts
+        .as_ref()
+        .ok_or_else(|| Error::from_hresult(E_FAIL))?;
+    let previews = state
+        .previews
+        .as_ref()
+        .ok_or_else(|| Error::from_hresult(E_FAIL))?;
+    let size = scale(18, state.dpi);
+    // SAFETY: the snapshot retains the owned, size-matched icon through this synchronous paint.
+    unsafe {
+        DrawIconEx(
+            dc,
+            0,
+            (client.bottom - size) / 2,
+            previews.github(state.palette.dark),
+            size,
+            size,
+            0,
+            None,
+            DI_NORMAL,
+        )?;
+    }
+    let mut label = client;
+    label.left += scale(26, state.dpi);
+    // SAFETY: GetFocus only queries the current UI thread's focus.
+    let active = state.hovered.get() == hwnd || unsafe { GetFocus() == hwnd };
+    text(
+        dc,
+        Control::AboutRepository.text(),
+        label,
+        state.palette.text,
+        if active { fonts.link.0 } else { fonts.body.0 },
     )?;
     focus(hwnd, dc, client, state)
 }

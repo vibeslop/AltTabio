@@ -5,26 +5,32 @@ use crate::win32::wide;
 use alttabio::dialog_layout::{Rect, scale};
 use alttabio::settings::Settings;
 use alttabio::settings_form::{
-    Control, DialogButton, SELECTOR_ITEM_HEIGHT, Selector, SettingOption, SettingsLayout,
+    Control, DialogButton, REPOSITORY_URL, SELECTOR_ITEM_HEIGHT, Selector, SettingOption,
+    SettingsLayout,
 };
 use std::ffi::c_void;
+use std::sync::OnceLock;
 use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::HFONT;
+use windows::Win32::UI::Controls::{
+    ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, TOOLTIPS_CLASSW, TTF_IDISHWND,
+    TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON,
     CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_SETCURSEL, CB_SETITEMHEIGHT, CBS_DROPDOWNLIST,
     CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, HMENU, MoveWindow, SW_HIDE, SW_SHOW,
     SendMessageW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CONTROLPARENT, WS_GROUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
-use windows::core::{Error, PCWSTR, Result, w};
+use windows::core::{Error, PCWSTR, PWSTR, Result, w};
 // SS_OWNERDRAW is otherwise exposed only by the broad SystemServices bindings.
 const OWNER_DRAW_STATIC: WINDOW_STYLE = WINDOW_STYLE(0x000d);
 
 /// The window of each entry of `Control::all`, in creation order.
 #[derive(Clone, Default)]
-pub(super) struct DialogControls(Vec<(Control, HWND)>);
+pub(super) struct DialogControls(Vec<(Control, HWND)>, HWND);
 
 impl DialogControls {
     pub(super) fn create(
@@ -56,11 +62,17 @@ impl DialogControls {
             }
             controls.0.push((control, hwnd));
         }
+        controls.1 =
+            create_repository_tooltip(parent, instance, controls.get(Control::AboutRepository))?;
         Ok(controls)
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = (Control, HWND)> + '_ {
         self.0.iter().copied()
+    }
+
+    pub(super) const fn repository_tooltip(&self) -> HWND {
+        self.1
     }
 
     /// The window of `control`, or a null handle before the controls exist.
@@ -90,6 +102,20 @@ impl DialogControls {
                 size_selector_items(hwnd, layout.dpi)?;
             }
             let mut rect = control.window_rect(layout, layout.dpi);
+            if control == Control::PageIntro {
+                // SAFETY: this child belongs to the dialog. The empty About intro would overlap
+                // its higher viewport and obscure the top of the logo. The result is previous visibility.
+                unsafe {
+                    let _previous = ShowWindow(
+                        hwnd,
+                        if pages.category.intro().is_empty() {
+                            SW_HIDE
+                        } else {
+                            SW_SHOW
+                        },
+                    );
+                }
+            }
             if let Some(category) = control.category() {
                 // SAFETY: these child windows are owned by the live dialog. ShowWindow
                 // reports their previous visibility, not a fallible status.
@@ -144,6 +170,66 @@ impl DialogControls {
             set_control_font(hwnd, fonts.of(control));
         }
     }
+}
+
+fn create_repository_tooltip(parent: HWND, instance: HINSTANCE, link: HWND) -> Result<HWND> {
+    static TEXT: OnceLock<Vec<u16>> = OnceLock::new();
+    let text = TEXT.get_or_init(|| wide(REPOSITORY_URL));
+    let init = INITCOMMONCONTROLSEX {
+        dwSize: u32::try_from(std::mem::size_of::<INITCOMMONCONTROLSEX>()).unwrap_or_default(),
+        dwICC: ICC_WIN95_CLASSES,
+    };
+    // SAFETY: the sized request registers the standard native tooltip class.
+    if !unsafe { InitCommonControlsEx(&raw const init) }.as_bool() {
+        return Err(Error::new(
+            E_FAIL,
+            "could not initialize the native link tooltip",
+        ));
+    }
+    // SAFETY: the dialog owns this popup, so Windows destroys it before releasing dialog state.
+    // It has no borrowed creation data; the cached URL below lives for the process lifetime.
+    let tooltip = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            TOOLTIPS_CLASSW,
+            None,
+            WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
+            0,
+            0,
+            0,
+            0,
+            Some(parent),
+            None,
+            Some(instance),
+            None,
+        )
+    }?;
+    let tool = TTTOOLINFOW {
+        cbSize: u32::try_from(std::mem::size_of::<TTTOOLINFOW>()).unwrap_or_default(),
+        uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+        hwnd: parent,
+        uId: link.0 as usize,
+        lpszText: PWSTR(text.as_ptr().cast_mut()),
+        ..Default::default()
+    };
+    // SAFETY: tooltip copies the structure synchronously and borrows only the static text.
+    // TTF_SUBCLASS handles ordinary pointer tracking without calling application code.
+    if unsafe {
+        SendMessageW(
+            tooltip,
+            TTM_ADDTOOLW,
+            None,
+            Some(LPARAM(std::ptr::from_ref(&tool) as isize)),
+        )
+    }
+    .0 == 0
+    {
+        return Err(Error::new(
+            E_FAIL,
+            "could not attach the native GitHub tooltip",
+        ));
+    }
+    Ok(tooltip)
 }
 
 fn create_child(

@@ -258,7 +258,7 @@ impl DialogState {
     fn create_controls(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
         let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
-        self.previews = Some(Rc::new(selectors::Previews::load(instance)?));
+        self.previews = Some(Rc::new(selectors::Previews::load(instance, self.dpi)?));
         self.controls =
             DialogControls::create(parent, instance, &layout, self.dpi, &fonts, &self.settings)?;
         self.fonts = Some(Rc::new(fonts));
@@ -274,8 +274,10 @@ impl DialogState {
 
     fn update_dpi(&mut self, dpi: u32) -> Result<()> {
         let fonts = DialogFonts::create(dpi)?;
+        let previews = selectors::Previews::load(self.instance, dpi)?;
         self.controls.apply_fonts(&fonts);
         self.fonts = Some(Rc::new(fonts));
+        self.previews = Some(Rc::new(previews));
         self.pages.rescale(self.dpi, dpi);
         self.dpi = dpi;
         self.resize()
@@ -423,6 +425,7 @@ const fn selector_preview_bit(selector: Selector) -> u8 {
 
 struct DialogFonts {
     body: OwnedFont,
+    link: OwnedFont,
     heading: OwnedFont,
     sidebar_title: OwnedFont,
     strong: OwnedFont,
@@ -435,6 +438,7 @@ impl DialogFonts {
     fn create(dpi: u32) -> Result<Self> {
         Ok(Self {
             body: OwnedFont::pixels(dpi, 14, FW_NORMAL.0.cast_signed())?,
+            link: OwnedFont::underlined_pixels(dpi, 14, FW_NORMAL.0.cast_signed())?,
             heading: OwnedFont::pixels(dpi, 22, FW_SEMIBOLD.0.cast_signed())?,
             sidebar_title: OwnedFont::pixels(dpi, 21, FW_SEMIBOLD.0.cast_signed())?,
             strong: OwnedFont::pixels(dpi, 14, FW_SEMIBOLD.0.cast_signed())?,
