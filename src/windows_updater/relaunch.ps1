@@ -6,6 +6,14 @@ $previous = Join-Path $Work 'previous.exe'
 $staged = Join-Path $Work 'AltTabio.exe'
 $replaced = $false
 $parentExited = $false
+function Restore-Access([string] $Sddl) {
+    $access = [Security.AccessControl.AccessControlSections]::Access
+    $permissions = New-Object Security.AccessControl.FileSecurity
+    $permissions.SetSecurityDescriptorSddlForm($Sddl, $access)
+    # Apply only the DACL, without requesting owner or audit privileges. Each call needs a fresh
+    # object because SetAccessControl clears its modification flags after persisting them.
+    [IO.File]::SetAccessControl($Target, $permissions)
+}
 try {
     # Acquire the old process before acknowledging readiness, so a reused PID cannot be waited on.
     $parent = [Diagnostics.Process]::GetProcessById($ParentId)
@@ -20,13 +28,18 @@ try {
     if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -cne $Hash) {
         throw 'The staged executable failed its SHA-256 check.'
     }
-    # One same-volume replacement preserves the destination's ACL and creates a rollback copy.
+    # ReplaceFile can recalculate inherited ACEs against the staging folder's restrictive ACL.
+    # Restore the installation's policy before launching, including after a rollback.
+    $access = [Security.AccessControl.AccessControlSections]::Access
+    $permissions = (Get-Acl -LiteralPath $Target).GetSecurityDescriptorSddlForm($access)
     [IO.File]::Replace($staged, $Target, $previous)
     $replaced = $true
     try {
+        Restore-Access $permissions
         Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) -WindowStyle Hidden -ErrorAction Stop
     } catch {
         [IO.File]::Replace($previous, $Target, (Join-Path $Work 'failed.exe'))
+        Restore-Access $permissions
         $replaced = $false
         throw
     }

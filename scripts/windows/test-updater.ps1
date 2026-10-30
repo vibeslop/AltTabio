@@ -13,6 +13,24 @@ $null = New-Item -ItemType Directory -Path $root
 
 function Literal([string] $Text) { return "'" + $Text.Replace("'", "''") + "'" }
 function Assert([bool] $Condition, [string] $Message) { if (-not $Condition) { throw $Message } }
+function Set-FixtureDirectoryAcl([string] $Path, [bool] $AllowReaders) {
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+    $administrators = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+    foreach ($identity in @($currentUser, $system, $administrators)) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    if ($AllowReaders) {
+        $users = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            $users, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
 function Run-Script([string] $Script, [Diagnostics.Process] $Parent = $null) {
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))
     # Read the child streams directly, including deliberate failures, without PowerShell's
@@ -77,22 +95,46 @@ $Mode = 'stage'
     return @{ Result = $result; Work = $work }
 }
 
-function Relaunch-Case([string] $Name, [bool] $FailLaunch, [bool] $BadHash = $false) {
+function Relaunch-Case(
+    [string] $Name,
+    [bool] $FailLaunch,
+    [bool] $BadHash = $false,
+    [bool] $ProtectedTarget = $false,
+    [bool] $FailPermissions = $false
+) {
     $folder = Join-Path $root $Name
     $work = Join-Path $folder 'stage'
     $null = New-Item -ItemType Directory -Path $work -Force
+    # Match the real protected staging folder, with fewer readers than the installation.
+    Set-FixtureDirectoryAcl $work $false
     $target = Join-Path $folder "user's [copy] `$test.exe"
     $staged = Join-Path $work 'AltTabio.exe'
     [IO.File]::WriteAllText($target, 'old executable')
+    if ($ProtectedTarget) {
+        $acl = Get-Acl -LiteralPath $target
+        $acl.SetAccessRuleProtection($true, $true)
+        Set-Acl -LiteralPath $target -AclObject $acl
+    }
     [IO.File]::WriteAllText($staged, 'new executable')
     [IO.File]::WriteAllText((Join-Path $folder 'AltTabio.ini'), 'keep these settings')
     $hash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
     if ($BadHash) { $hash = '0' * 64 }
+    $originalAcl = (Get-Acl -LiteralPath $target).Sddl
+    Assert ((Get-Acl -LiteralPath $staged).Sddl -cne $originalAcl) "$Name requires distinct staged and target permissions"
     $sleep = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('Start-Sleep -Seconds 300'))
     $parent = Start-Process -FilePath $powershell -WindowStyle Hidden -ArgumentList @('-NoProfile', '-EncodedCommand', $sleep) -PassThru
     $launchLog = Join-Path $folder 'launches.txt'
     $mock = @'
 $script:LaunchCount = 0
+$script:PermissionsCount = 0
+function New-Object {
+    param($TypeName)
+    if ($FailPermissions -and $TypeName -eq 'Security.AccessControl.FileSecurity') {
+        $script:PermissionsCount++
+        if ($script:PermissionsCount -eq 1) { throw 'Simulated permission restoration failure' }
+    }
+    Microsoft.PowerShell.Utility\New-Object -TypeName $TypeName
+}
 function Start-Process {
     param($FilePath, $WorkingDirectory, $WindowStyle, $ErrorAction)
     $script:LaunchCount++
@@ -100,8 +142,7 @@ function Start-Process {
     [IO.File]::AppendAllText($LaunchLog, [IO.File]::ReadAllText($FilePath) + "`n")
 }
 '@
-    $script = "`$Work = $(Literal $work)`n`$Target = $(Literal $target)`n`$Hash = '$hash'`n`$ParentId = $($parent.Id)`n`$LaunchLog = $(Literal $launchLog)`n`$FailLaunch = `$$FailLaunch`n" + $mock + "`n" + $relaunch
-    $originalAcl = (Get-Acl -LiteralPath $target).Sddl
+    $script = "`$Work = $(Literal $work)`n`$Target = $(Literal $target)`n`$Hash = '$hash'`n`$ParentId = $($parent.Id)`n`$LaunchLog = $(Literal $launchLog)`n`$FailLaunch = `$$FailLaunch`n`$FailPermissions = `$$FailPermissions`n" + $mock + "`n" + $relaunch
     try { $result = Run-Script $script $parent }
     finally {
         if (-not $parent.HasExited) { $parent.Kill() }
@@ -110,12 +151,12 @@ function Start-Process {
     }
     Assert ($result.Output.Contains('READY')) "$Name did not acknowledge readiness: $($result.Output)"
     Assert ([IO.File]::ReadAllText((Join-Path $folder 'AltTabio.ini')) -ceq 'keep these settings') "$Name changed settings"
-    $expected = if ($FailLaunch -or $BadHash) { 'old executable' } else { 'new executable' }
+    $expected = if ($FailLaunch -or $BadHash -or $FailPermissions) { 'old executable' } else { 'new executable' }
     Assert ([IO.File]::ReadAllText($target) -ceq $expected) "$Name left the wrong executable: $($result.Output)"
     $updatedAcl = (Get-Acl -LiteralPath $target).Sddl
     Assert ($updatedAcl -ceq $originalAcl) "$Name changed executable permissions. Before: $originalAcl After: $updatedAcl"
     Assert ([IO.File]::ReadAllText($launchLog).Trim() -ceq $expected) "$Name relaunched the wrong executable"
-    if ($FailLaunch -or $BadHash) {
+    if ($FailLaunch -or $BadHash -or $FailPermissions) {
         Assert ($result.Code -eq 1) "$Name should report a failure"
         Assert (Test-Path -LiteralPath (Join-Path $work 'error.txt')) "$Name lost the failure diagnostic"
     } else {
@@ -125,6 +166,10 @@ function Start-Process {
 }
 
 try {
+    # CI's temporary directory can use legacy inheritance flags. ReplaceFile converts those
+    # flags and can duplicate equivalent ACEs, breaking a raw SDDL comparison. Give the fixture
+    # an explicit, modern ACL so the exact assertion below measures preservation of its policy.
+    Set-FixtureDirectoryAcl $root $true
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
     foreach ($text in @($download, $relaunch)) {
         $tokens = $null; $errors = $null
@@ -151,6 +196,11 @@ try {
     Relaunch-Case 'successful-replacement' $false
     Relaunch-Case 'failed-launch-rollback' $true
     Relaunch-Case 'tampered-stage' $false $true
+    Relaunch-Case 'protected-successful-replacement' $false -ProtectedTarget $true
+    Relaunch-Case 'protected-failed-launch-rollback' $true -ProtectedTarget $true
+    Relaunch-Case 'protected-tampered-stage' $false -BadHash $true -ProtectedTarget $true
+    Relaunch-Case 'failed-permission-rollback' $false -FailPermissions $true
+    Relaunch-Case 'protected-failed-permission-rollback' $false -ProtectedTarget $true -FailPermissions $true
     Write-Output 'Windows updater verification, replacement, and rollback checks passed.'
 } finally {
     # Resolve and constrain the only recursive cleanup to this run's unique test directory.
