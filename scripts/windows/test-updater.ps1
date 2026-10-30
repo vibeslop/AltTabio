@@ -112,7 +112,8 @@ function Start-Process {
     Assert ([IO.File]::ReadAllText((Join-Path $folder 'AltTabio.ini')) -ceq 'keep these settings') "$Name changed settings"
     $expected = if ($FailLaunch -or $BadHash) { 'old executable' } else { 'new executable' }
     Assert ([IO.File]::ReadAllText($target) -ceq $expected) "$Name left the wrong executable: $($result.Output)"
-    Assert ((Get-Acl -LiteralPath $target).Sddl -ceq $originalAcl) "$Name changed executable permissions"
+    $updatedAcl = (Get-Acl -LiteralPath $target).Sddl
+    Assert ($updatedAcl -ceq $originalAcl) "$Name changed executable permissions. Before: $originalAcl After: $updatedAcl"
     Assert ([IO.File]::ReadAllText($launchLog).Trim() -ceq $expected) "$Name relaunched the wrong executable"
     if ($FailLaunch -or $BadHash) {
         Assert ($result.Code -eq 1) "$Name should report a failure"
