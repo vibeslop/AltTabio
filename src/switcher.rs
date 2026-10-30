@@ -323,8 +323,7 @@ impl SwitcherSession {
             InputAction::CloseSelected => self.command(WindowCommand::Close),
             InputAction::WindowCommand(command) => self.command(command),
             InputAction::NumberKey(position) if self.filter_visible() => {
-                if self.filter_visible()
-                    && let Ok(digit) = u32::try_from(position)
+                if let Ok(digit) = u32::try_from(position)
                     && let Some(character) = char::from_digit(digit, 10)
                 {
                     self.switcher.append_filter_character(character);
