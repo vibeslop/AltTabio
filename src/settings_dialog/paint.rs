@@ -250,31 +250,23 @@ fn paint_navigation(
     } else {
         state.palette.sidebar
     };
-    rounded(dc, client, scale(7, state.dpi), surface)?;
-    if selected {
-        rounded(
-            dc,
-            RECT {
-                left: 0,
-                top: scale(12, state.dpi),
-                right: scale(3, state.dpi),
-                bottom: client.bottom - scale(12, state.dpi),
-            },
-            scale(2, state.dpi),
-            state.palette.text,
-        )?;
-    }
+    rounded(dc, client, scale(8, state.dpi), surface)?;
+    let ink = if selected || state.hovered.get() == hwnd {
+        state.palette.text
+    } else {
+        state.palette.secondary
+    };
     super::drawing::icon(
         dc,
         category,
         scale(12, state.dpi),
         scale(12, state.dpi),
         state.dpi,
-        state.palette.text,
+        ink,
         surface,
     )?;
     let mut rect = client;
-    rect.left += scale(41, state.dpi);
+    rect.left += scale(42, state.dpi);
     rect.right -= scale(8, state.dpi);
     let fonts = state
         .fonts
@@ -284,7 +276,7 @@ fn paint_navigation(
         dc,
         category.title(),
         rect,
-        state.palette.text,
+        ink,
         if selected {
             fonts.strong.0
         } else {
