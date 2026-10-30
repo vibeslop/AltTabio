@@ -1,12 +1,15 @@
 //! Immutable paint snapshots remain readable while native calls re-enter the dialog.
 use super::{
-    DialogFonts, DialogState, controls::DialogControls, selectors::Previews, theme::ThemePalette,
+    DialogFonts, DialogState,
+    controls::{DialogControls, selected_index},
+    selectors::Previews,
+    theme::ThemePalette,
 };
 use crate::native_drawing::OwnedBrush;
 use alttabio::{
     failure_run::SharedFailureRun,
     settings::IconColor,
-    settings_form::{SettingsLayout, SettingsPages},
+    settings_form::{Control, Selector, SettingsLayout, SettingsPages},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -30,6 +33,7 @@ pub(super) struct PaintState {
     pub(super) begin_paint_failures: Rc<SharedFailureRun>,
     layout: SettingsLayout,
     icon: IconColor,
+    checked_selection: [Option<usize>; 2],
 }
 
 impl PaintState {
@@ -38,6 +42,9 @@ impl PaintState {
     }
     pub(super) const fn selected_icon(&self) -> IconColor {
         self.icon
+    }
+    pub(super) const fn checked_index(&self, selector: Selector) -> Option<usize> {
+        self.checked_selection[selector as usize]
     }
 }
 
@@ -56,6 +63,10 @@ impl DialogState {
             begin_paint_failures: Rc::clone(&self.begin_paint_failures),
             layout: self.layout(),
             icon: self.selected_icon(),
+            checked_selection: [Selector::Theme, Selector::Icon].map(|selector| {
+                self.dropdown_selection[selector as usize]
+                    .or_else(|| selected_index(self.controls.get(Control::Selector(selector))))
+            }),
         }
     }
 

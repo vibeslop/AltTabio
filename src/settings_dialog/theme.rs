@@ -8,8 +8,7 @@ use alttabio::settings_form::Control;
 use std::mem::size_of;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, HBRUSH, HDC, SetBkColor, SetBkMode,
-    SetTextColor, TRANSPARENT,
+    COLOR_BTNSHADOW, COLOR_GRAYTEXT, HBRUSH, HDC, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_THEMECHANGED};
 use windows::core::{Error, HRESULT, PCWSTR, Result, w};
@@ -96,7 +95,8 @@ pub(super) struct ThemePalette {
     pub(super) control_surface: COLORREF,
     pub(super) pressed_surface: COLORREF,
     pub(super) control_border: COLORREF,
-    pub(super) accent: COLORREF,
+    pub(super) field_border: COLORREF,
+    pub(super) field_hot_border: COLORREF,
 }
 
 impl ThemePalette {
@@ -115,7 +115,8 @@ impl ThemePalette {
                 control_surface: dark::CONTROL_SURFACE,
                 pressed_surface: dark::PRESSED_SURFACE,
                 control_border: rgb(70, 70, 70),
-                accent: system_color(COLOR_HIGHLIGHT),
+                field_border: rgb(80, 80, 80),
+                field_hot_border: rgb(119, 119, 119),
             }
         } else {
             Self {
@@ -128,10 +129,11 @@ impl ThemePalette {
                 rule: rgb(232, 232, 232),
                 text: rgb(26, 26, 26),
                 disabled_text: system_color(COLOR_GRAYTEXT),
-                control_surface: rgb(240, 240, 240),
+                control_surface: rgb(255, 255, 255),
                 pressed_surface: system_color(COLOR_BTNSHADOW),
                 control_border: rgb(210, 210, 210),
-                accent: system_color(COLOR_HIGHLIGHT),
+                field_border: rgb(201, 201, 201),
+                field_hot_border: rgb(138, 138, 138),
             }
         }
     }

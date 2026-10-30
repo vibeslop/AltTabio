@@ -7,15 +7,49 @@ use crate::native_drawing::{
     DRAW_TEXT_VCENTER, draw_text_with_font, fill_color, frame_color,
 };
 use alttabio::dialog_layout::{Point, hairline, scale};
-use alttabio::settings_form::{Category, Control, DialogButton, Selector, SettingOption};
+use alttabio::settings_form::{Category, Control, Selector, SettingOption};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LRESULT, RECT};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, HDC, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, DrawFocusRect, EndPaint, GetWindowDC, HDC, PAINTSTRUCT, ReleaseDC,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETSTATE, DI_NORMAL, DrawIconEx, GetClientRect, SendMessageW, WM_QUERYUISTATE,
+    BM_GETSTATE, DI_NORMAL, DrawIconEx, GetClientRect, GetWindowRect, SendMessageW, WM_QUERYUISTATE,
 };
 use windows::core::{Error, Result};
 const BUTTON_STATE_PUSHED: usize = 0x0004;
+
+pub(super) fn paint_popup_border(window: HWND, state: &PaintState) -> Result<()> {
+    let mut rect = RECT::default();
+    // SAFETY: the live combo list owns this nonclient paint and rect is writable.
+    unsafe { GetWindowRect(window, &raw mut rect)? };
+    // SAFETY: window is the live popup; the borrowed window DC is released below.
+    let dc = unsafe { GetWindowDC(Some(window)) };
+    if dc.is_invalid() {
+        return Err(Error::from_thread());
+    }
+    let result = frame_color(
+        dc,
+        RECT {
+            left: 0,
+            top: 0,
+            right: rect.right - rect.left,
+            bottom: rect.bottom - rect.top,
+        },
+        state.palette.field_border,
+        hairline(state.dpi),
+    );
+    // SAFETY: this releases exactly the window DC acquired above, even when painting failed.
+    let released = unsafe { ReleaseDC(Some(window), dc) };
+    if released == 0 {
+        eprintln!("Could not release the settings popup window DC");
+    }
+    result?;
+    if released == 0 {
+        return Err(Error::from_thread());
+    }
+    Ok(())
+}
 pub(super) fn paint_control_message(hwnd: HWND, state: &PaintState) -> LRESULT {
     let mut paint = PAINTSTRUCT::default();
     // SAFETY: hwnd is live for WM_PAINT and paint is writable.
@@ -125,8 +159,8 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
                 let mut rect = native(control.rect(&layout));
                 rect.top -= state.pages.offset();
                 rect.bottom -= state.pages.offset();
-                if matches!(control, Control::Label(_)) {
-                    rect.right = client.right - scale(28, state.dpi);
+                if let Control::Label(selector) = control {
+                    rect.right = Control::Selector(selector).rect(&layout).right();
                 }
                 rule(dc, rect, control, state)?;
             }
@@ -137,37 +171,7 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
         Control::Selector(selector) => paint_combo_box(dc, client, selector, state),
         Control::Button(_) => paint_push_button(hwnd, dc, client, control, state),
         Control::AboutRepository => paint_repository_link(hwnd, dc, client, state),
-        Control::AboutIdentity => {
-            if let Some(previews) = state.previews.as_ref() {
-                // SAFETY: the snapshot retains the owned icon, and the borrowed DC stays live.
-                unsafe {
-                    DrawIconEx(
-                        dc,
-                        0,
-                        scale(3, state.dpi),
-                        previews.logo(state.selected_icon()),
-                        scale(42, state.dpi),
-                        scale(42, state.dpi),
-                        0,
-                        None,
-                        DI_NORMAL,
-                    )?;
-                }
-            }
-            let mut rect = client;
-            rect.left += scale(55, state.dpi);
-            rect.bottom = scale(25, state.dpi);
-            text(dc, "AltTabio", rect, state.palette.text, fonts.strong.0)?;
-            rect.top = scale(25, state.dpi);
-            rect.bottom = client.bottom;
-            text(
-                dc,
-                concat!("Version ", env!("CARGO_PKG_VERSION")),
-                rect,
-                state.palette.secondary,
-                fonts.help.0,
-            )
-        }
+        Control::AboutIdentity => paint_identity(dc, client, state, fonts),
         Control::PageHeading | Control::PageIntro => text(
             dc,
             if control == Control::PageHeading {
@@ -183,21 +187,81 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
             },
             fonts.of(control),
         ),
+        Control::AboutDescription => text(
+            dc,
+            control.text(),
+            RECT {
+                bottom: client.top + scale(22, state.dpi),
+                ..client
+            },
+            state.palette.text,
+            fonts.body.0,
+        ),
+        Control::Section(_) => text(
+            dc,
+            control.text(),
+            RECT {
+                bottom: client.top + scale(20, state.dpi),
+                ..client
+            },
+            state.palette.text,
+            fonts.section.0,
+        ),
+        Control::AboutCopyright | Control::AboutLicense => text(
+            dc,
+            control.text(),
+            client,
+            state.palette.secondary,
+            fonts.of(control),
+        ),
         _ => {
             rule(dc, client, control, state)?;
             text(
                 dc,
                 control.text(),
                 client,
-                if matches!(control, Control::Section(_)) {
-                    state.palette.secondary
-                } else {
-                    state.palette.text
-                },
+                state.palette.text,
                 fonts.of(control),
             )
         }
     }
+}
+
+fn paint_identity(
+    dc: HDC,
+    client: RECT,
+    state: &PaintState,
+    fonts: &super::DialogFonts,
+) -> Result<()> {
+    if let Some(previews) = state.previews.as_ref() {
+        // SAFETY: the snapshot retains the owned icon, and the borrowed DC stays live.
+        unsafe {
+            DrawIconEx(
+                dc,
+                0,
+                0,
+                previews.logo(state.selected_icon()),
+                scale(42, state.dpi),
+                scale(42, state.dpi),
+                0,
+                None,
+                DI_NORMAL,
+            )?;
+        }
+    }
+    let mut rect = client;
+    rect.left += scale(55, state.dpi);
+    rect.bottom = scale(22, state.dpi);
+    text(dc, "AltTabio", rect, state.palette.text, fonts.identity.0)?;
+    rect.top = scale(24, state.dpi);
+    rect.bottom = client.bottom;
+    text(
+        dc,
+        concat!("Version ", env!("CARGO_PKG_VERSION")),
+        rect,
+        state.palette.secondary,
+        fonts.help.0,
+    )
 }
 
 fn text(
@@ -225,12 +289,10 @@ fn focus(hwnd: HWND, dc: HDC, rect: RECT, state: &PaintState) -> Result<()> {
     let visible =
         unsafe { GetFocus() == hwnd && SendMessageW(hwnd, WM_QUERYUISTATE, None, None).0 & 1 == 0 };
     if visible {
-        frame_color(
-            dc,
-            inset(rect, scale(2, state.dpi)),
-            state.palette.accent,
-            hairline(state.dpi),
-        )?;
+        // SAFETY: the live paint DC and bounded client rectangle belong to this control.
+        if !unsafe { DrawFocusRect(dc, &inset(rect, scale(2, state.dpi))) }.as_bool() {
+            return Err(Error::from_thread());
+        }
     }
     Ok(())
 }
@@ -250,7 +312,7 @@ fn paint_navigation(
     } else {
         state.palette.sidebar
     };
-    rounded(dc, client, scale(8, state.dpi), surface)?;
+    rounded(dc, client, scale(4, state.dpi), surface)?;
     let ink = if selected || state.hovered.get() == hwnd {
         state.palette.text
     } else {
@@ -266,7 +328,7 @@ fn paint_navigation(
         surface,
     )?;
     let mut rect = client;
-    rect.left += scale(42, state.dpi);
+    rect.left += scale(40, state.dpi);
     rect.right -= scale(8, state.dpi);
     let fonts = state
         .fonts
@@ -302,15 +364,16 @@ fn paint_switch(
     let checked = is_checked(hwnd);
     let ink = state.palette.label_text(enabled);
     let mut copy = client;
-    copy.right -= scale(54, state.dpi);
+    copy.left += scale(4, state.dpi);
+    copy.right -= scale(48, state.dpi);
+    copy.top += scale(7, state.dpi);
+    copy.bottom = copy.top + scale(20, state.dpi);
     let help = option.help();
     if help.is_empty() {
         text(dc, option.label(), copy, ink, fonts.body.0)?;
     } else {
-        copy.top += scale(13, state.dpi);
-        copy.bottom = copy.top + scale(20, state.dpi);
         text(dc, option.label(), copy, ink, fonts.body.0)?;
-        copy.top += scale(24, state.dpi);
+        copy.top += scale(22, state.dpi);
         copy.bottom = copy.top + scale(18, state.dpi);
         text(
             dc,
@@ -326,10 +389,10 @@ fn paint_switch(
     }
     let height = scale(20, state.dpi);
     let rect = RECT {
-        left: client.right - scale(34, state.dpi),
-        right: client.right,
-        top: client.top + (client.bottom - client.top - height) / 2,
-        bottom: client.top + (client.bottom - client.top - height) / 2 + height,
+        left: client.right - scale(38, state.dpi),
+        right: client.right - scale(4, state.dpi),
+        top: client.top + scale(7, state.dpi),
+        bottom: client.top + scale(7, state.dpi) + height,
     };
     rounded(
         dc,
@@ -382,7 +445,7 @@ fn paint_repository_link(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) 
     unsafe {
         DrawIconEx(
             dc,
-            0,
+            scale(4, state.dpi),
             (client.bottom - size) / 2,
             previews.github(state.palette.dark),
             size,
@@ -393,7 +456,7 @@ fn paint_repository_link(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) 
         )?;
     }
     let mut label = client;
-    label.left += scale(26, state.dpi);
+    label.left += scale(30, state.dpi);
     // SAFETY: GetFocus only queries the current UI thread's focus.
     let active = state.hovered.get() == hwnd || unsafe { GetFocus() == hwnd };
     text(
@@ -420,30 +483,26 @@ fn paint_push_button(
         .cast_unsigned()
         & BUTTON_STATE_PUSHED
         != 0;
-    let save = control == Control::Button(DialogButton::Ok);
-    let background = if save && enabled {
-        state.palette.text
-    } else if pressed {
+    let hovered = state.hovered.get() == hwnd && enabled;
+    let background = if pressed {
         state.palette.pressed_surface
-    } else if state.hovered.get() == hwnd && enabled {
-        state.palette.selected
     } else {
         state.palette.control_surface
     };
     rounded(
         dc,
         client,
-        scale(6, state.dpi),
-        if save && enabled {
-            background
+        scale(4, state.dpi),
+        if hovered {
+            state.palette.field_hot_border
         } else {
-            state.palette.control_border
+            state.palette.field_border
         },
     )?;
     rounded(
         dc,
         inset(client, hairline(state.dpi)),
-        scale(5, state.dpi),
+        scale(3, state.dpi),
         background,
     )?;
     let fonts = state
@@ -454,11 +513,7 @@ fn paint_push_button(
         dc,
         control.text(),
         client,
-        if save && enabled {
-            state.palette.background
-        } else {
-            state.palette.label_text(enabled)
-        },
+        state.palette.label_text(enabled),
         DRAW_TEXT_CENTER | DRAW_TEXT_VCENTER | DRAW_TEXT_SINGLE_LINE | DRAW_TEXT_NO_PREFIX,
         fonts.button.0,
     )?;
@@ -469,13 +524,17 @@ fn paint_combo_box(dc: HDC, client: RECT, selector: Selector, state: &PaintState
     rounded(
         dc,
         client,
-        scale(6, state.dpi),
-        state.palette.control_border,
+        scale(3, state.dpi),
+        if state.hovered.get() == state.controls.get(Control::Selector(selector)) {
+            state.palette.field_hot_border
+        } else {
+            state.palette.field_border
+        },
     )?;
     rounded(
         dc,
         inset(client, hairline(state.dpi)),
-        scale(5, state.dpi),
+        scale(2, state.dpi),
         state.palette.control_surface,
     )?;
     let button_left = client.right - scale(28, state.dpi);
@@ -483,6 +542,7 @@ fn paint_combo_box(dc: HDC, client: RECT, selector: Selector, state: &PaintState
         super::selectors::paint_entry(
             dc,
             RECT {
+                left: client.left + scale(2, state.dpi),
                 right: button_left,
                 ..client
             },

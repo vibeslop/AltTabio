@@ -118,6 +118,10 @@ fn scrolling_keeps_the_dialog_background_themed_during_dropdown_moves() -> Resul
     let dialog = dialog()?;
     let host = dialog.host()?;
     for dpi in [96, 144, 192] {
+        crate::settings_dialog::page_tests::resize_client(
+            &dialog,
+            alttabio::dialog_layout::Size::new(640, 420).scaled(dpi),
+        )?;
         host.state_mut()?.update_dpi(dpi)?;
         for theme_index in [1, 2] {
             {

@@ -36,7 +36,7 @@ use std::rc::Rc;
 use theme::ThemePalette;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT, InvalidateRect, RDW_ALLCHILDREN,
+    COLOR_WINDOW, FW_BOLD, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT, InvalidateRect, RDW_ALLCHILDREN,
     RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -429,6 +429,7 @@ struct DialogFonts {
     heading: OwnedFont,
     sidebar_title: OwnedFont,
     strong: OwnedFont,
+    identity: OwnedFont,
     help: OwnedFont,
     section: OwnedFont,
     button: OwnedFont,
@@ -442,8 +443,9 @@ impl DialogFonts {
             heading: OwnedFont::pixels(dpi, 22, FW_SEMIBOLD.0.cast_signed())?,
             sidebar_title: OwnedFont::pixels(dpi, 21, FW_SEMIBOLD.0.cast_signed())?,
             strong: OwnedFont::pixels(dpi, 14, FW_SEMIBOLD.0.cast_signed())?,
+            identity: OwnedFont::pixels(dpi, 16, FW_SEMIBOLD.0.cast_signed())?,
             help: OwnedFont::pixels(dpi, 12, FW_NORMAL.0.cast_signed())?,
-            section: OwnedFont::pixels(dpi, 12, FW_SEMIBOLD.0.cast_signed())?,
+            section: OwnedFont::pixels(dpi, 12, FW_BOLD.0.cast_signed())?,
             button: OwnedFont::pixels(dpi, 13, FW_NORMAL.0.cast_signed())?,
         })
     }
@@ -454,7 +456,7 @@ impl DialogFonts {
             Control::PageHeading => self.heading.0,
             Control::PageIntro => self.help.0,
             Control::Section(_) => self.section.0,
-            Control::Button(_) => self.button.0,
+            Control::Button(_) | Control::AboutCopyright | Control::AboutLicense => self.button.0,
             _ => self.body.0,
         }
     }
@@ -581,6 +583,7 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
         Control::Selector(selector) if notification == CBN_DROPDOWN => {
             state.dropdown_selection[selector as usize] =
                 selected_index(state.controls.get(Control::Selector(selector)));
+            state.refresh_paint_state();
             return Some(LRESULT(0));
         }
         Control::Selector(selector) if notification == CBN_SELENDCANCEL => {

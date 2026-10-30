@@ -40,6 +40,26 @@ pub(super) fn pump(window: HWND) {
     }
 }
 
+pub(super) fn resize_client(dialog: &ModalDialog<DialogState>, client: Size) -> Result<()> {
+    let mut outer = RECT::default();
+    let mut current = RECT::default();
+    // SAFETY: the test owns this hidden window and both output rectangles are writable.
+    unsafe {
+        GetWindowRect(dialog.window(), &raw mut outer)?;
+        GetClientRect(dialog.window(), &raw mut current)?;
+        SetWindowPos(
+            dialog.window(),
+            None,
+            0,
+            0,
+            client.width + outer.right - outer.left - current.right,
+            client.height + outer.bottom - outer.top - current.bottom,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+        )?;
+    }
+    Ok(())
+}
+
 #[test]
 fn tab_moves_from_the_selected_category_into_its_settings() -> Result<()> {
     let dialog = dialog()?;
@@ -67,6 +87,7 @@ fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_
     let dialog = dialog()?;
     let window = dialog.window();
     let host = dialog.host()?;
+    resize_client(&dialog, Size::new(640, 420))?;
     let (navigation, hover, save, viewport) = {
         let state = host.state_mut()?;
         (

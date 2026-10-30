@@ -10,7 +10,7 @@ use alttabio::settings_form::{
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
-use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::HFONT;
 use windows::Win32::UI::Controls::{
     ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, TOOLTIPS_CLASSW, TTF_IDISHWND,
@@ -19,10 +19,11 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON,
-    CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_SETCURSEL, CB_SETITEMHEIGHT, CBS_DROPDOWNLIST,
-    CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, HMENU, MoveWindow, SW_HIDE, SW_SHOW,
-    SendMessageW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_GETITEMHEIGHT, CB_SETCURSEL, CB_SETITEMHEIGHT,
+    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, GetWindowRect, HMENU,
+    MoveWindow, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{Error, PCWSTR, PWSTR, Result, w};
 // SS_OWNERDRAW is otherwise exposed only by the broad SystemServices bindings.
@@ -297,8 +298,23 @@ fn create_child(
 }
 
 fn size_selector_items(hwnd: HWND, dpi: u32) -> Result<()> {
-    // The selected content plus the native frame fits the 35px layout row.
-    for (index, height) in [(usize::MAX, 29), (0, SELECTOR_ITEM_HEIGHT)] {
+    let mut bounds = RECT::default();
+    // SAFETY: hwnd is the live combo; the rectangle is writable and the query is scalar.
+    let current_height = unsafe {
+        GetWindowRect(hwnd, &raw mut bounds)?;
+        SendMessageW(hwnd, CB_GETITEMHEIGHT, Some(WPARAM(usize::MAX)), None)
+    };
+    let current_height = i32::try_from(current_height.0)
+        .ok()
+        .filter(|height| *height >= 0)
+        .ok_or_else(|| Error::new(E_FAIL, "could not read settings preview height"))?;
+    // The native frame does not scale with the owner-drawn content at every DPI.
+    let frame_height = (bounds.bottom - bounds.top - current_height).max(0);
+    let field_height = (scale(32, dpi) - frame_height).max(1);
+    for (index, height) in [
+        (usize::MAX, field_height),
+        (0, scale(SELECTOR_ITEM_HEIGHT, dpi)),
+    ] {
         let result = unsafe {
             // SAFETY: hwnd is a live owner-drawn combo. -1 addresses its selected field;
             // zero sets the fixed height of every list item. Payloads are scalar pixels.
@@ -306,7 +322,7 @@ fn size_selector_items(hwnd: HWND, dpi: u32) -> Result<()> {
                 hwnd,
                 CB_SETITEMHEIGHT,
                 Some(WPARAM(index)),
-                Some(LPARAM(scale(height, dpi) as isize)),
+                Some(LPARAM(height as isize)),
             )
         };
         if result.0 == CB_ERR as isize {

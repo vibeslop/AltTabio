@@ -17,7 +17,7 @@ impl SettingsLayout {
     #[must_use]
     pub fn for_dpi(dpi: u32) -> Self {
         Self::for_client(
-            Size::new(scale(728, dpi), scale(616, dpi)),
+            Size::new(scale(728, dpi), scale(600, dpi)),
             dpi,
             Category::General,
         )
@@ -25,9 +25,9 @@ impl SettingsLayout {
 
     #[must_use]
     pub fn for_client(client: Size, dpi: u32, category: Category) -> Self {
-        let sidebar_width = scale(184, dpi);
+        let sidebar_width = scale(168, dpi);
         let footer_y = client.height - scale(58, dpi);
-        let viewport_y = scale(if category == Category::About { 76 } else { 100 }, dpi);
+        let viewport_y = scale(if category == Category::About { 74 } else { 99 }, dpi);
         let main_width = (client.width - sidebar_width).max(1);
         // Reserve a scrollbar column on every page so switching never shifts the controls.
         let usable_width = main_width - scale(17, dpi);
@@ -53,26 +53,26 @@ impl SettingsLayout {
         let s = |value| scale(value, self.dpi);
         match control {
             Control::Viewport => self.viewport,
-            Control::SidebarTitle => Rect::new(s(24), s(22), s(148), s(30)),
+            Control::SidebarTitle => Rect::new(s(24), s(22), self.sidebar.width - s(48), s(30)),
             Control::Navigation(category) => Rect::new(
                 s(12),
                 if category == Category::About {
                     self.footer.y - s(60)
                 } else {
-                    s(76 + category as i32 * 46)
+                    s(77 + category as i32 * 44)
                 },
-                s(160),
-                s(42),
+                s(144),
+                s(40),
             ),
             Control::PageHeading => Rect::new(
                 self.viewport.x + self.content_x,
-                s(26),
+                s(24),
                 self.content_width,
                 s(30),
             ),
             Control::PageIntro => Rect::new(
                 self.viewport.x + self.content_x,
-                s(62),
+                s(60),
                 self.content_width,
                 s(19),
             ),
@@ -103,34 +103,44 @@ impl SettingsLayout {
                 let height = match control {
                     Control::Section(_) => {
                         if *y != 0 {
-                            *y += s(21);
+                            *y += 12;
                         }
-                        s(22)
+                        27
                     }
-                    Control::Checkbox(option) if !option.help().is_empty() => s(68),
-                    Control::AboutIdentity => s(48),
+                    Control::Checkbox(option) if !option.help().is_empty() => 54,
+                    Control::AboutIdentity => {
+                        *y += 5;
+                        42
+                    }
                     Control::AboutDescription => {
-                        *y += s(20);
-                        s(50)
+                        *y += 24;
+                        38
                     }
                     Control::AboutCopyright => {
-                        *y += s(24);
-                        s(28)
+                        *y += 24;
+                        24
                     }
-                    Control::AboutLicense => s(28),
-                    Control::AboutRepository => s(34),
-                    _ => s(57),
+                    Control::AboutLicense => 24,
+                    Control::AboutRepository => 28,
+                    Control::Label(_) | Control::Selector(_) => 44,
+                    _ => 34,
                 };
-                let row = Rect::new(self.content_x, *y, self.content_width, height);
+                // Scale absolute positions instead of accumulating rounded row heights.
+                let row = Rect::new(
+                    self.content_x,
+                    s(*y),
+                    self.content_width,
+                    s(*y + height) - s(*y),
+                );
                 if !matches!(control, Control::Label(_)) {
                     *y += height;
                 }
                 let rect = match control {
                     Control::Selector(_) => Rect::new(
                         row.right() - s(SELECTOR_WIDTH),
-                        row.y + s(11),
+                        row.y + s(6),
                         s(SELECTOR_WIDTH),
-                        s(35),
+                        s(32),
                     ),
                     Control::Label(_) => {
                         Rect::new(row.x, row.y, row.width - s(SELECTOR_WIDTH + 20), row.height)
@@ -148,7 +158,7 @@ impl SettingsLayout {
             .map(|(_, rect)| rect.bottom())
             .max()
             .unwrap_or_default()
-            + scale(20, self.dpi)
+            + scale(16, self.dpi)
     }
 
     #[must_use]

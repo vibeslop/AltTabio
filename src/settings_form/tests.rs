@@ -100,9 +100,9 @@ fn category_pages_keep_all_bindings_once_with_unique_native_ids() {
 
 #[test]
 fn layouts_keep_rows_clear_of_switches_and_footer_at_supported_sizes_and_dpis() {
-    for dpi in [96, 120, 144, 192] {
+    for dpi in [96, 120, 144, 168, 192] {
         for size in [
-            Size::new(728, 616),
+            Size::new(728, 600),
             Size::new(640, 420),
             Size::new(1000, 800),
         ] {
@@ -124,6 +124,12 @@ fn layouts_keep_rows_clear_of_switches_and_footer_at_supported_sizes_and_dpis() 
                     );
                 }
                 assert_eq!(layout.viewport.bottom(), layout.footer.y);
+                for control in [Control::SidebarTitle, Control::Navigation(category)] {
+                    assert!(
+                        layout.sidebar.contains(control.rect(&layout)),
+                        "{control:?}"
+                    );
+                }
                 assert!(
                     Control::Button(DialogButton::Ok).rect(&layout).right()
                         < Control::Button(DialogButton::Cancel).rect(&layout).x
@@ -148,7 +154,7 @@ fn layouts_keep_rows_clear_of_switches_and_footer_at_supported_sizes_and_dpis() 
 #[test]
 fn navigation_restores_each_page_scroll_and_clamps_after_resize() {
     let mut pages = SettingsPages::default();
-    let layout = SettingsLayout::for_dpi(96);
+    let layout = SettingsLayout::for_client(Size::new(640, 420), 96, Category::Appearance);
     pages.select(Category::Appearance);
     pages.scroll_to(i32::MAX, &layout);
     let appearance = pages.offset();
@@ -167,7 +173,7 @@ fn navigation_restores_each_page_scroll_and_clamps_after_resize() {
 fn keyboard_focus_reveals_the_last_row_without_moving_the_heading() {
     let mut pages = SettingsPages::default();
     pages.select(Category::Appearance);
-    let layout = SettingsLayout::for_dpi(96);
+    let layout = SettingsLayout::for_client(Size::new(640, 420), 96, Category::Appearance);
     let header = Control::PageHeading.rect(&layout);
     let row = Control::Checkbox(SettingOption::FullDesktopPreview).rect(&layout);
     pages.reveal(row, &layout);
@@ -182,7 +188,7 @@ fn keyboard_focus_reveals_the_last_row_without_moving_the_heading() {
 fn high_resolution_wheel_and_dpi_changes_preserve_position() {
     let mut pages = SettingsPages::default();
     pages.select(Category::Appearance);
-    let layout = SettingsLayout::for_dpi(96);
+    let layout = SettingsLayout::for_client(Size::new(640, 420), 96, Category::Appearance);
     for _ in 0..4 {
         pages.wheel(-30, 45, &layout);
     }
@@ -192,4 +198,14 @@ fn high_resolution_wheel_and_dpi_changes_preserve_position() {
     pages.select(Category::General);
     pages.wheel(-120, 45, &layout);
     assert_eq!(pages.offset(), 0);
+}
+
+#[test]
+fn default_window_exposes_every_setting_without_scrolling_at_each_dpi() {
+    for dpi in [96, 120, 144, 168, 192] {
+        for category in Category::ALL {
+            let layout = SettingsLayout::for_client(Size::new(728, 600).scaled(dpi), dpi, category);
+            assert_eq!(layout.max_scroll(category), 0, "{category:?} at {dpi} DPI");
+        }
+    }
 }

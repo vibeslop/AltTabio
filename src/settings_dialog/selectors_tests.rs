@@ -10,9 +10,32 @@ use alttabio::settings_form::SELECTOR_ITEM_HEIGHT;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_GETCOUNT, CB_GETITEMHEIGHT, CB_SETCURSEL, CB_SHOWDROPDOWN, GetClientRect, SendMessageW,
-    WM_DRAWITEM, WM_PRINTCLIENT,
+    CB_GETCOUNT, CB_GETITEMHEIGHT, CB_SETCURSEL, CB_SHOWDROPDOWN, GetClientRect, GetWindowRect,
+    SendMessageW, WM_DRAWITEM, WM_PRINTCLIENT,
 };
+
+fn assert_selector_metrics(
+    combo: windows::Win32::Foundation::HWND,
+    selector: Selector,
+    dpi: u32,
+) -> Result<()> {
+    let mut bounds = RECT::default();
+    // SAFETY: combo belongs to this live test dialog; these queries have scalar payloads.
+    let (count, item_height) = unsafe {
+        GetWindowRect(combo, &raw mut bounds)?;
+        (
+            SendMessageW(combo, CB_GETCOUNT, None, None),
+            SendMessageW(combo, CB_GETITEMHEIGHT, Some(WPARAM(0)), None),
+        )
+    };
+    assert_eq!(
+        count.0,
+        isize::try_from(selector.entries().len()).unwrap_or_default()
+    );
+    assert_eq!(item_height.0, scale(SELECTOR_ITEM_HEIGHT, dpi) as isize);
+    assert_eq!(bounds.bottom - bounds.top, scale(32, dpi));
+    Ok(())
+}
 
 #[test]
 fn native_popup_rows_keep_their_theme_while_dialog_state_is_in_use() -> Result<()> {
@@ -105,15 +128,7 @@ fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<
             let mut row = 0;
             for selector in [Selector::Theme, Selector::Icon] {
                 let combo = host.state_mut()?.controls.get(Control::Selector(selector));
-                // SAFETY: combo is this test's live control; both queries use scalar payloads.
-                let count = unsafe { SendMessageW(combo, CB_GETCOUNT, None, None) };
-                let item_height =
-                    unsafe { SendMessageW(combo, CB_GETITEMHEIGHT, Some(WPARAM(0)), None) };
-                assert_eq!(
-                    count.0,
-                    isize::try_from(selector.entries().len()).unwrap_or_default()
-                );
-                assert_eq!(item_height.0, height as isize);
+                assert_selector_metrics(combo, selector, dpi)?;
                 for (index, label) in selector.entries().into_iter().enumerate() {
                     let field = RenderTarget::new(width, height)?;
                     // SAFETY: the index is one of this combo's inserted strings, and the memory

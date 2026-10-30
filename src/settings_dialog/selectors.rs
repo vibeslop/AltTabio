@@ -6,12 +6,12 @@ use crate::native_drawing::{
     DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE, DRAW_TEXT_VCENTER,
     draw_text_with_font, fill_color, frame_color, rgb,
 };
-use alttabio::dialog_layout::{hairline, scale};
+use alttabio::dialog_layout::{Point, hairline, scale};
 use alttabio::settings::{IconColor, Theme};
 use alttabio::settings_form::{Control, Selector, THEME_CHOICES};
-use alttabio::theme::{ResolvedTheme, Rgb8};
+use alttabio::theme::ResolvedTheme;
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HINSTANCE, LRESULT, RECT};
-use windows::Win32::Graphics::Gdi::HDC;
+use windows::Win32::Graphics::Gdi::{DrawFocusRect, HDC};
 use windows::Win32::UI::Controls::{
     DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED,
     ODT_COMBOBOX,
@@ -87,28 +87,48 @@ pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &PaintState) -> Opti
         )?;
         // Windows uses -1 for an empty combo box. Paint its surface, with no entry.
         if item.itemID != u32::MAX {
+            let popup = item.itemState.0 & ODS_COMBOBOXEDIT.0 == 0;
+            let mut entry = item.rcItem;
+            if popup {
+                entry.right -= scale(16, state.dpi);
+            }
             paint_entry(
                 item.hDC,
-                item.rcItem,
+                entry,
                 selector,
                 usize::try_from(item.itemID).unwrap_or(usize::MAX),
                 color,
                 state,
             )?;
+            // Native CB_GETCURSEL follows the hot row while the popup is tracking.
+            // Keep the check on the choice captured before tracking began.
+            if popup && state.checked_index(selector) == usize::try_from(item.itemID).ok() {
+                let x = item.rcItem.right - scale(16, state.dpi);
+                let y = item.rcItem.top + (item.rcItem.bottom - item.rcItem.top) / 2;
+                super::drawing::polyline(
+                    item.hDC,
+                    &[
+                        Point::new(x, y),
+                        Point::new(x + scale(3, state.dpi), y + scale(3, state.dpi)),
+                        Point::new(x + scale(8, state.dpi), y - scale(3, state.dpi)),
+                    ],
+                    color,
+                    hairline(state.dpi),
+                )?;
+            }
         }
         if item.itemState.0 & ODS_FOCUS.0 != 0 && item.itemState.0 & ODS_NOFOCUSRECT.0 == 0 {
             let inset = scale(2, state.dpi);
-            frame_color(
-                item.hDC,
-                RECT {
-                    left: item.rcItem.left + inset,
-                    top: item.rcItem.top + inset,
-                    right: item.rcItem.right - inset,
-                    bottom: item.rcItem.bottom - inset,
-                },
-                color,
-                hairline(state.dpi),
-            )?;
+            let focus = RECT {
+                left: item.rcItem.left + inset,
+                top: item.rcItem.top + inset,
+                right: item.rcItem.right - inset,
+                bottom: item.rcItem.bottom - inset,
+            };
+            // SAFETY: the native owner-draw message supplies this live DC and item rectangle.
+            if !unsafe { DrawFocusRect(item.hDC, &raw const focus) }.as_bool() {
+                return Err(Error::from_thread());
+            }
         }
         Ok::<(), Error>(())
     })();
@@ -136,7 +156,7 @@ pub(super) fn paint_entry(
         .ok_or_else(|| Error::from_hresult(E_FAIL))?;
     let padding = scale(8, state.dpi);
     let size = scale(20, state.dpi);
-    let width = scale(32, state.dpi);
+    let width = scale(if selector == Selector::Icon { 20 } else { 32 }, state.dpi);
     let preview = RECT {
         left: rect.left + padding,
         top: rect.top + (rect.bottom - rect.top - size) / 2,
@@ -155,7 +175,7 @@ pub(super) fn paint_entry(
                 // executable resource kept live by the application module. Sizes are positive.
                 DrawIconEx(
                     dc,
-                    preview.left + (width - size) / 2,
+                    preview.left,
                     preview.top,
                     *icon,
                     size,
@@ -213,8 +233,21 @@ fn paint_theme_preview(dc: HDC, rect: RECT, theme: Theme, dpi: u32) -> Result<()
 }
 
 fn paint_theme_sample(dc: HDC, rect: RECT, theme: ResolvedTheme, dpi: u32) -> Result<()> {
-    let palette = theme.palette();
-    fill_color(dc, rect, rgb_color(palette.background))?;
+    let (background, selected, ink, border) = match theme {
+        ResolvedTheme::Light => (
+            rgb(244, 244, 244),
+            rgb(221, 221, 221),
+            rgb(96, 96, 96),
+            rgb(166, 166, 166),
+        ),
+        ResolvedTheme::Dark => (
+            rgb(40, 40, 40),
+            rgb(74, 74, 74),
+            rgb(212, 212, 212),
+            rgb(119, 119, 119),
+        ),
+    };
+    fill_color(dc, rect, background)?;
     let inset = scale(3, dpi);
     let row = RECT {
         left: rect.left + inset,
@@ -222,8 +255,8 @@ fn paint_theme_sample(dc: HDC, rect: RECT, theme: ResolvedTheme, dpi: u32) -> Re
         right: rect.right - inset,
         bottom: rect.top + scale(9, dpi),
     };
-    fill_color(dc, row, rgb_color(palette.selected))?;
-    for (y, ink) in [(5, palette.primary), (13, palette.secondary)] {
+    fill_color(dc, row, selected)?;
+    for y in [5, 13] {
         fill_color(
             dc,
             RECT {
@@ -232,16 +265,16 @@ fn paint_theme_sample(dc: HDC, rect: RECT, theme: ResolvedTheme, dpi: u32) -> Re
                 right: row.right - scale(2, dpi),
                 bottom: rect.top + scale(y + 1, dpi),
             },
-            rgb_color(ink),
+            ink,
         )?;
     }
-    frame_color(dc, rect, rgb_color(palette.window_border), hairline(dpi))
-}
-
-const fn rgb_color(color: Rgb8) -> COLORREF {
-    rgb(color.red, color.green, color.blue)
+    frame_color(dc, rect, border, hairline(dpi))
 }
 
 #[cfg(test)]
 #[path = "selectors_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "selector_hover_tests.rs"]
+mod hover_tests;

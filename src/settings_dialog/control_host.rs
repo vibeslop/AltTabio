@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CB_GETDROPPEDSTATE, IDC_HAND, LoadCursorW, PostMessageW, SendMessageW, SetCursor, WM_COMMAND,
     WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_ENABLE,
     WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCDESTROY, WM_PAINT, WM_PRINTCLIENT, WM_SETCURSOR, WM_SETFOCUS, WM_VSCROLL,
+    WM_NCDESTROY, WM_NCPAINT, WM_PAINT, WM_PRINTCLIENT, WM_SETCURSOR, WM_SETFOCUS, WM_VSCROLL,
 };
 use windows::core::{BOOL, Error, Result};
 const SETTINGS_CONTROL_SUBCLASS_ID: usize = 1;
@@ -101,10 +101,10 @@ unsafe extern "system" fn settings_control_subclass_proc(
         if hwnd == root {
             return paint_dialog_message(message, wparam, lparam, &state);
         }
-        // The combo's popup is not in the child-control table. Leave all its native
-        // painting and selection behavior intact, but preserve an outside press.
+        // Keep the popup's native selection/capture behavior and owner-drawn items.
+        // Only replace its nonclient edge with the same neutral edge as the field.
         let Some(control) = state.controls.find(hwnd) else {
-            return dropdown_input::handle_message(hwnd, message, wparam, lparam, &state);
+            return popup_message(hwnd, message, wparam, lparam, &state);
         };
         if control == Control::AboutRepository && message == WM_SETCURSOR {
             return link_cursor();
@@ -194,6 +194,24 @@ unsafe extern "system" fn settings_control_subclass_proc(
         // SAFETY: all unhandled messages retain their original payloads; no panic leaves the ABI.
         unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
     })
+}
+
+fn popup_message(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    state: &PaintState,
+) -> Option<LRESULT> {
+    if message != WM_NCPAINT {
+        return dropdown_input::handle_message(hwnd, message, wparam, lparam, state);
+    }
+    // SAFETY: the live native popup processes its unchanged nonclient paint first.
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if let Err(error) = super::paint::paint_popup_border(hwnd, state) {
+        eprintln!("Could not paint the settings popup border: {error}");
+    }
+    Some(result)
 }
 
 fn link_cursor() -> Option<LRESULT> {
