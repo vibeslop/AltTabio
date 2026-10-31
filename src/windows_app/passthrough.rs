@@ -19,7 +19,7 @@ impl App {
             GetForegroundWindow()
         };
         if !foreground.is_invalid()
-            && foreground != self.hwnd
+            && self.overlay_focus.observe(foreground == self.hwnd)
             && self.is_visible()
             && self.pending_shell.is_none()
             && !self.dialog_state().blocks_switcher()

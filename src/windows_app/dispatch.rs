@@ -36,6 +36,7 @@ impl App {
                 if self.is_visible()
                     && self.pending_shell.is_none()
                     && !self.dialog_state().blocks_switcher()
+                    && self.overlay_focus.observe(false)
                 {
                     self.hide_overlay();
                 }

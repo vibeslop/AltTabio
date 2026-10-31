@@ -202,11 +202,12 @@ mod tests {
                     keys[usize::from(key.0)] = 0x80;
                 }
             }
-            // SAFETY: the buffer contains all 256 key states and affects only this thread.
-            unsafe { SetKeyboardState(&keys) }?;
             app.session.clear_filter();
             app.apply_input_action(InputAction::AppendSearchCharacter('a'));
             let message = if right_alt { WM_SYSKEYDOWN } else { WM_KEYDOWN };
+            // SAFETY: install this thread's synthetic modifiers after redraw work, immediately
+            // before the key event whose GetKeyState snapshot the fixture controls.
+            unsafe { SetKeyboardState(&keys) }?;
             let _handled = app.handle_message(message, WPARAM(0x41), LPARAM(0));
             if right_alt {
                 let _handled = app.handle_message(WM_CHAR, WPARAM('ą' as usize), LPARAM(0));
@@ -301,6 +302,16 @@ mod tests {
         assert!(!app.session.is_visible());
         app.session
             .open([SwitchTask::new(1, 10, "Alpha", "editor")], None);
+        let _handled = app.handle_message(
+            WM_ACTIVATE,
+            WPARAM(usize::try_from(WA_INACTIVE).unwrap_or_default()),
+            LPARAM(0),
+        );
+        assert!(
+            app.session.is_visible(),
+            "an opening that never acquired focus must remain usable"
+        );
+        let _lost = app.overlay_focus.observe(true);
         let _handled = app.handle_message(
             WM_ACTIVATE,
             WPARAM(usize::try_from(WA_INACTIVE).unwrap_or_default()),

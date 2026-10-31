@@ -8,7 +8,9 @@ use std::ffi::c_void;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetFocus};
-use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOW, SW_SHOWNA, ShowWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, SW_HIDE, SW_SHOW, SW_SHOWNA, ShowWindow,
+};
 use windows::core::Error;
 
 impl App {
@@ -16,6 +18,7 @@ impl App {
         if self.dialog_state().blocks_switcher() {
             return;
         }
+        self.overlay_focus.reset();
         self.hide_filter_feedback();
         match enumerate_switchable_windows(&self.settings) {
             Ok(EnumeratedTasks { tasks, icons }) => {
@@ -56,7 +59,7 @@ impl App {
         self.request_redraw();
     }
 
-    pub(super) fn focus_overlay(&self) {
+    pub(super) fn focus_overlay(&mut self) {
         // SAFETY: the HWND is live and owned by this UI thread.
         unsafe {
             if !request_foreground(self.hwnd) {
@@ -69,10 +72,14 @@ impl App {
             if let Err(error) = SetFocus(Some(self.hwnd)) {
                 eprintln!("Could not focus the overlay: {error}");
             }
+            let _lost = self
+                .overlay_focus
+                .observe(GetForegroundWindow() == self.hwnd);
         }
     }
 
     pub(super) fn hide_overlay(&mut self) {
+        self.overlay_focus.reset();
         self.hide_filter_feedback();
         self.stop_shell_dismissal();
         self.task_refresh.clear_notices();

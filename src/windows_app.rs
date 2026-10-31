@@ -30,6 +30,7 @@ use crate::win32::{ComApartment, module_instance, wide};
 use alttabio::dialog_state::DialogState;
 use alttabio::failure_run::FailureRun;
 use alttabio::overlay_pointer::CloseButtonInteraction;
+use alttabio::overlay_window::OverlayFocus;
 use alttabio::settings::Settings;
 use alttabio::settings_change::{hook_settings, switcher_session_settings};
 use alttabio::switcher::SwitcherSession;
@@ -190,6 +191,7 @@ struct App {
     filter_popup_failures: FailureRun,
     begin_paint_failures: FailureRun,
     foreground_bounds_failures: FailureRun,
+    overlay_focus: OverlayFocus,
     hit_test_failures: FailureRun,
     cursor_read_failures: FailureRun,
     resolved_theme: ResolvedTheme,
@@ -245,6 +247,7 @@ impl App {
             filter_popup_failures: FailureRun::default(),
             begin_paint_failures: FailureRun::default(),
             foreground_bounds_failures: FailureRun::default(),
+            overlay_focus: OverlayFocus::default(),
             hit_test_failures: FailureRun::default(),
             cursor_read_failures: FailureRun::default(),
             resolved_theme,
