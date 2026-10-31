@@ -31,56 +31,77 @@ fn scan(
 ) -> Result<bool, String> {
     let mut recent_failure = false;
     for entry in fs::read_dir(folder).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "Could not inspect update work in {}: {error}",
+                    folder.display()
+                );
+                continue;
+            }
+        };
         let name = entry.file_name();
         let Some(owner) = name.to_str().and_then(owner_pid) else {
             continue;
         };
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-            continue;
+        match clean_folder(&path, owner, now, &alive) {
+            Ok(failed) => recent_failure |= failed,
+            Err(error) => eprintln!("Could not clean update folder {}: {error}", path.display()),
         }
-        match fs::symlink_metadata(path.join("error.txt")) {
-            Ok(failure)
-                if failure.is_file()
-                    && failure.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0 =>
-            {
-                let age = now
-                    .duration_since(failure.modified().map_err(|error| error.to_string())?)
-                    .unwrap_or_default();
-                if age < RETAIN {
-                    recent_failure = true;
-                    continue;
-                }
-            }
-            Ok(_) => continue,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
-        }
-        let age = now
-            .duration_since(metadata.modified().map_err(|error| error.to_string())?)
-            .unwrap_or_default();
-        if age < RETAIN || alive(owner)? {
-            continue;
-        }
-        match fs::read_to_string(path.join("helper.pid")) {
-            Ok(text) => {
-                let Ok(pid) = text.trim().parse::<u32>() else {
-                    continue;
-                };
-                if pid == 0 || alive(pid)? {
-                    continue;
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
-        }
-        // Only exact child names in the protected installation are eligible. Reparse points,
-        // recent work, live app owners, and live helpers were excluded before recursive cleanup.
-        fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
     }
     Ok(recent_failure)
+}
+
+fn clean_folder(
+    path: &Path,
+    owner: u32,
+    now: SystemTime,
+    alive: &impl Fn(u32) -> Result<bool, String>,
+) -> Result<bool, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Ok(false);
+    }
+    match fs::symlink_metadata(path.join("error.txt")) {
+        Ok(failure)
+            if failure.is_file()
+                && failure.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0 =>
+        {
+            let age = now
+                .duration_since(failure.modified().map_err(|error| error.to_string())?)
+                .unwrap_or_default();
+            if age < RETAIN {
+                return Ok(true);
+            }
+        }
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    let age = now
+        .duration_since(metadata.modified().map_err(|error| error.to_string())?)
+        .unwrap_or_default();
+    if age < RETAIN || alive(owner)? {
+        return Ok(false);
+    }
+    match fs::read_to_string(path.join("helper.pid")) {
+        Ok(text) => {
+            let Ok(pid) = text.trim().parse::<u32>() else {
+                return Ok(false);
+            };
+            if pid == 0 || alive(pid)? {
+                return Ok(false);
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    // Only exact child names in the protected installation are eligible. Reparse points,
+    // recent work, live app owners, and live helpers were excluded before recursive cleanup.
+    fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+    Ok(false)
 }
 
 fn owner_pid(name: &str) -> Option<u32> {
@@ -115,7 +136,48 @@ fn process_is_running(pid: u32) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
     use std::time::UNIX_EPOCH;
+
+    #[test]
+    fn a_locked_orphan_does_not_block_other_cleanup_or_update_checks() {
+        let now = SystemTime::now();
+        let nonce = now
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "AltTabio-locked-cleanup-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap_or_else(|error| panic!("{error}"));
+        let locked = root.join(".AltTabio-update-100-1");
+        let other = root.join(".AltTabio-update-200-2");
+        fs::create_dir(&locked).unwrap_or_else(|error| panic!("{error}"));
+        fs::create_dir(&other).unwrap_or_else(|error| panic!("{error}"));
+        let payload = locked.join("download.zip");
+        fs::write(&payload, b"fixture").unwrap_or_else(|error| panic!("{error}"));
+        let handle = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&payload)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let later = now + Duration::from_hours(48);
+        let result = scan(&root, later, |_| Ok(false));
+        drop(handle);
+        assert_eq!(
+            result,
+            Ok(false),
+            "locked cleanup must not abort the update check"
+        );
+        assert!(locked.exists());
+        assert!(
+            !other.exists(),
+            "one locked folder must not stop later work"
+        );
+        assert_eq!(scan(&root, later, |_| Ok(false)), Ok(false));
+        fs::remove_dir_all(root).unwrap_or_else(|error| panic!("{error}"));
+    }
 
     #[test]
     fn maintenance_keeps_active_work_and_failure_receipts_but_removes_old_orphans() {

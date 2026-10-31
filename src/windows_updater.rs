@@ -92,7 +92,11 @@ pub fn check(manual: bool) -> Result<Checked, String> {
             target
                 .parent()
                 .ok_or_else(|| "The installation has no parent folder".to_owned())?,
-        )?
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            false
+        })
         && !manual
     {
         return Err("The previous update failed. Automatic installation is deferred for 24 hours; use Check for Updates to retry manually.".to_owned());
