@@ -114,7 +114,7 @@ impl Updates {
                         Completion::Staged(result) => {
                             log_failure(&result);
                             if result.is_err() {
-                                self.check_at = now + RETRY;
+                                self.check_at = now + INTERVAL;
                             }
                             let result = result.map(|staged| self.staged = Some(staged));
                             self.policy.installed(result)
@@ -255,7 +255,10 @@ impl Updates {
                 self.restart_at = Instant::now();
                 return Action::None;
             }
-            Step::Check => spawn(|| Completion::Checked(windows_updater::check())),
+            Step::Check => {
+                let manual = self.request == Request::Active;
+                spawn(move || Completion::Checked(windows_updater::check(manual)))
+            }
             Step::Install(update) => {
                 spawn(move || Completion::Staged(windows_updater::stage(&update)))
             }
@@ -432,6 +435,33 @@ mod tests {
     use alttabio::settings::Settings;
     use alttabio::switcher::SwitchTask;
     use alttabio::update::Version;
+
+    #[test]
+    fn failed_staging_waits_a_day_before_another_automatic_download() {
+        let mut updates = Updates {
+            automatic: true,
+            ..Updates::default()
+        };
+        assert_eq!(updates.policy.check_due(), Step::Check);
+        let update = Update {
+            version: Version::parse("9.0.0").unwrap_or_else(|| panic!("test version")),
+            url: "fixture".to_owned(),
+        };
+        assert!(matches!(
+            updates.policy.checked(Ok(Checked::Available(update))),
+            Step::Install(_)
+        ));
+        let (sender, receiver) = mpsc::channel();
+        assert!(
+            sender
+                .send(Completion::Staged(Err("fixture failure".to_owned())))
+                .is_ok()
+        );
+        updates.worker = Some(receiver);
+        let before = Instant::now();
+        assert!(matches!(updates.tick(true, false), Action::None));
+        assert!(updates.check_at >= before + INTERVAL);
+    }
 
     #[test]
     fn automatic_helper_readiness_does_not_override_a_returned_user() {

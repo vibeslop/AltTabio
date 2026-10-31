@@ -4,6 +4,8 @@
 //! Windows supplies PowerShell, JSON/ZIP support, SHA-256, and curl. Keeping the scripts
 //! embedded avoids loading elevated code from a writable temporary script or from PATH.
 
+mod cleanup;
+
 use crate::win32::{system_directory, wide};
 use alttabio::update::{Asset, Checked, Release, Update, Version, newest_windows_update};
 use std::io::{BufRead, BufReader};
@@ -30,6 +32,30 @@ pub fn is_release_build() -> bool {
     option_env!("ALTTABIO_RELEASE") == Some("1") && !cfg!(debug_assertions)
 }
 
+pub fn start_maintenance() -> Result<(), String> {
+    if !is_release_build() {
+        return Ok(());
+    }
+    std::thread::Builder::new()
+        .name("alttabio-update-cleanup".to_owned())
+        .spawn(|| {
+            let result = (|| {
+                let target = std::env::current_exe().map_err(|error| error.to_string())?;
+                validate_update_target(&target)?;
+                cleanup::maintain(
+                    target
+                        .parent()
+                        .ok_or_else(|| "The installation has no parent folder".to_owned())?,
+                )
+            })();
+            if let Err(error) = result {
+                eprintln!("{error}");
+            }
+        })
+        .map_err(|error| format!("Could not start update maintenance: {error}"))?;
+    Ok(())
+}
+
 pub fn user_is_away() -> bool {
     let mut input = LASTINPUTINFO {
         cbSize: u32::try_from(size_of::<LASTINPUTINFO>()).unwrap_or_default(),
@@ -53,22 +79,31 @@ pub fn user_is_away() -> bool {
     now.wrapping_sub(input.dwTime) >= 5 * 60 * 1000
 }
 
-pub fn check() -> Result<Checked, String> {
+pub fn check(manual: bool) -> Result<Checked, String> {
     if !is_release_build() {
         return Err("This development build does not replace itself with published releases. Download a release from GitHub to enable updates.".to_owned());
     }
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .ok_or_else(|| "This copy has no release version".to_owned())?;
+    let target = std::env::current_exe().map_err(|error| error.to_string())?;
+    let target_status = validate_update_target(&target);
+    if target_status.is_ok()
+        && cleanup::maintain(
+            target
+                .parent()
+                .ok_or_else(|| "The installation has no parent folder".to_owned())?,
+        )?
+        && !manual
+    {
+        return Err("The previous update failed. Automatic installation is deferred for 24 hours; use Check for Updates to retry manually.".to_owned());
+    }
     let temporary = WorkFolder::temporary()?;
     let list = run_script_in(
         &format!("$Mode = 'check'\n{DOWNLOAD_SCRIPT}"),
         &temporary.path,
     )?;
     let update = newest_windows_update(current, &read_releases(&list)?);
-    Ok(checked_update(update, || {
-        let target = std::env::current_exe().map_err(|error| error.to_string())?;
-        validate_update_target(&target)
-    }))
+    Ok(checked_update(update, || target_status))
 }
 
 fn checked_update(

@@ -295,6 +295,9 @@ impl App {
             );
             self.start_input_hooks(hook_settings(&self.settings))?;
             self.start_update_timer();
+            if let Err(error) = crate::windows_updater::start_maintenance() {
+                eprintln!("{error}");
+            }
             win_events::publish_notify_hwnd(hwnd);
             match WinEventWatcher::install() {
                 Ok(watcher) => {

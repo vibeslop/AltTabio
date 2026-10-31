@@ -18,6 +18,7 @@ try {
     # Acquire the old process before acknowledging readiness, so a reused PID cannot be waited on.
     $parent = [Diagnostics.Process]::GetProcessById($ParentId)
     $null = $parent.Handle
+    [IO.File]::WriteAllText((Join-Path $Work 'helper.pid'), [string] $PID)
     [Console]::Out.WriteLine('READY')
     [Console]::Out.Flush()
     # The app waits out an open switcher or modal dialog before quitting. Hold the original
