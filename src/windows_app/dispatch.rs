@@ -221,13 +221,6 @@ impl App {
     }
 
     fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
-        if self
-            .hooks
-            .as_ref()
-            .is_some_and(|hooks| !hooks.action_is_current(origin))
-        {
-            return;
-        }
         if self.pending_shell.is_none()
             && !self.is_visible()
             && matches!(action, InputAction::Switch(_))
