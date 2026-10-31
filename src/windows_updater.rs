@@ -288,7 +288,7 @@ fn powershell(script: &str, temporary: &Path) -> Result<Command, String> {
             "-Command",
         ])
         .arg(format!(
-            "& {{\n$ErrorActionPreference = 'Stop'\n$PSModuleAutoLoadingPreference = 'None'\n$env:PSModulePath = {}\n{imports}$Curl = {}\n{script}\n}}",
+            "& {{\n[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n$ErrorActionPreference = 'Stop'\n$PSModuleAutoLoadingPreference = 'None'\n$env:PSModulePath = {}\n{imports}$Curl = {}\n{script}\n}}",
             literal(&modules)?, literal(&system.join("curl.exe"))?
         ))
         .stdin(Stdio::null())
@@ -507,6 +507,24 @@ mod tests {
         assert!(read_releases("not metadata").is_err());
         assert!(read_releases("v1.2.3\tunknown\tFalse\tx\ty").is_err());
         assert_eq!(read_releases(""), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn helper_output_stays_utf8_under_a_legacy_console_code_page() {
+        let temporary = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let command = powershell(
+            "[Console]::Write([string]::new([char[]]@(8217,945,55357,56832)))",
+            &temporary,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        let source = command
+            .get_args()
+            .last()
+            .and_then(|argument| argument.to_str())
+            .unwrap_or_else(|| panic!("the helper command must contain its script"));
+        let script =
+            format!("[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437);\n{source}");
+        assert_eq!(run_script(&script), Ok("’α😀".to_owned()));
     }
 
     #[test]
