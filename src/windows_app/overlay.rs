@@ -154,6 +154,7 @@ impl App {
     }
 
     pub(super) fn request_redraw(&mut self) {
+        self.set_hook_search_active(self.is_visible());
         self.sync_filter_popup();
         let source = self
             .session

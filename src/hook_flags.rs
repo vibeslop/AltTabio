@@ -12,9 +12,11 @@ use std::sync::{
 pub const INTERCEPTION_SUSPENDED: usize = 1;
 pub const SEARCH_ACTIVE: usize = 2;
 pub const OVERLAY_ACTIVE: usize = 4;
-pub const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE;
-// Generations are multiples of 8, so the flags share their word.
+pub const FILTER_VISIBLE: usize = 8;
+pub const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE | FILTER_VISIBLE;
+// Generations are multiples of 16, so the flags share their word.
 const FLAG_BITS: usize = INTERCEPTION_SUSPENDED | OVERLAY_FLAGS;
+const GENERATION_SHIFT: usize = 4;
 
 const ACTION_SWITCH: usize = 1;
 const ACTION_ACTIVATE_POSITION: usize = 2;
@@ -35,11 +37,11 @@ const ACTION_EPOCH_MASK: usize = usize::MAX >> 8;
 static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
 
 fn next_hook_generation() -> usize {
-    (NEXT_HOOK_EPOCH.fetch_add(1, Ordering::Relaxed) & ACTION_EPOCH_MASK) << 3
+    (NEXT_HOOK_EPOCH.fetch_add(1, Ordering::Relaxed) & ACTION_EPOCH_MASK) << GENERATION_SHIFT
 }
 
 const fn action_wparam(code: usize, generation: usize) -> usize {
-    (((generation >> 3) & ACTION_EPOCH_MASK) << 8) | (code & ACTION_CODE_MASK)
+    (((generation >> GENERATION_SHIFT) & ACTION_EPOCH_MASK) << 8) | (code & ACTION_CODE_MASK)
 }
 
 /// Encodes an action as the `(wparam, lparam)` payload of a message stamped with `generation`.
@@ -158,7 +160,7 @@ impl HookFlags {
         let flags = self.load();
         !self.recovery_pending()
             && flags & INTERCEPTION_SUSPENDED == 0
-            && (wparam >> 8) == ((flags >> 3) & ACTION_EPOCH_MASK)
+            && (wparam >> 8) == ((flags >> GENERATION_SHIFT) & ACTION_EPOCH_MASK)
     }
 
     /// Whether work begun under `generation`, as the hook last synchronized it, may still reach
@@ -182,6 +184,21 @@ impl HookFlags {
         } else {
             self.value.fetch_and(!flag, Ordering::AcqRel);
         }
+    }
+
+    /// Publishes capture and query presence together without changing the action generation.
+    pub fn set_search_state(&self, active: bool, filtered: bool) {
+        let search = if active { SEARCH_ACTIVE } else { 0 }
+            | if active && filtered {
+                FILTER_VISIBLE
+            } else {
+                0
+            };
+        let _previous = self
+            .value
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                Some((value & !(SEARCH_ACTIVE | FILTER_VISIBLE)) | search)
+            });
     }
 
     pub fn suspend(&self, suspended: bool) {
@@ -230,7 +247,12 @@ impl HookFlags {
             return false;
         }
         let flags = if active {
-            OVERLAY_ACTIVE | if typed_search { SEARCH_ACTIVE } else { 0 }
+            OVERLAY_ACTIVE
+                | if typed_search {
+                    SEARCH_ACTIVE | (value & FILTER_VISIBLE)
+                } else {
+                    0
+                }
         } else {
             0
         };
@@ -280,6 +302,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn query_presence_tracks_search_without_invalidating_queued_actions() {
+        let flags = HookFlags::new();
+        let generation = flags.load();
+        let (action, _) = encode_action(InputAction::Navigate(1), generation);
+        for (active, filtered, expected) in [
+            (true, true, SEARCH_ACTIVE | FILTER_VISIBLE),
+            (true, false, SEARCH_ACTIVE),
+            (false, true, 0),
+            (false, false, 0),
+        ] {
+            flags.set_search_state(active, filtered);
+            assert_eq!(flags.load() & (SEARCH_ACTIVE | FILTER_VISIBLE), expected);
+            assert!(flags.action_is_current(action));
+            assert!(flags.update_overlay(generation, true, true));
+            assert_eq!(flags.load() & FILTER_VISIBLE, expected & FILTER_VISIBLE);
+        }
+    }
+
+    #[test]
     fn number_shortcuts_preserve_translated_text_across_the_message_boundary() {
         for position in [1, 9] {
             for text in [
@@ -322,11 +363,19 @@ mod tests {
 
     #[test]
     fn action_epoch_encoding_and_validation_use_the_same_wrap_mask() {
-        for generation in [0, 8, ACTION_EPOCH_MASK << 3, usize::MAX & !7] {
+        for generation in [
+            0,
+            16,
+            ACTION_EPOCH_MASK << GENERATION_SHIFT,
+            usize::MAX & !FLAG_BITS,
+        ] {
             let flags = HookFlags::with_value(generation);
             let action = action_wparam(ACTION_CLOSE_SELECTED, generation);
             assert_eq!(action & ACTION_CODE_MASK, ACTION_CLOSE_SELECTED);
-            assert_eq!(action >> 8, (generation >> 3) & ACTION_EPOCH_MASK);
+            assert_eq!(
+                action >> 8,
+                (generation >> GENERATION_SHIFT) & ACTION_EPOCH_MASK
+            );
             assert!(flags.action_is_current(action));
             assert_eq!(decode_action(action, 0), Some(InputAction::CloseSelected));
         }
@@ -334,19 +383,19 @@ mod tests {
 
     #[test]
     fn scoped_suspension_restores_every_flag_combination_with_new_generations() {
-        for saved_flags in 0..=7 {
+        for saved_flags in 0..=FLAG_BITS {
             let flags = Arc::new(HookFlags::with_value(saved_flags));
-            let initial_generation = flags.load() & !7;
+            let initial_generation = flags.load() & !FLAG_BITS;
             let guard = HookInterceptionGuard::new(Arc::clone(&flags));
             let suspended = flags.load();
-            assert_eq!(suspended & 7, INTERCEPTION_SUSPENDED);
-            assert_ne!(suspended & !7, initial_generation);
+            assert_eq!(suspended & FLAG_BITS, INTERCEPTION_SUSPENDED);
+            assert_ne!(suspended & !FLAG_BITS, initial_generation);
             assert!(!flags.update_overlay(initial_generation, true, true));
             flags.set(SEARCH_ACTIVE, true);
             flags.set(OVERLAY_ACTIVE, true);
             drop(guard);
-            assert_eq!(flags.load() & 7, saved_flags);
-            assert_ne!(flags.load() & !7, suspended & !7);
+            assert_eq!(flags.load() & FLAG_BITS, saved_flags);
+            assert_ne!(flags.load() & !FLAG_BITS, suspended & !FLAG_BITS);
             assert!(!flags.update_overlay(suspended & !OVERLAY_FLAGS, true, true));
         }
     }
@@ -358,12 +407,15 @@ mod tests {
         flags.set(SEARCH_ACTIVE, true);
         {
             let _inner = HookInterceptionGuard::new(Arc::clone(&flags));
-            assert_eq!(flags.load() & 7, INTERCEPTION_SUSPENDED);
+            assert_eq!(flags.load() & FLAG_BITS, INTERCEPTION_SUSPENDED);
             flags.set(OVERLAY_ACTIVE, true);
         }
-        assert_eq!(flags.load() & 7, INTERCEPTION_SUSPENDED | SEARCH_ACTIVE);
+        assert_eq!(
+            flags.load() & FLAG_BITS,
+            INTERCEPTION_SUSPENDED | SEARCH_ACTIVE
+        );
         drop(outer);
-        assert_eq!(flags.load() & 7, OVERLAY_FLAGS);
+        assert_eq!(flags.load() & FLAG_BITS, OVERLAY_FLAGS);
     }
 
     #[test]
@@ -374,7 +426,7 @@ mod tests {
             panic!("modal call failed");
         });
         assert!(result.is_err());
-        assert_eq!(flags.load() & 7, OVERLAY_FLAGS);
+        assert_eq!(flags.load() & FLAG_BITS, OVERLAY_FLAGS);
     }
 
     #[test]
@@ -472,33 +524,33 @@ mod tests {
 
     #[test]
     fn generation_stays_current_until_recovery_a_boundary_or_suspension() {
-        let flags = HookFlags::with_value(8 | OVERLAY_FLAGS);
-        assert!(flags.generation_is_current(8));
+        let flags = HookFlags::with_value(16 | OVERLAY_FLAGS);
+        assert!(flags.generation_is_current(16));
         flags.set(SEARCH_ACTIVE, false);
         assert!(
-            flags.generation_is_current(8),
+            flags.generation_is_current(16),
             "UI flags are not a boundary"
         );
-        assert!(!flags.generation_is_current(16));
+        assert!(!flags.generation_is_current(32));
         flags.set_recovery_pending(true);
-        assert!(!flags.generation_is_current(8));
+        assert!(!flags.generation_is_current(16));
         flags.set_recovery_pending(false);
         flags.suspend(true);
-        assert!(!flags.generation_is_current(8));
+        assert!(!flags.generation_is_current(16));
         assert!(!flags.generation_is_current(flags.load() & !OVERLAY_FLAGS));
     }
 
     #[test]
     fn advancing_the_generation_keeps_the_ui_flags_and_retires_queued_actions() {
         // The last epoch before the counter wraps, so no generation handed out in tests repeats it.
-        let generation = ACTION_EPOCH_MASK << 3;
-        for saved_flags in 0..=7 {
+        let generation = ACTION_EPOCH_MASK << GENERATION_SHIFT;
+        for saved_flags in 0..=FLAG_BITS {
             let flags = HookFlags::with_value(generation | saved_flags);
             let (queued, _) = encode_action(InputAction::AltReleased, flags.load());
             assert_eq!(flags.action_is_current(queued), saved_flags & 1 == 0);
             flags.advance_generation();
-            assert_eq!(flags.load() & 7, saved_flags);
-            assert_ne!(flags.load() & !7, generation);
+            assert_eq!(flags.load() & FLAG_BITS, saved_flags);
+            assert_ne!(flags.load() & !FLAG_BITS, generation);
             assert!(!flags.action_is_current(queued));
         }
     }

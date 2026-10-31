@@ -12,6 +12,7 @@ pub fn hook_settings(settings: &Settings) -> HookSettings {
         replace_win_tab: settings.general.replace_win_tab,
         typed_search: settings.general.typed_search,
         search_active: false,
+        filter_visible: false,
     }
 }
 
@@ -517,6 +518,7 @@ mod tests {
                 replace_win_tab: true,
                 typed_search: false,
                 search_active: false,
+                filter_visible: false,
             }
         );
     }

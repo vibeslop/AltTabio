@@ -170,7 +170,7 @@ mod tests {
         )));
         assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
         flags.set(OVERLAY_ACTIVE, true);
-        flags.set(SEARCH_ACTIVE, true);
+        flags.set_search_state(true, true);
         flags.suspend(false);
         assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
         // The entire modal lifetime occurred between callbacks; its generation still cancels Tab.
@@ -212,6 +212,6 @@ mod tests {
         );
 
         assert!(post_context_actions(&mut context, outcome, |_, _| true));
-        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_ACTIVE | SEARCH_ACTIVE);
     }
 }

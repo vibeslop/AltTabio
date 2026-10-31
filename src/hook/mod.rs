@@ -9,8 +9,8 @@ mod replay;
 use crate::app_messages::WM_OUTSIDE_POINTER;
 use crate::win32::module_instance;
 use alttabio::hook_flags::{
-    HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS,
-    SEARCH_ACTIVE,
+    FILTER_VISIBLE, HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE,
+    OVERLAY_FLAGS, SEARCH_ACTIVE,
 };
 use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
@@ -174,8 +174,8 @@ impl HookThread {
         }
     }
 
-    pub fn set_search_active(&self, active: bool) {
-        self.flags.set(SEARCH_ACTIVE, active);
+    pub fn set_search_state(&self, active: bool, filtered: bool) {
+        self.flags.set_search_state(active, filtered);
     }
 
     pub fn set_overlay_active(&self, active: bool) {
@@ -452,6 +452,7 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         )
         .apply(context.settings);
         settings.search_active = search_active;
+        settings.filter_visible = flags & FILTER_VISIBLE != 0;
         let text = if search_active && transition == KeyTransition::Pressed {
             translate_search_character(data, context.target_thread_id, &context.keyboard_state)
         } else {

@@ -17,6 +17,7 @@ pub struct HookSettings {
     pub replace_win_tab: bool,
     pub typed_search: bool,
     pub search_active: bool,
+    pub filter_visible: bool,
 }
 
 impl Default for HookSettings {
@@ -26,6 +27,7 @@ impl Default for HookSettings {
             replace_win_tab: true,
             typed_search: true,
             search_active: false,
+            filter_visible: false,
         }
     }
 }
@@ -304,7 +306,7 @@ impl HookState {
             return HookOutcome::suppressed();
         }
 
-        if let Some(outcome) = self.process_editing_key(event, settings.search_active) {
+        if let Some(outcome) = self.process_editing_key(event, settings) {
             return outcome;
         }
 
@@ -729,8 +731,12 @@ impl HookState {
         None
     }
 
-    fn process_editing_key(&mut self, event: KeyEvent, search_active: bool) -> Option<HookOutcome> {
-        if !search_active
+    fn process_editing_key(
+        &mut self,
+        event: KeyEvent,
+        settings: HookSettings,
+    ) -> Option<HookOutcome> {
+        if !settings.search_active
             || event.transition != KeyTransition::Pressed
             || event.modifiers.left_windows
             || event.modifiers.right_windows
@@ -743,6 +749,17 @@ impl HookState {
             event.modifiers.shift,
             self.owned_key_is_down(Key::RightAlt),
         )?;
+        // An empty query has no caret or selection to move. Keep modified navigation on the
+        // switcher route too, including its paired release and final Alt-release activation.
+        if !settings.filter_visible
+            && self.switch_gesture_active()
+            && matches!(
+                event.key,
+                Key::LeftArrow | Key::RightArrow | Key::Home | Key::End
+            )
+        {
+            return None;
+        }
         // Plain navigation also moves through windows when the query is empty. Preserve the
         // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
         if !matches!(
@@ -2496,58 +2513,113 @@ mod tests {
             SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
         };
 
-        for (key, target) in [
-            (Key::LeftArrow, 10),
-            (Key::RightArrow, 30),
-            (Key::Home, 10),
-            (Key::End, 30),
-        ] {
-            let mut state = HookState::default();
-            let settings = HookSettings {
-                search_active: true,
-                ..HookSettings::default()
+        for (control, shift) in [(false, false), (false, true), (true, false), (true, true)] {
+            let modifiers = Modifiers {
+                control,
+                shift,
+                ..Modifiers::default()
             };
-            let modifiers = Modifiers::default();
-            let mut session = SwitcherSession::new(SwitcherSessionSettings {
-                typed_search: true,
-                release_alt_switches: true,
-            });
-            assert!(
-                state
-                    .process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings)
-                    .suppress
-            );
-            let opening = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
-            assert_eq!(
-                opening
-                    .actions()
-                    .next()
-                    .map(|action| session.handle_input(action)),
-                Some(SwitcherEffect::Open {
-                    selection_delta: Some(1),
-                })
-            );
-            session.open(
-                [
-                    SwitchTask::new(1, 10, "Alpha", "editor"),
-                    SwitchTask::new(2, 20, "Beta", "browser"),
-                    SwitchTask::new(3, 30, "Gamma", "terminal"),
-                ],
-                Some(1),
-            );
-            let mut effects = Vec::new();
-            for event in [
-                KeyEvent::released(Key::Tab, modifiers),
-                KeyEvent::pressed(key, modifiers),
-                KeyEvent::released(key, modifiers),
-                KeyEvent::released(Key::LeftAlt, modifiers),
+            for (key, target) in [
+                (Key::LeftArrow, 10),
+                (Key::RightArrow, 30),
+                (Key::Home, 10),
+                (Key::End, 30),
             ] {
-                let outcome = state.process_key(event, settings);
-                assert!(outcome.suppress);
-                effects.extend(outcome.actions().map(|action| session.handle_input(action)));
+                let mut state = HookState::default();
+                let settings = HookSettings {
+                    search_active: true,
+                    ..HookSettings::default()
+                };
+                let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                    typed_search: true,
+                    release_alt_switches: true,
+                });
+                assert!(
+                    state
+                        .process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings)
+                        .suppress
+                );
+                let opening = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
+                assert_eq!(
+                    opening
+                        .actions()
+                        .next()
+                        .map(|action| session.handle_input(action)),
+                    Some(SwitcherEffect::Open {
+                        selection_delta: Some(1),
+                    })
+                );
+                session.open(
+                    [
+                        SwitchTask::new(1, 10, "Alpha", "editor"),
+                        SwitchTask::new(2, 20, "Beta", "browser"),
+                        SwitchTask::new(3, 30, "Gamma", "terminal"),
+                    ],
+                    Some(1),
+                );
+                let mut effects = Vec::new();
+                for event in [
+                    KeyEvent::released(Key::Tab, modifiers),
+                    KeyEvent::pressed(key, modifiers),
+                    KeyEvent::released(key, modifiers),
+                    KeyEvent::released(Key::LeftAlt, modifiers),
+                ] {
+                    let outcome = state.process_key(event, settings);
+                    assert!(outcome.suppress);
+                    effects.extend(outcome.actions().map(|action| session.handle_input(action)));
+                }
+                assert_eq!(effects.last(), Some(&SwitcherEffect::Activate(target)));
+                assert!(!session.is_visible());
             }
-            assert_eq!(effects.last(), Some(&SwitcherEffect::Activate(target)));
-            assert!(!session.is_visible());
+        }
+    }
+
+    #[test]
+    fn modified_navigation_edits_a_nonempty_query_and_pins_the_panel() {
+        let settings = HookSettings {
+            search_active: true,
+            filter_visible: true,
+            ..HookSettings::default()
+        };
+        for (control, shift) in [(false, true), (true, false), (true, true)] {
+            let modifiers = Modifiers {
+                control,
+                shift,
+                ..Modifiers::default()
+            };
+            for key in [Key::LeftArrow, Key::RightArrow, Key::Home, Key::End] {
+                let mut state = HookState::default();
+                for event in [
+                    KeyEvent::pressed(Key::LeftAlt, ALT),
+                    KeyEvent::pressed(Key::Tab, ALT),
+                ] {
+                    let _outcome = state.process_key(event, settings);
+                }
+                let command =
+                    TextCommand::for_key(u32::from(key.virtual_key()), control, shift, false)
+                        .unwrap_or_else(|| {
+                            panic!("navigation key has no editing command: {key:?}")
+                        });
+                assert_eq!(
+                    state.process_key(KeyEvent::pressed(key, modifiers), settings),
+                    HookOutcome::one(true, InputAction::EditSearch(command))
+                );
+                assert!(
+                    state
+                        .process_key(KeyEvent::released(key, modifiers), settings)
+                        .suppress
+                );
+                assert!(
+                    state
+                        .process_key(
+                            KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+                            settings
+                        )
+                        .actions()
+                        .next()
+                        .is_none()
+                );
+            }
         }
     }
 
@@ -2999,7 +3071,7 @@ mod tests {
             ),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::EditSearch(TextCommand::Right)), None],
+                actions: [Some(InputAction::Navigate(1)), None],
             }
         );
         assert!(

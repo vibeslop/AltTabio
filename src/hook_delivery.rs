@@ -50,7 +50,7 @@ pub fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook_flags::{OVERLAY_ACTIVE, OVERLAY_FLAGS};
+    use crate::hook_flags::{OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE};
     use crate::input::{HookSettings, HookState, Key, KeyEvent, Modifiers};
 
     const ALT: Modifiers = Modifiers {
@@ -73,7 +73,10 @@ mod tests {
 
     #[test]
     fn opening_the_overlay_arms_interception_before_the_action_is_posted() {
-        for (typed_search, armed) in [(true, OVERLAY_FLAGS), (false, OVERLAY_ACTIVE)] {
+        for (typed_search, armed) in [
+            (true, OVERLAY_ACTIVE | SEARCH_ACTIVE),
+            (false, OVERLAY_ACTIVE),
+        ] {
             let (flags, generation) = current_flags();
             let mut posted = Vec::new();
             let delivery = deliver(&flags, generation, typed_search, alt_tab(), |action| {
