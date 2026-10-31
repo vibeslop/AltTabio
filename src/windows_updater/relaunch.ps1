@@ -6,6 +6,7 @@ $previous = Join-Path $Work 'previous.exe'
 $staged = Join-Path $Work 'AltTabio.exe'
 $replaced = $false
 $parentExited = $false
+$recoveryFailed = $false
 function Restore-Access([string] $Sddl) {
     $access = [Security.AccessControl.AccessControlSections]::Access
     $permissions = New-Object Security.AccessControl.FileSecurity
@@ -56,7 +57,19 @@ try {
     $message = $_.Exception.Message
     try { [IO.File]::WriteAllText((Join-Path $Work 'error.txt'), $message) }
     catch { [Console]::Error.WriteLine("Could not record the update failure: $($_.Exception.Message)") }
-    if (-not $replaced -and $parentExited -and (Test-Path -LiteralPath $Target)) {
+    if ($parentExited -and -not (Test-Path -LiteralPath $Target) -and (Test-Path -LiteralPath $previous)) {
+        try {
+            # ReplaceFile can move the original to its backup before failing to install the
+            # replacement. Put that original back when there is no destination left to replace.
+            [IO.File]::Move($previous, $Target)
+            Restore-Access $permissions
+            $replaced = $false
+        } catch {
+            $recoveryFailed = $true
+            [Console]::Error.WriteLine("Could not restore the missing executable: $($_.Exception.Message)")
+        }
+    }
+    if (-not $replaced -and -not $recoveryFailed -and $parentExited -and (Test-Path -LiteralPath $Target)) {
         try { Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) }
         catch { [Console]::Error.WriteLine("Could not restart the previous AltTabio: $($_.Exception.Message)") }
     }

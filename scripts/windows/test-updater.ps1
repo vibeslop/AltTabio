@@ -102,7 +102,8 @@ function Relaunch-Case(
     [bool] $BadHash = $false,
     [bool] $ProtectedTarget = $false,
     [bool] $FailPermissions = $false,
-    [bool] $Authorize = $true
+    [bool] $Authorize = $true,
+    [bool] $MissingTarget = $false
 ) {
     $folder = Join-Path $root $Name
     $work = Join-Path $folder 'stage'
@@ -146,7 +147,13 @@ function Start-Process {
     [IO.File]::AppendAllText($LaunchLog, [IO.File]::ReadAllText($FilePath) + "`n")
 }
 '@
-    $script = "`$Work = $(Literal $work)`n`$Target = $(Literal $target)`n`$Hash = '$hash'`n`$ParentId = $($parent.Id)`n`$LaunchLog = $(Literal $launchLog)`n`$FailLaunch = `$$FailLaunch`n`$FailPermissions = `$$FailPermissions`n" + $mock + "`n" + $relaunch
+    $body = $relaunch
+    if ($MissingTarget) {
+        $replace = '[IO.File]::Replace($staged, $Target, $previous)'
+        Assert ($body.Contains($replace)) 'The replacement failure fixture has no injection point'
+        $body = $body.Replace($replace, "[IO.File]::Move(`$Target, `$previous); throw 'Simulated partial replacement failure'")
+    }
+    $script = "`$Work = $(Literal $work)`n`$Target = $(Literal $target)`n`$Hash = '$hash'`n`$ParentId = $($parent.Id)`n`$LaunchLog = $(Literal $launchLog)`n`$FailLaunch = `$$FailLaunch`n`$FailPermissions = `$$FailPermissions`n" + $mock + "`n" + $body
     try { $result = Run-Script $script $parent }
     finally {
         if (-not $parent.HasExited) { $parent.Kill() }
@@ -158,7 +165,7 @@ function Start-Process {
         Assert ([IO.File]::ReadAllText($launchLog + '.styles') -notmatch '(?m)^Hidden\r?$') "$Name forced a hidden first GUI window"
     }
     Assert ([IO.File]::ReadAllText((Join-Path $folder 'AltTabio.ini')) -ceq 'keep these settings') "$Name changed settings"
-    $expected = if (-not $Authorize -or $FailLaunch -or $BadHash -or $FailPermissions) { 'old executable' } else { 'new executable' }
+    $expected = if (-not $Authorize -or $FailLaunch -or $BadHash -or $FailPermissions -or $MissingTarget) { 'old executable' } else { 'new executable' }
     Assert ([IO.File]::ReadAllText($target) -ceq $expected) "$Name left the wrong executable: $($result.Output)"
     $updatedAcl = (Get-Acl -LiteralPath $target).Sddl
     Assert ($updatedAcl -ceq $originalAcl) "$Name changed executable permissions. Before: $originalAcl After: $updatedAcl"
@@ -167,7 +174,7 @@ function Start-Process {
     } else {
         Assert (-not (Test-Path -LiteralPath $launchLog)) "$Name relaunched after an ordinary exit"
     }
-    if ($FailLaunch -or $BadHash -or $FailPermissions) {
+    if ($FailLaunch -or $BadHash -or $FailPermissions -or $MissingTarget) {
         Assert ($result.Code -eq 1) "$Name should report a failure"
         Assert (Test-Path -LiteralPath (Join-Path $work 'error.txt')) "$Name lost the failure diagnostic"
     } else {
@@ -213,6 +220,8 @@ try {
     Relaunch-Case 'failed-permission-rollback' $false -FailPermissions $true
     Relaunch-Case 'protected-failed-permission-rollback' $false -ProtectedTarget $true -FailPermissions $true
     Relaunch-Case 'ordinary-exit-cancels-relaunch' $false -Authorize $false
+    Relaunch-Case 'partial-replacement-restores-missing-target' $false -MissingTarget $true
+    Relaunch-Case 'protected-partial-replacement-restores-missing-target' $false -ProtectedTarget $true -MissingTarget $true
     Write-Output 'Windows updater verification, replacement, and rollback checks passed.'
 } finally {
     # Resolve and constrain the only recursive cleanup to this run's unique test directory.
