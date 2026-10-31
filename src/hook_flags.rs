@@ -61,10 +61,9 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
             ACTION_ACTIVATE_POSITION,
             isize::try_from(position).unwrap_or_default(),
         ),
-        InputAction::NumberKey(position) => (
-            ACTION_NUMBER_KEY,
-            isize::try_from(position).unwrap_or_default(),
-        ),
+        InputAction::NumberKey { position, text } => {
+            (ACTION_NUMBER_KEY, encode_number_key(position, text))
+        }
         InputAction::AltReleased => (ACTION_ALT_RELEASED, 0),
         InputAction::AppendSearchCharacter(character) => (
             ACTION_APPEND_SEARCH_CHARACTER,
@@ -85,7 +84,7 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
         ACTION_ACTIVATE_POSITION => usize::try_from(lparam)
             .ok()
             .map(InputAction::ActivateVisiblePosition),
-        ACTION_NUMBER_KEY => usize::try_from(lparam).ok().map(InputAction::NumberKey),
+        ACTION_NUMBER_KEY => decode_number_key(lparam),
         ACTION_ALT_RELEASED => Some(InputAction::AltReleased),
         ACTION_APPEND_SEARCH_CHARACTER => u32::try_from(lparam)
             .ok()
@@ -108,6 +107,29 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
             .map(InputAction::WindowCommand),
         _ => None,
     }
+}
+
+// Four bits hold positions 1-9; the remaining 21 bits hold a Unicode scalar plus one, with zero
+// meaning no translated text. The complete payload fits a signed 32-bit message parameter.
+fn encode_number_key(position: usize, text: Option<char>) -> isize {
+    let Ok(position @ 1..=9) = u32::try_from(position) else {
+        return -1;
+    };
+    let value = (text.map_or(0, |character| u32::from(character) + 1) << 4) | position;
+    isize::try_from(value).unwrap_or(-1)
+}
+
+fn decode_number_key(value: isize) -> Option<InputAction> {
+    let value = u32::try_from(value).ok()?;
+    let position = usize::try_from(value & 0xF).ok()?;
+    if !(1..=9).contains(&position) {
+        return None;
+    }
+    let text = match value >> 4 {
+        0 => None,
+        code => Some(char::from_u32(code - 1)?),
+    };
+    Some(InputAction::NumberKey { position, text })
 }
 
 /// The interception flags and their generation in one word, so either thread reads or swaps
@@ -256,6 +278,27 @@ impl Drop for HookInterceptionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_shortcuts_preserve_translated_text_across_the_message_boundary() {
+        for position in [1, 9] {
+            for text in [
+                None,
+                Some('&'),
+                Some('!'),
+                Some('ą'),
+                Some('\0'),
+                Some('\u{10FFFF}'),
+            ] {
+                let action = InputAction::NumberKey { position, text };
+                let (code, value) = encode_action(action, 0);
+                assert_eq!(decode_action(code, value), Some(action));
+            }
+        }
+        assert!(decode_action(ACTION_NUMBER_KEY, -1).is_none());
+        assert!(decode_action(ACTION_NUMBER_KEY, 0).is_none());
+        assert!(decode_action(ACTION_NUMBER_KEY, (0x0011_0001 << 4) | 1).is_none());
+    }
     use crate::input::{Key, decode_virtual_key};
 
     #[test]

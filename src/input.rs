@@ -70,7 +70,7 @@ pub enum InputAction {
     CloseSelected,
     WindowCommand(WindowCommand),
     ActivateVisiblePosition(usize),
-    NumberKey(usize),
+    NumberKey { position: usize, text: Option<char> },
     AltReleased,
     AppendSearchCharacter(char),
     BackspaceSearch,
@@ -433,7 +433,10 @@ impl HookState {
         };
         let action = if search_active {
             if let InputAction::ActivateVisiblePosition(position) = action {
-                InputAction::NumberKey(position)
+                InputAction::NumberKey {
+                    position,
+                    text: event.text.filter(|character| !character.is_control()),
+                }
             } else {
                 action
             }
@@ -870,6 +873,35 @@ fn windows_keys(mask: u8) -> impl Iterator<Item = Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_keys_in_a_filtered_gesture_keep_translated_layout_text() {
+        use crate::switcher::{SwitchTask, SwitcherSession, SwitcherSessionSettings};
+        for character in ['&', '!', '1'] {
+            let settings = HookSettings {
+                search_active: true,
+                ..HookSettings::default()
+            };
+            let mut hook = HookState::default();
+            hook.set_overlay_active(true);
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            session.open([SwitchTask::new(1, 1, "a & ! 1", "editor")], None);
+            let _effect = session.handle_input(InputAction::AppendSearchCharacter('a'));
+            for event in [
+                KeyEvent::pressed(Key::LeftAlt, ALT),
+                KeyEvent::pressed(Key::Tab, ALT),
+                KeyEvent::pressed(Key::Digit(1), ALT).with_text(character),
+            ] {
+                for action in hook.process_key(event, settings).actions() {
+                    let _effect = session.handle_input(action);
+                }
+            }
+            assert_eq!(session.switcher().filter(), format!("a{character}"));
+        }
+    }
 
     #[test]
     fn altgr_text_is_not_a_control_editing_shortcut() {
@@ -2121,7 +2153,13 @@ mod tests {
             state.process_key(KeyEvent::pressed(Key::NumpadDigit(9), ALT), settings),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::NumberKey(9)), None],
+                actions: [
+                    Some(InputAction::NumberKey {
+                        position: 9,
+                        text: None
+                    }),
+                    None
+                ],
             }
         );
         assert_eq!(

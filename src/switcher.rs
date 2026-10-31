@@ -334,16 +334,15 @@ impl SwitcherSession {
             }
             InputAction::CloseSelected => self.command(WindowCommand::Close),
             InputAction::WindowCommand(command) => self.command(command),
-            InputAction::NumberKey(position) if self.filter_visible() => {
-                if let Ok(digit) = u32::try_from(position)
-                    && let Some(character) = char::from_digit(digit, 10)
-                {
+            InputAction::NumberKey { text, .. } if self.filter_visible() => {
+                if let Some(character) = text {
                     self.switcher.append_filter_character(character);
                     return SwitcherEffect::Redraw;
                 }
                 SwitcherEffect::None
             }
-            InputAction::NumberKey(position) | InputAction::ActivateVisiblePosition(position) => {
+            InputAction::NumberKey { position, .. }
+            | InputAction::ActivateVisiblePosition(position) => {
                 if self.switcher.select_visible_position(position) {
                     self.activate_selected()
                 } else {
@@ -1506,7 +1505,10 @@ mod tests {
         let mut session = SwitcherSession::new(settings);
         session.open(tasks.clone(), None);
         assert_eq!(
-            session.handle_input(InputAction::NumberKey(2)),
+            session.handle_input(InputAction::NumberKey {
+                position: 2,
+                text: Some('2')
+            }),
             SwitcherEffect::Activate(20)
         );
         session.open(tasks, None);
@@ -1515,7 +1517,10 @@ mod tests {
             SwitcherEffect::Redraw
         );
         assert_eq!(
-            session.handle_input(InputAction::NumberKey(1)),
+            session.handle_input(InputAction::NumberKey {
+                position: 1,
+                text: Some('1')
+            }),
             SwitcherEffect::Redraw
         );
         assert_eq!(session.switcher().filter(), "a1");
