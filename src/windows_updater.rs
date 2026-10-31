@@ -5,15 +5,15 @@
 //! embedded avoids loading elevated code from a writable temporary script or from PATH.
 
 mod cleanup;
+mod readiness;
 
 use crate::win32::{system_directory, wide};
 use alttabio::update::{Asset, Checked, Release, Update, Version, newest_windows_update};
-use std::io::{BufRead, BufReader};
 use std::mem::size_of;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -166,28 +166,7 @@ pub fn relaunch(staged: &mut StagedUpdate) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("Could not start the update helper: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "The update helper has no output pipe".to_owned())?;
-    let mut ready = String::new();
-    let reply = BufReader::new(stdout).read_line(&mut ready);
-    if reply.is_err() || ready.trim() != "READY" {
-        // An unexpected reply must not leave a helper waiting on a process that will stay up.
-        // Wait only after a successful termination, since a failed kill may leave it blocked.
-        match child.kill() {
-            Ok(()) => {
-                if let Err(error) = child.wait() {
-                    eprintln!("Could not reap the failed update helper: {error}");
-                }
-            }
-            Err(error) => eprintln!("Could not stop the failed update helper: {error}"),
-        }
-        return Err(reply.map_or_else(
-            |error| format!("Could not read the update helper's reply: {error}"),
-            |_| "The update helper did not acknowledge readiness".to_owned(),
-        ));
-    }
+    readiness::wait(&mut child, Duration::from_secs(30))?;
     // The helper owns cleanup now. Its code and paths came from this executable, and the
     // directory's protected ACL prevents another account from changing the staged payload.
     staged.work.helper_owns = true;
