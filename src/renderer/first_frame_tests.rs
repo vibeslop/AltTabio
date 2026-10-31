@@ -1,6 +1,7 @@
 use super::*;
 use alttabio::switcher::SwitchTask;
 use windows::Win32::Foundation::COLORREF;
+use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIcon, CreateWindowExW, DestroyIcon, DestroyWindow, HICON, SW_SHOWNOACTIVATE, ShowWindow,
@@ -25,6 +26,16 @@ impl Drop for Fixture {
 #[test]
 fn presented_frame_already_contains_task_icons() -> Result<()> {
     let _apartment = crate::win32::ComApartment::initialize()?;
+    let origin = std::env::var("ALTTABIO_TEST_ORIGIN").unwrap_or_else(|_| "50,50".to_owned());
+    let (left, top) = origin
+        .split_once(',')
+        .unwrap_or_else(|| panic!("test origin must be x,y"));
+    let left = left
+        .parse::<i32>()
+        .unwrap_or_else(|error| panic!("invalid test x: {error}"));
+    let top = top
+        .parse::<i32>()
+        .unwrap_or_else(|error| panic!("invalid test y: {error}"));
     let and_bits = [0_u8; 128];
     let xor_bits: Vec<u8> = (0..32 * 32)
         .flat_map(|pixel| {
@@ -44,8 +55,8 @@ fn presented_frame_already_contains_task_icons() -> Result<()> {
             w!("STATIC"),
             w!("Complete frame test"),
             WS_POPUP,
-            50,
-            50,
+            left,
+            top,
             640,
             240,
             None,
@@ -107,6 +118,9 @@ fn assert_complete_frame(
         options,
         CloseButtonVisualState::Normal,
     )?;
+    // SAFETY: drawing committed this test window's first frame. DwmFlush waits for this
+    // process's queued presentation before the screen-backed client DC is sampled below.
+    unsafe { DwmFlush() }?;
     let layout = for_compact_list(appearance.compact_list);
     let bounds = layout.icon_bounds(0, appearance.show_numbers, appearance.large_icons);
     // SAFETY: the window is live; DPI is a scalar and the borrowed client DC is released below.
