@@ -148,6 +148,7 @@ pub struct SwitcherSession {
     settings: SwitcherSessionSettings,
     visible: bool,
     context_menu_target: Option<WindowTarget>,
+    wheel_remainder: i32,
 }
 
 impl SwitcherSession {
@@ -164,6 +165,7 @@ impl SwitcherSession {
             settings,
             visible: false,
             context_menu_target: None,
+            wheel_remainder: 0,
         }
     }
 
@@ -172,6 +174,7 @@ impl SwitcherSession {
         tasks: impl IntoIterator<Item = SwitchTask>,
         selection_delta: Option<i32>,
     ) {
+        self.wheel_remainder = 0;
         self.switcher.clear_filter();
         self.switcher.set_tasks(tasks);
         if let Some(delta) = selection_delta {
@@ -233,6 +236,7 @@ impl SwitcherSession {
     }
 
     pub fn hide(&mut self) {
+        self.wheel_remainder = 0;
         self.visible = false;
     }
 
@@ -265,15 +269,23 @@ impl SwitcherSession {
         if !self.visible || self.context_menu_open() || delta == 0 || visible_rows == 0 {
             return SwitcherEffect::None;
         }
+        // A wheel detent is 120 units. Touchpads can deliver it as many small messages.
+        let total = self.wheel_remainder.saturating_add(delta);
+        let steps = total / 120;
+        self.wheel_remainder = total % 120;
+        if steps == 0 {
+            return SwitcherEffect::None;
+        }
+        let rows = usize::try_from(steps.unsigned_abs()).unwrap_or(usize::MAX);
         let current = self.switcher.visible_range(visible_rows).start;
         let max_start = self
             .switcher
             .visible_task_count()
             .saturating_sub(visible_rows);
-        let start = if delta > 0 {
-            current.saturating_sub(1)
+        let start = if steps > 0 {
+            current.saturating_sub(rows)
         } else {
-            current.saturating_add(1).min(max_start)
+            current.saturating_add(rows).min(max_start)
         };
         if start == current {
             return SwitcherEffect::None;
@@ -1198,12 +1210,29 @@ mod tests {
     }
 
     #[test]
+    fn high_resolution_wheel_deltas_accumulate_without_skipping_rows() {
+        let mut session = long_list_session();
+        for _ in 0..14 {
+            assert_eq!(session.handle_mouse_wheel(-8, 5), SwitcherEffect::None);
+        }
+        assert_eq!(session.switcher().visible_range(5), 0..5);
+        assert_eq!(session.handle_mouse_wheel(-8, 5), SwitcherEffect::Redraw);
+        assert_eq!(session.switcher().visible_range(5), 1..6);
+        assert_eq!(session.handle_mouse_wheel(-240, 5), SwitcherEffect::Redraw);
+        assert_eq!(session.switcher().visible_range(5), 3..8);
+        assert_eq!(session.handle_mouse_wheel(60, 5), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-60, 5), SwitcherEffect::None);
+        assert_eq!(session.switcher().visible_range(5), 3..8);
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+    }
+
+    #[test]
     fn scrolling_preserves_the_selected_window_and_alt_release_target() {
         let mut session = long_list_session();
         assert!(session.switcher_mut().select_visible_position(2));
 
         for _ in 0..15 {
-            assert_eq!(session.handle_mouse_wheel(-1, 5), SwitcherEffect::Redraw);
+            assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::Redraw);
         }
 
         assert_eq!(session.switcher().selected_visible_index(), Some(1));
@@ -1222,7 +1251,7 @@ mod tests {
         assert!(session.switcher_mut().select_visible_position(6));
         assert_eq!(session.switcher().visible_range(5), 5..10);
 
-        assert_eq!(session.handle_mouse_wheel(-1, 5), SwitcherEffect::Redraw);
+        assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::Redraw);
 
         assert_eq!(session.switcher().selected_visible_index(), Some(5));
         assert_eq!(session.switcher().visible_range(5), 6..11);
@@ -1233,26 +1262,32 @@ mod tests {
         let mut session = long_list_session();
         let rows = 5;
 
-        assert_eq!(session.handle_mouse_wheel(1, rows), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(120, rows), SwitcherEffect::None);
         for start in 1..=15 {
-            assert_eq!(session.handle_mouse_wheel(-1, rows), SwitcherEffect::Redraw);
+            assert_eq!(
+                session.handle_mouse_wheel(-120, rows),
+                SwitcherEffect::Redraw
+            );
             assert_eq!(session.switcher().selected_visible_index(), Some(0));
             assert_eq!(session.switcher().visible_range(rows), start..start + rows);
         }
-        assert_eq!(session.handle_mouse_wheel(-1, rows), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, rows), SwitcherEffect::None);
         for start in (0..15).rev() {
-            assert_eq!(session.handle_mouse_wheel(1, rows), SwitcherEffect::Redraw);
+            assert_eq!(
+                session.handle_mouse_wheel(120, rows),
+                SwitcherEffect::Redraw
+            );
             assert_eq!(session.switcher().selected_visible_index(), Some(0));
             assert_eq!(session.switcher().visible_range(rows), start..start + rows);
         }
-        assert_eq!(session.handle_mouse_wheel(1, rows), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(120, rows), SwitcherEffect::None);
     }
 
     #[test]
     fn keyboard_navigation_restores_the_selected_window_to_view_after_scrolling() {
         let mut session = long_list_session();
         for _ in 0..10 {
-            assert_eq!(session.handle_mouse_wheel(-1, 5), SwitcherEffect::Redraw);
+            assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::Redraw);
         }
         assert_eq!(session.switcher().visible_range(5), 10..15);
 
@@ -1270,7 +1305,7 @@ mod tests {
 
         let mut session = long_list_session();
         for _ in 0..5 {
-            assert_eq!(session.handle_mouse_wheel(-1, 2), SwitcherEffect::Redraw);
+            assert_eq!(session.handle_mouse_wheel(-120, 2), SwitcherEffect::Redraw);
         }
         assert_eq!(session.switcher().selected_visible_index(), Some(0));
         assert_eq!(session.switcher().visible_range(2), 5..7);
@@ -1286,17 +1321,17 @@ mod tests {
     fn mouse_wheel_ignores_zero_delta_and_cannot_navigate_a_menu_or_hidden_overlay() {
         let mut session = long_list_session();
         assert_eq!(session.handle_mouse_wheel(0, 5), SwitcherEffect::None);
-        assert_eq!(session.handle_mouse_wheel(-1, 0), SwitcherEffect::None);
-        assert_eq!(session.handle_mouse_wheel(-1, 20), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, 0), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, 20), SwitcherEffect::None);
         assert_eq!(session.switcher().selected_visible_index(), Some(0));
 
         assert!(session.open_context_menu());
-        assert_eq!(session.handle_mouse_wheel(-1, 5), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::None);
         assert_eq!(session.switcher().selected_visible_index(), Some(0));
         assert_eq!(session.finish_context_menu(None), SwitcherEffect::None);
 
         session.hide();
-        assert_eq!(session.handle_mouse_wheel(-1, 5), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::None);
         assert_eq!(session.switcher().selected_visible_index(), Some(0));
     }
 
