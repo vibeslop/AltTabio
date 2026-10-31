@@ -46,7 +46,9 @@ The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the up
 
 Before publishing a Windows release, manually check Alt+Tab, Shift+Alt+Tab, Win+Tab, opening the switcher over Start and Search, and typing and editing a filter with an AltGr layout. Also verify a real install, update, and relaunch in a disposable Windows VM, starting from the autostart task and using a throwaway release repository or tag. Script mocks and hidden-window tests do not replace these checks.
 
-Keep the Windows automatic-update migration notice in the published release notes. Confirm the Windows publisher-authentication policy before publishing: the GitHub asset digest alone does not authenticate a release independently of repository publishing access. The release job checks both embedded Windows version strings against the tag before packaging.
+Draft releases take their initial notes from `RELEASE_NOTES.md`. Keep its Windows automatic-update migration and release-trust notices when editing or publishing the draft. Windows currently trusts GitHub release publishing and the asset digest; independent Windows signing-key work is postponed. The digest does not authenticate a publisher independently of GitHub. The release job checks both embedded Windows version strings against the tag before packaging.
+
+The updater's isolated environment and explicit module imports constrain its scripts. Windows PowerShell 5.1 and .NET Framework initialize before those scripts run, so this is not a sandbox for per-user Windows or .NET runtime startup configuration. A relaunched GUI process receives a fresh user environment; it does not inherit the helper's restricted or temporary environment.
 
 Running the workflow by hand with a tag builds that tag's Windows archive alone. Re-running the tag's own run rebuilds both.
 
