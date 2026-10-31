@@ -44,6 +44,10 @@ The Release workflow builds the Windows and macOS archives, signs the macOS one 
 
 The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the updater. Ordinary source builds leave it unset so they never download over local work. Windows verifies the archive's GitHub asset digest, stages only `AltTabio.exe` in a protected folder beside the installation, and uses a helper to replace and restart it once the running copy exits. Run `powershell.exe -NoProfile -File scripts/windows/test-updater.ps1` to exercise verification failures, replacement, and rollback without downloading or launching a release.
 
+Before publishing a Windows release, manually check Alt+Tab, Shift+Alt+Tab, Win+Tab, opening the switcher over Start and Search, and typing and editing a filter with an AltGr layout. Also verify a real install, update, and relaunch in a disposable Windows VM, starting from the autostart task and using a throwaway release repository or tag. Script mocks and hidden-window tests do not replace these checks.
+
+Keep the Windows automatic-update migration notice in the published release notes. Confirm the Windows publisher-authentication policy before publishing: the GitHub asset digest alone does not authenticate a release independently of repository publishing access. The release job checks both embedded Windows version strings against the tag before packaging.
+
 Running the workflow by hand with a tag builds that tag's Windows archive alone. Re-running the tag's own run rebuilds both.
 
 ### The macOS release certificate
