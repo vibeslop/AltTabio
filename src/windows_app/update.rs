@@ -291,13 +291,7 @@ impl AppHost {
             let Ok(mut app) = self.state.try_borrow_mut() else {
                 return false;
             };
-            if app.dialog_state().blocks_switcher() {
-                return false;
-            }
-            let automatic = app.settings.general.auto_update && windows_updater::is_release_build();
-            let can_restart =
-                !app.dialog_state().any_open() && !app.is_visible() && app.pending_shell.is_none();
-            let action = app.updates.tick(automatic, can_restart);
+            let action = app.poll_updates();
             let ready = app.updates.policy.installed_version().is_some();
             if let Some(tray) = &app.tray
                 && let Err(error) = tray.set_update_installed(ready)
@@ -386,6 +380,20 @@ impl AppHost {
 }
 
 impl App {
+    fn poll_updates(&mut self) -> Action {
+        // Workers can finish in the background, but keep their results queued until presenting
+        // an offer or report cannot dismiss an active or still-opening switching gesture.
+        if self.dialog_state().blocks_switcher()
+            || self.is_visible()
+            || self.pending_shell.is_some()
+        {
+            return Action::None;
+        }
+        let automatic = self.settings.general.auto_update && windows_updater::is_release_build();
+        let can_restart = !self.dialog_state().any_open();
+        self.updates.tick(automatic, can_restart)
+    }
+
     pub(super) fn start_update_timer(&mut self) {
         let timer = unsafe {
             // SAFETY: hwnd is live, the ID belongs to this app, and no timer callback is installed.
@@ -397,5 +405,55 @@ impl App {
                 windows::core::Error::from_thread()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings_io::SettingsStore;
+    use crate::win32::ComApartment;
+    use alttabio::settings::Settings;
+    use alttabio::switcher::SwitchTask;
+    use alttabio::update::Version;
+
+    #[test]
+    fn completed_manual_checks_wait_for_the_switcher_to_close() -> windows::core::Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let update = Update {
+            version: Version::parse("9.0.0").unwrap_or_else(|| panic!("test version")),
+            url: "fixture".to_owned(),
+        };
+        for checked in [Checked::UpToDate, Checked::Available(update)] {
+            let path = std::env::temp_dir()
+                .join(format!("AltTabio-update-dialog-{}.ini", std::process::id()));
+            let (store, settings) = SettingsStore::load_from(path, &Settings::default())
+                .unwrap_or_else(|error| panic!("{error}"));
+            let mut app = App::new(false, false, settings, store)?;
+            app.updates.request = Request::Active;
+            assert_eq!(app.updates.policy.requested(), Step::Check);
+            let (sender, receiver) = mpsc::channel();
+            let available = matches!(checked, Checked::Available(_));
+            assert!(sender.send(Completion::Checked(Ok(checked))).is_ok());
+            app.updates.worker = Some(receiver);
+            app.session
+                .open([SwitchTask::new(1, 1, "Fixture", "test")], None);
+            assert!(
+                matches!(app.poll_updates(), Action::None),
+                "an update result must not interrupt the switcher"
+            );
+            assert!(
+                app.updates.worker.is_some(),
+                "the completion must remain queued"
+            );
+            app.session.hide();
+            let action = app.poll_updates();
+            assert!(if available {
+                matches!(action, Action::Offer(_))
+            } else {
+                matches!(action, Action::Report(Report::UpToDate))
+            });
+        }
+        Ok(())
     }
 }
