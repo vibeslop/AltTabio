@@ -4,11 +4,10 @@
 //! Windows supplies PowerShell, JSON/ZIP support, SHA-256, and curl. Keeping the scripts
 //! embedded avoids loading elevated code from a writable temporary script or from PATH.
 
-use crate::win32::wide;
+use crate::win32::{system_directory, wide};
 use alttabio::update::{Asset, Checked, Release, Update, Version, newest_windows_update};
 use std::io::{BufRead, BufReader};
 use std::mem::size_of;
-use std::os::windows::ffi::OsStringExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -19,11 +18,11 @@ use windows::Win32::Security::Authorization::{
 };
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
-use windows::Win32::System::SystemInformation::{GetSystemDirectoryW, GetTickCount};
+use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::core::{PCWSTR, w};
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const DOWNLOAD_SCRIPT: &str = include_str!("windows_updater/download.ps1");
 const RELAUNCH_SCRIPT: &str = include_str!("windows_updater/relaunch.ps1");
 
@@ -233,22 +232,8 @@ fn powershell(script: &str) -> Result<Command, String> {
             literal(&system.join("curl.exe"))?
         ))
         .stdin(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW);
+        .creation_flags(CREATE_NO_WINDOW.0);
     Ok(command)
-}
-
-fn system_directory() -> Result<PathBuf, String> {
-    let mut buffer = vec![0_u16; 32768];
-    let length = unsafe {
-        // SAFETY: buffer is writable and Windows receives its actual length through the slice.
-        GetSystemDirectoryW(Some(&mut buffer))
-    } as usize;
-    if length == 0 || length >= buffer.len() {
-        return Err("Could not locate the Windows system directory".to_owned());
-    }
-    Ok(PathBuf::from(std::ffi::OsString::from_wide(
-        &buffer[..length],
-    )))
 }
 
 fn literal(path: &Path) -> Result<String, String> {

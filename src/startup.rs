@@ -1,8 +1,9 @@
+use crate::win32::system_directory;
 use alttabio::settings_change::AutostartState;
 use std::ffi::OsString;
 use std::io::Write;
 use std::mem::size_of;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,16 +22,13 @@ use windows::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::TaskScheduler::{ITaskFolder, ITaskService, TaskScheduler};
 use windows::Win32::System::Threading::{
-    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    CREATE_NO_WINDOW, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
 use windows::core::{BOOL, BSTR, HRESULT, PCWSTR};
-
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 mod migration;
 pub(crate) use migration::repair_legacy_task_timeout;
@@ -451,31 +449,8 @@ fn scheduler_command(arguments: impl IntoIterator<Item = OsString>) -> Result<Co
     use std::os::windows::process::CommandExt;
 
     let mut command = Command::new(system_directory()?.join("schtasks.exe"));
-    command.args(arguments).creation_flags(CREATE_NO_WINDOW);
+    command.args(arguments).creation_flags(CREATE_NO_WINDOW.0);
     Ok(command)
-}
-
-fn system_directory() -> Result<PathBuf, String> {
-    // Reserve the maximum Windows path length, including the terminating null.
-    let mut buffer = vec![0_u16; 32768];
-    let length = unsafe {
-        // SAFETY: buffer is writable for its full length and the API retains no pointers.
-        GetSystemDirectoryW(Some(&mut buffer))
-    } as usize;
-    if length == 0 {
-        return Err(format!(
-            "Could not locate the Windows system directory: {}",
-            windows::core::Error::from_thread()
-        ));
-    }
-    if length >= buffer.len() {
-        return Err("The Windows system directory path exceeds the supported length".to_owned());
-    }
-    let path = PathBuf::from(OsString::from_wide(&buffer[..length]));
-    if !path.is_absolute() {
-        return Err("Windows returned a non-absolute system directory path".to_owned());
-    }
-    Ok(path)
 }
 
 fn output_details(output: &Output) -> String {
