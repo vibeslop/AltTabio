@@ -60,8 +60,24 @@ pub fn check() -> Result<Checked, String> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .ok_or_else(|| "This copy has no release version".to_owned())?;
     let list = run_script(&format!("$Mode = 'check'\n{DOWNLOAD_SCRIPT}"))?;
-    Ok(newest_windows_update(current, &read_releases(&list)?)
-        .map_or(Checked::UpToDate, Checked::Available))
+    let update = newest_windows_update(current, &read_releases(&list)?);
+    Ok(checked_update(update, || {
+        let target = std::env::current_exe().map_err(|error| error.to_string())?;
+        validate_update_target(&target)
+    }))
+}
+
+fn checked_update(
+    update: Option<Update>,
+    validate: impl FnOnce() -> Result<(), String>,
+) -> Checked {
+    let Some(update) = update else {
+        return Checked::UpToDate;
+    };
+    match validate() {
+        Ok(()) => Checked::Available(update),
+        Err(reason) => Checked::Blocked(update.version, reason),
+    }
 }
 
 pub struct StagedUpdate {
@@ -308,6 +324,28 @@ impl Drop for WorkFolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_checks_report_blocked_installations_before_offering_a_download() {
+        let update = Update {
+            version: Version::parse("9.0.0").unwrap_or_else(|| panic!("valid version")),
+            url: "https://example.com/release.zip".to_owned(),
+        };
+        assert_eq!(
+            checked_update(Some(update.clone()), || Err(
+                "Unsafe installation".to_owned()
+            )),
+            Checked::Blocked(update.version, "Unsafe installation".to_owned())
+        );
+        assert_eq!(
+            checked_update(Some(update.clone()), || Ok(())),
+            Checked::Available(update)
+        );
+        assert_eq!(
+            checked_update(None, || panic!("no update needs no validation")),
+            Checked::UpToDate
+        );
+    }
 
     #[test]
     fn updates_require_a_target_protected_from_non_elevated_replacement() {
