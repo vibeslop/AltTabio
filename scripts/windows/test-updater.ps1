@@ -139,6 +139,7 @@ function New-Object {
 }
 function Start-Process {
     param($FilePath, $WorkingDirectory, $WindowStyle, $ErrorAction)
+    [IO.File]::AppendAllText($LaunchLog + '.styles', "$WindowStyle`n")
     $script:LaunchCount++
     if ($FailLaunch -and $script:LaunchCount -eq 1) { throw 'Simulated launch failure' }
     [IO.File]::AppendAllText($LaunchLog, [IO.File]::ReadAllText($FilePath) + "`n")
@@ -152,6 +153,9 @@ function Start-Process {
         $parent.Dispose()
     }
     Assert ($result.Output.Contains('READY')) "$Name did not acknowledge readiness: $($result.Output)"
+    if (Test-Path -LiteralPath ($launchLog + '.styles')) {
+        Assert ([IO.File]::ReadAllText($launchLog + '.styles') -notmatch '(?m)^Hidden\r?$') "$Name forced a hidden first GUI window"
+    }
     Assert ([IO.File]::ReadAllText((Join-Path $folder 'AltTabio.ini')) -ceq 'keep these settings') "$Name changed settings"
     $expected = if (-not $Authorize -or $FailLaunch -or $BadHash -or $FailPermissions) { 'old executable' } else { 'new executable' }
     Assert ([IO.File]::ReadAllText($target) -ceq $expected) "$Name left the wrong executable: $($result.Output)"

@@ -42,7 +42,7 @@ try {
     $replaced = $true
     try {
         Restore-Access $permissions
-        Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) -WindowStyle Hidden -ErrorAction Stop
+        Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) -ErrorAction Stop
     } catch {
         [IO.File]::Replace($previous, $Target, (Join-Path $Work 'failed.exe'))
         Restore-Access $permissions
@@ -56,7 +56,7 @@ try {
     try { [IO.File]::WriteAllText((Join-Path $Work 'error.txt'), $message) }
     catch { [Console]::Error.WriteLine("Could not record the update failure: $($_.Exception.Message)") }
     if (-not $replaced -and $parentExited -and (Test-Path -LiteralPath $Target)) {
-        try { Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) -WindowStyle Hidden }
+        try { Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) }
         catch { [Console]::Error.WriteLine("Could not restart the previous AltTabio: $($_.Exception.Message)") }
     }
     [Console]::Error.WriteLine($message)
