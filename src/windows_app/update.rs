@@ -124,7 +124,12 @@ impl Updates {
                             match result {
                                 Ok(()) => {
                                     self.restart = Restart::HelperReady;
-                                    return self.restart_if_ready(Action::None, can_restart, now);
+                                    return self.restart_if_ready(
+                                        Action::None,
+                                        can_restart,
+                                        now,
+                                        windows_updater::user_is_away,
+                                    );
                                 }
                                 Err(error) => {
                                     eprintln!("{error}");
@@ -164,12 +169,24 @@ impl Updates {
             step = self.policy.check_due();
         }
         let action = self.apply(step);
-        self.restart_if_ready(action, can_restart, now)
+        self.restart_if_ready(action, can_restart, now, windows_updater::user_is_away)
     }
 
-    fn restart_if_ready(&mut self, action: Action, can_restart: bool, now: Instant) -> Action {
+    fn restart_requested(&self, away: impl FnOnce() -> bool) -> bool {
+        self.restart == Restart::Requested
+            || self.request == Request::Active
+            || (self.automatic && away())
+    }
+
+    fn restart_if_ready(
+        &mut self,
+        action: Action,
+        can_restart: bool,
+        now: Instant,
+        away: impl FnOnce() -> bool,
+    ) -> Action {
         if self.restart == Restart::HelperReady {
-            if !can_restart || now < self.restart_at {
+            if !can_restart || now < self.restart_at || !self.restart_requested(away) {
                 return action;
             }
             let result = self
@@ -196,8 +213,7 @@ impl Updates {
             && self.worker.is_none()
             && self.staged.is_some()
             && now >= self.restart_at
-            && (self.restart == Restart::Requested
-                || (self.automatic && windows_updater::user_is_away()))
+            && self.restart_requested(away)
         {
             let Some(mut staged) = self.staged.take() else {
                 return action;
@@ -416,6 +432,39 @@ mod tests {
     use alttabio::settings::Settings;
     use alttabio::switcher::SwitchTask;
     use alttabio::update::Version;
+
+    #[test]
+    fn automatic_helper_readiness_does_not_override_a_returned_user() {
+        let now = Instant::now();
+        let mut updates = Updates {
+            automatic: true,
+            restart: Restart::HelperReady,
+            restart_at: now,
+            ..Updates::default()
+        };
+        assert!(matches!(
+            updates.restart_if_ready(Action::None, true, now, || false),
+            Action::None
+        ));
+        assert_eq!(
+            updates.restart_at, now,
+            "a returned user must defer authorization, not attempt it"
+        );
+        updates.automatic = false;
+        assert!(
+            !updates.restart_requested(|| true),
+            "turning off automatic updates cancels an automatic restart"
+        );
+        updates.request = Request::Active;
+        assert!(updates.restart_requested(|| panic!("a manual restart does not need idle time")));
+        assert!(
+            matches!(
+                updates.restart_if_ready(Action::None, true, now, || false),
+                Action::Report(Report::Failed(_))
+            ),
+            "the manual restart reaches authorization even while the user is active"
+        );
+    }
 
     #[test]
     fn completed_manual_checks_wait_for_the_switcher_to_close() -> windows::core::Result<()> {
