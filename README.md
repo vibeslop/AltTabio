@@ -24,7 +24,7 @@ AltTabio needs administrator rights. With **Autostart** on, it gets them at ever
 
 Release builds check GitHub for updates about a minute after startup and then daily, download newer releases, verify the Windows archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. You can turn off automatic updates in Settings and still use **Check for Updates** or **Relaunch to Update** in the tray menu. Updates replace the executable in its current folder and preserve `AltTabio.ini` and the startup task. Ordinary Windows builds from source do not check for or install published updates.
 
-When upgrading to 1.3.0, an existing `AutoUpdate=true` now enables this Windows behavior; earlier Windows versions saved the key but ignored it. See the [release notes](RELEASE_NOTES.md) for the migration notice and Windows release-trust model.
+When upgrading to 1.3.0, an existing `AutoUpdate=true` now enables this Windows behavior; earlier Windows versions saved the key but ignored it. Windows updates trust GitHub release publishing and its asset digest, without an independent publisher signature.
 
 ### macOS
 

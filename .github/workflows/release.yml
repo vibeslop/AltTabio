@@ -67,7 +67,7 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft --verify-tag --title "AltTabio $VERSION" --notes-file RELEASE_NOTES.md
+            gh release create "$TAG" --draft --verify-tag --title "AltTabio $VERSION" --notes ""
           fi
 
   windows:
