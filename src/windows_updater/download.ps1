@@ -5,7 +5,7 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 
 function Get-ReleaseJson([string] $Uri) {
-    $json = & $Curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' `
+    $json = & $Curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' `
         --max-time 30 --max-filesize 2097152 --user-agent AltTabio `
         --header 'Accept: application/vnd.github+json' $Uri
     if ($LASTEXITCODE -ne 0) { throw 'Could not read releases from GitHub.' }
@@ -44,7 +44,7 @@ try {
         }
         if ($asset.size -le 0 -or $asset.size -gt 104857600) { throw 'The update archive is too large or empty.' }
         $archive = Join-Path $Work 'download.zip'
-        & $Curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' `
+        & $Curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' `
             --max-time 600 --max-filesize 104857600 --user-agent AltTabio --output $archive $url
         if ($LASTEXITCODE -ne 0) { throw 'Could not download the update.' }
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $asset.digest.Substring(7)) {

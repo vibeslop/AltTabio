@@ -83,6 +83,7 @@ function Download-Case([string] $Name, [string] $Archive, [string] $Digest, [str
     } | ConvertTo-Json -Depth 4 -Compress
     $preamble = @'
 function Mock-Curl {
+    if ($args.Count -eq 0 -or $args[0] -cne '-q') { throw 'curl must disable user configuration before any other argument' }
     $global:LASTEXITCODE = 0
     $index = [Array]::IndexOf($args, '--output')
     if ($index -ge 0) { Copy-Item -LiteralPath $Fixture -Destination $args[$index + 1] }

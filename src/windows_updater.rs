@@ -59,7 +59,11 @@ pub fn check() -> Result<Checked, String> {
     }
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .ok_or_else(|| "This copy has no release version".to_owned())?;
-    let list = run_script(&format!("$Mode = 'check'\n{DOWNLOAD_SCRIPT}"))?;
+    let temporary = WorkFolder::temporary()?;
+    let list = run_script_in(
+        &format!("$Mode = 'check'\n{DOWNLOAD_SCRIPT}"),
+        &temporary.path,
+    )?;
     let update = newest_windows_update(current, &read_releases(&list)?);
     Ok(checked_update(update, || {
         let target = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -93,11 +97,14 @@ pub fn stage(update: &Update) -> Result<StagedUpdate, String> {
     let target = std::env::current_exe().map_err(|error| error.to_string())?;
     validate_update_target(&target)?;
     let work = WorkFolder::create(&target)?;
-    let hash = run_script(&format!(
-        "$Mode = 'stage'\n$Version = '{}'\n$Work = {}\n{DOWNLOAD_SCRIPT}",
-        update.version,
-        literal(&work.path)?
-    ))?;
+    let hash = run_script_in(
+        &format!(
+            "$Mode = 'stage'\n$Version = '{}'\n$Work = {}\n{DOWNLOAD_SCRIPT}",
+            update.version,
+            literal(&work.path)?
+        ),
+        &work.path,
+    )?;
     let hash = hash.trim().to_owned();
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("The update did not return an executable checksum".to_owned());
@@ -115,7 +122,7 @@ pub fn relaunch(staged: &mut StagedUpdate) -> Result<(), String> {
         staged.hash,
         std::process::id()
     );
-    let mut child = powershell(&script)?
+    let mut child = powershell(&script, &staged.work.path)?
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -197,8 +204,8 @@ fn read_releases(text: &str) -> Result<Vec<Release>, String> {
         .collect()
 }
 
-fn run_script(script: &str) -> Result<String, String> {
-    let output = powershell(script)?
+fn run_script_in(script: &str, temporary: &Path) -> Result<String, String> {
+    let output = powershell(script, temporary)?
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -215,10 +222,28 @@ fn run_script(script: &str) -> Result<String, String> {
     }
 }
 
-fn powershell(script: &str) -> Result<Command, String> {
+fn powershell(script: &str, temporary: &Path) -> Result<Command, String> {
     let system = system_directory()?;
+    let root = system
+        .parent()
+        .ok_or_else(|| "Windows has no system root".to_owned())?;
+    let modules = system.join("WindowsPowerShell/v1.0/Modules");
+    let mut imports = String::new();
+    for module in ["Management", "Utility", "Security"] {
+        let name = format!("Microsoft.PowerShell.{module}");
+        imports.push_str("Import-Module ");
+        imports.push_str(&literal(&modules.join(&name).join(format!("{name}.psd1")))?);
+        imports.push_str(" -ErrorAction Stop\n");
+    }
     let mut command = Command::new(system.join("WindowsPowerShell/v1.0/powershell.exe"));
     command
+        .env_clear()
+        .env("SystemRoot", root)
+        .env("windir", root)
+        .env("TEMP", temporary)
+        .env("TMP", temporary)
+        .env("PSModulePath", &modules)
+        .current_dir(&system)
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -228,8 +253,8 @@ fn powershell(script: &str) -> Result<Command, String> {
             "-Command",
         ])
         .arg(format!(
-            "& {{\n$Curl = {}\n{script}\n}}",
-            literal(&system.join("curl.exe"))?
+            "& {{\n$ErrorActionPreference = 'Stop'\n$PSModuleAutoLoadingPreference = 'None'\n$env:PSModulePath = {}\n{imports}$Curl = {}\n{script}\n}}",
+            literal(&modules)?, literal(&system.join("curl.exe"))?
         ))
         .stdin(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW.0);
@@ -249,10 +274,26 @@ struct WorkFolder {
 }
 
 impl WorkFolder {
+    fn temporary() -> Result<Self, String> {
+        let system = system_directory()?;
+        let root = system
+            .parent()
+            .ok_or_else(|| "Windows has no system root".to_owned())?;
+        let work = Self::create_in(&root.join("Temp"))?;
+        if crate::startup::executable_is_replaceable_by_shell(&work.path)? {
+            return Err("Windows did not protect the updater's temporary folder".to_owned());
+        }
+        Ok(work)
+    }
+
     fn create(target: &Path) -> Result<Self, String> {
         let folder = target
             .parent()
             .ok_or_else(|| "The installation has no parent folder".to_owned())?;
+        Self::create_in(folder)
+    }
+
+    fn create_in(folder: &Path) -> Result<Self, String> {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| error.to_string())?
@@ -316,6 +357,68 @@ impl Drop for WorkFolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_script(script: &str) -> Result<String, String> {
+        // Test scripts use inert fixtures and never download or execute an update.
+        run_script_in(
+            script,
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("target"),
+        )
+    }
+
+    #[test]
+    fn updater_powershell_does_not_inherit_parent_configuration() {
+        const FIXTURE: &str = "ALTTABIO_UPDATER_ENV_FIXTURE";
+        if std::env::var(FIXTURE).as_deref() == Ok("1") {
+            assert_eq!(
+                run_script(
+                    "[Console]::Write([string]::IsNullOrEmpty($env:ALTTABIO_UNTRUSTED_ENV))"
+                ),
+                Ok("True".to_owned())
+            );
+            assert_eq!(
+                run_script(
+                    "$expected = $PSHOME + [IO.Path]::DirectorySeparatorChar; [Console]::Write((Get-Command Get-FileHash).Module.Path.StartsWith($expected, [StringComparison]::OrdinalIgnoreCase))"
+                ),
+                Ok("True".to_owned())
+            );
+            return;
+        }
+        let output = Command::new(
+            std::env::current_exe().unwrap_or_else(|error| panic!("{error}")),
+        )
+        .args([
+            "--exact",
+            "windows_updater::tests::updater_powershell_does_not_inherit_parent_configuration",
+            "--nocapture",
+        ])
+        .env(FIXTURE, "1")
+        .env("ALTTABIO_UNTRUSTED_ENV", "parent-controlled")
+        .env("CURL_HOME", "parent-controlled")
+        .env("PSModulePath", "parent-controlled")
+        .output()
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an elevated Windows token to create an administrator-only directory"]
+    fn runtime_temporary_folder_is_protected_from_the_shell() {
+        let temporary = WorkFolder::temporary().unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            crate::startup::executable_is_replaceable_by_shell(&temporary.path),
+            Ok(false)
+        );
+        assert_eq!(
+            run_script_in("[Console]::Write($env:TEMP)", &temporary.path),
+            Ok(temporary.path.to_string_lossy().into_owned())
+        );
+    }
 
     #[test]
     fn update_checks_report_blocked_installations_before_offering_a_download() {
