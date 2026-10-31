@@ -265,7 +265,14 @@ fn literal(path: &Path) -> Result<String, String> {
     let text = path
         .to_str()
         .ok_or_else(|| "The installation path is not valid Unicode".to_owned())?;
-    Ok(format!("'{}'", text.replace('\'', "''")))
+    // PowerShell tokenizes smart quotes as delimiters too. Numeric UTF-16 code units keep every
+    // path character out of its lexer while preserving non-BMP characters exactly.
+    let units = text
+        .encode_utf16()
+        .map(|unit| unit.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!("([string]::new([char[]]@({units})))"))
 }
 
 struct WorkFolder {
@@ -468,19 +475,17 @@ mod tests {
     }
 
     #[test]
-    fn powershell_paths_are_single_quoted_literals() {
-        assert_eq!(
-            literal(Path::new("C:\\A user's files\\$test;`x\\AltTabio.exe")),
-            Ok("'C:\\A user''s files\\$test;`x\\AltTabio.exe'".to_owned())
-        );
-    }
-
-    #[test]
     fn the_windows_process_adapter_preserves_literal_script_arguments() {
-        let path = Path::new("C:\\A user's [files]\\$test;`x\\AltTabio.exe");
-        let quoted = literal(path).unwrap_or_else(|error| panic!("{error}"));
-        let result = run_script(&format!("[Console]::Write({quoted})"));
-        assert_eq!(result, Ok(path.to_string_lossy().into_owned()));
+        for text in [
+            "C:\\A user's [files]\\$test;`x\\AltTabio.exe",
+            "C:\\Bob’s Tools\\AltTabio.exe",
+            "C:\\quotes‘’‚‛ and 😀\\AltTabio.exe",
+        ] {
+            let path = Path::new(text);
+            let quoted = literal(path).unwrap_or_else(|error| panic!("{error}"));
+            let result = run_script(&format!("[Console]::Write({quoted})"));
+            assert_eq!(result, Ok(path.to_string_lossy().into_owned()));
+        }
     }
 
     #[test]
