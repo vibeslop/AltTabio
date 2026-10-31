@@ -163,18 +163,23 @@ impl QueryText {
         self.move_to(range.start + text.len(), false);
     }
 
-    pub fn command(&mut self, command: TextCommand) {
+    /// Applies a command and reports whether the query text changed.
+    pub fn command(&mut self, command: TextCommand) -> bool {
         use TextCommand as C;
         match command {
             C::SelectAll => {
                 self.current.anchor = 0;
                 self.current.caret = self.text().len();
+                false
             }
-            C::Copy | C::Cut | C::Paste => {}
+            C::Copy | C::Cut | C::Paste => false,
             C::Undo => Self::restore(&mut self.current, &mut self.undo, &mut self.redo),
             C::Redo => Self::restore(&mut self.current, &mut self.redo, &mut self.undo),
             C::Delete | C::Backspace | C::DeleteWord | C::BackspaceWord => self.delete(command),
-            _ => self.navigate(command),
+            _ => {
+                self.navigate(command);
+                false
+            }
         }
     }
 
@@ -208,7 +213,7 @@ impl QueryText {
         self.move_to(target, extend);
     }
 
-    fn delete(&mut self, command: TextCommand) {
+    fn delete(&mut self, command: TextCommand) -> bool {
         use TextCommand as C;
         if self.selection().is_empty() {
             self.current.anchor = match command {
@@ -218,7 +223,9 @@ impl QueryText {
                 _ => self.next(),
             };
         }
+        let changed = !self.selection().is_empty();
         self.insert("");
+        changed
     }
 
     fn previous(&self) -> usize {
@@ -273,9 +280,13 @@ impl QueryText {
         self.undo.push(self.current.clone());
         self.redo.clear();
     }
-    fn restore(current: &mut Snapshot, from: &mut Vec<Snapshot>, to: &mut Vec<Snapshot>) {
+    fn restore(current: &mut Snapshot, from: &mut Vec<Snapshot>, to: &mut Vec<Snapshot>) -> bool {
         if let Some(previous) = from.pop() {
+            let changed = current.text != previous.text;
             to.push(std::mem::replace(current, previous));
+            changed
+        } else {
+            false
         }
     }
 }
@@ -283,6 +294,26 @@ impl QueryText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_distinguish_text_edits_from_selection_and_no_ops() {
+        let mut text = QueryText::default();
+        assert!(!text.command(TextCommand::Backspace));
+        text.insert("abc");
+        assert!(!text.command(TextCommand::Left));
+        assert!(!text.command(TextCommand::SelectAll));
+        assert!(text.command(TextCommand::Delete));
+        assert!(text.command(TextCommand::Undo));
+        assert!(text.command(TextCommand::Redo));
+        assert!(!text.command(TextCommand::Redo));
+        text.insert("abc");
+        let _changed = text.command(TextCommand::SelectAll);
+        text.insert("abc");
+        assert!(
+            !text.command(TextCommand::Undo),
+            "selection changes need redraw, not refiltering"
+        );
+    }
     #[test]
     fn selection_replace_delete_and_undo_preserve_unicode_boundaries() {
         let mut text = QueryText::default();

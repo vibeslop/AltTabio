@@ -388,9 +388,7 @@ impl SwitcherSession {
                 _ => {}
             }
         }
-        let previous = self.switcher.filter().to_owned();
-        self.switcher.filter.command(command);
-        if self.switcher.filter() != previous {
+        if self.switcher.filter.command(command) {
             self.switcher.apply_filter();
         }
         SwitcherEffect::Redraw
@@ -461,10 +459,10 @@ impl Switcher {
     }
 
     pub(crate) fn backspace_filter(&mut self) {
-        let previous = self.filter.text().to_owned();
-        self.filter
-            .command(crate::text_edit::TextCommand::Backspace);
-        if self.filter.text() != previous {
+        if self
+            .filter
+            .command(crate::text_edit::TextCommand::Backspace)
+        {
             self.apply_filter();
         }
     }
