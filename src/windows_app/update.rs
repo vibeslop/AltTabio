@@ -119,11 +119,7 @@ impl Updates {
                             match result {
                                 Ok(()) => {
                                     self.restart = Restart::HelperReady;
-                                    return if can_restart {
-                                        Action::Quit
-                                    } else {
-                                        Action::None
-                                    };
+                                    return self.restart_if_ready(Action::None, can_restart, now);
                                 }
                                 Err(error) => {
                                     eprintln!("{error}");
@@ -168,7 +164,27 @@ impl Updates {
 
     fn restart_if_ready(&mut self, action: Action, can_restart: bool, now: Instant) -> Action {
         if self.restart == Restart::HelperReady {
-            return if can_restart { Action::Quit } else { action };
+            if !can_restart || now < self.restart_at {
+                return action;
+            }
+            let result = self
+                .staged
+                .as_ref()
+                .ok_or_else(|| "The staged update is missing".to_owned())
+                .and_then(windows_updater::approve_relaunch);
+            return match result {
+                Ok(()) => Action::Quit,
+                Err(error) => {
+                    self.restart_at = now + RETRY;
+                    eprintln!("{error}");
+                    if self.request == Request::Active {
+                        self.request = Request::None;
+                        Action::Report(Report::Failed(error))
+                    } else {
+                        Action::None
+                    }
+                }
+            };
         }
         if matches!(action, Action::None)
             && can_restart

@@ -1,4 +1,5 @@
-//! Blocking Windows update I/O. Call these functions only on the update worker.
+//! Blocking Windows update I/O runs on the update worker. Only the final approval marker is
+//! written by the outer app loop immediately before it exits for an update.
 //!
 //! Windows supplies PowerShell, JSON/ZIP support, SHA-256, and curl. Keeping the scripts
 //! embedded avoids loading elevated code from a writable temporary script or from PATH.
@@ -146,6 +147,12 @@ pub fn relaunch(staged: &mut StagedUpdate) -> Result<(), String> {
     // directory's protected ACL prevents another account from changing the staged payload.
     staged.work.helper_owns = true;
     Ok(())
+}
+
+/// Commits an update exit once the app can quit immediately, outside native callbacks.
+pub fn approve_relaunch(staged: &StagedUpdate) -> Result<(), String> {
+    std::fs::write(staged.work.path.join("apply-approved"), &staged.hash)
+        .map_err(|error| format!("Could not authorize the update restart: {error}"))
 }
 
 fn validate_update_target(target: &Path) -> Result<(), String> {

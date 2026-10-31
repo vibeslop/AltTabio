@@ -23,8 +23,14 @@ try {
     # The app waits out an open switcher or modal dialog before quitting. Hold the original
     # process handle until then rather than timing out and leaving it without a relauncher.
     $parent.WaitForExit()
-    $parentExited = $true
     $parent.Dispose()
+    $approval = Join-Path $Work 'apply-approved'
+    if (-not (Test-Path -LiteralPath $approval) -or [IO.File]::ReadAllText($approval) -cne $Hash) {
+        # READY only prepares the helper. Ordinary Exit and crashes must never relaunch the app.
+        Remove-Item -LiteralPath $Work -Recurse -Force
+        exit 0
+    }
+    $parentExited = $true
     if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -cne $Hash) {
         throw 'The staged executable failed its SHA-256 check.'
     }

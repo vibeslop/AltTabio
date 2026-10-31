@@ -100,7 +100,8 @@ function Relaunch-Case(
     [bool] $FailLaunch,
     [bool] $BadHash = $false,
     [bool] $ProtectedTarget = $false,
-    [bool] $FailPermissions = $false
+    [bool] $FailPermissions = $false,
+    [bool] $Authorize = $true
 ) {
     $folder = Join-Path $root $Name
     $work = Join-Path $folder 'stage'
@@ -119,6 +120,7 @@ function Relaunch-Case(
     [IO.File]::WriteAllText((Join-Path $folder 'AltTabio.ini'), 'keep these settings')
     $hash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
     if ($BadHash) { $hash = '0' * 64 }
+    if ($Authorize) { [IO.File]::WriteAllText((Join-Path $work 'apply-approved'), $hash) }
     $originalAcl = (Get-Acl -LiteralPath $target).Sddl
     Assert ((Get-Acl -LiteralPath $staged).Sddl -cne $originalAcl) "$Name requires distinct staged and target permissions"
     $sleep = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('Start-Sleep -Seconds 300'))
@@ -151,11 +153,15 @@ function Start-Process {
     }
     Assert ($result.Output.Contains('READY')) "$Name did not acknowledge readiness: $($result.Output)"
     Assert ([IO.File]::ReadAllText((Join-Path $folder 'AltTabio.ini')) -ceq 'keep these settings') "$Name changed settings"
-    $expected = if ($FailLaunch -or $BadHash -or $FailPermissions) { 'old executable' } else { 'new executable' }
+    $expected = if (-not $Authorize -or $FailLaunch -or $BadHash -or $FailPermissions) { 'old executable' } else { 'new executable' }
     Assert ([IO.File]::ReadAllText($target) -ceq $expected) "$Name left the wrong executable: $($result.Output)"
     $updatedAcl = (Get-Acl -LiteralPath $target).Sddl
     Assert ($updatedAcl -ceq $originalAcl) "$Name changed executable permissions. Before: $originalAcl After: $updatedAcl"
-    Assert ([IO.File]::ReadAllText($launchLog).Trim() -ceq $expected) "$Name relaunched the wrong executable"
+    if ($Authorize) {
+        Assert ([IO.File]::ReadAllText($launchLog).Trim() -ceq $expected) "$Name relaunched the wrong executable"
+    } else {
+        Assert (-not (Test-Path -LiteralPath $launchLog)) "$Name relaunched after an ordinary exit"
+    }
     if ($FailLaunch -or $BadHash -or $FailPermissions) {
         Assert ($result.Code -eq 1) "$Name should report a failure"
         Assert (Test-Path -LiteralPath (Join-Path $work 'error.txt')) "$Name lost the failure diagnostic"
@@ -201,6 +207,7 @@ try {
     Relaunch-Case 'protected-tampered-stage' $false -BadHash $true -ProtectedTarget $true
     Relaunch-Case 'failed-permission-rollback' $false -FailPermissions $true
     Relaunch-Case 'protected-failed-permission-rollback' $false -ProtectedTarget $true -FailPermissions $true
+    Relaunch-Case 'ordinary-exit-cancels-relaunch' $false -Authorize $false
     Write-Output 'Windows updater verification, replacement, and rollback checks passed.'
 } finally {
     # Resolve and constrain the only recursive cleanup to this run's unique test directory.
