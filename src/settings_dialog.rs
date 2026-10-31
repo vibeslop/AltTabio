@@ -44,7 +44,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
-    MINMAXINFO, PostMessageW, SC_MAXIMIZE, SW_SHOWNORMAL, SendMessageW, WINDOW_EX_STYLE,
+    MINMAXINFO, MSG, PostMessageW, SC_MAXIMIZE, SW_SHOWNORMAL, SendMessageW, WINDOW_EX_STYLE,
     WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL,
     WM_SIZE, WM_SYSCOMMAND, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
     WS_EX_COMPOSITED, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MINIMIZEBOX, WS_OVERLAPPED,
@@ -80,6 +80,7 @@ pub fn show(
     settings: &Settings,
     category: Category,
     on_open: impl FnOnce(HWND),
+    mut handle_app_message: impl FnMut(&MSG) -> bool,
 ) -> Result<Option<Settings>> {
     let instance = win32::module_instance()?;
     register_class(instance)?;
@@ -135,6 +136,9 @@ pub fn show(
     .ok()?;
     on_open(window);
     let Some(state) = dialog.run(|message| {
+        if handle_app_message(message) {
+            return true;
+        }
         if message.hwnd != window || message.message != WM_SETTINGS_OPEN_REPOSITORY {
             return false;
         }

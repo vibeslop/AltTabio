@@ -8,7 +8,7 @@ use alttabio::settings_change::{
 use alttabio::settings_form::Category;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsIconic, PostMessageW, SW_RESTORE, SW_SHOW, ShowWindow,
+    IsIconic, PostMessageW, PostQuitMessage, SW_RESTORE, SW_SHOW, ShowWindow,
 };
 
 #[cfg(test)]
@@ -78,6 +78,18 @@ impl AppHost {
             category.unwrap_or_default(),
             |window| {
                 self.settings_window.set(Some(window));
+            },
+            |message| {
+                if !super::update::is_update_timer(message, owner) {
+                    return false;
+                }
+                // The Settings loop has no state borrow here. Work may proceed, while the
+                // settings_dialog flag still prevents committing an update restart.
+                if self.update_tick() {
+                    // SAFETY: propagate a requested application exit through the nested loop.
+                    unsafe { PostQuitMessage(0) };
+                }
+                true
             },
         );
         self.settings_window.set(None);
@@ -170,13 +182,13 @@ impl SettingsEffects for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_messages::WM_TRAY_CALLBACK;
+    use crate::app_messages::{UPDATE_TIMER_ID, WM_TRAY_CALLBACK};
     use crate::settings_io::SettingsStore;
     use crate::win32::{ComApartment, module_instance};
     use windows::Win32::UI::Input::KeyboardAndMouse::{IsWindowEnabled, VK_ESCAPE, VK_RETURN};
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, GW_OWNER, GetWindow, IsIconic, IsWindowVisible, SW_HIDE,
-        SW_MINIMIZE, ShowWindow, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+        SW_MINIMIZE, ShowWindow, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_TIMER,
         WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
     };
     use windows::core::{Error, Result, w};
@@ -188,6 +200,53 @@ mod tests {
             // SAFETY: this test uniquely owns the window on the creating thread.
             assert!(unsafe { DestroyWindow(self.0) }.is_ok());
         }
+    }
+
+    #[test]
+    fn settings_nested_loop_delivers_owner_update_timers() -> Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let owner = TestWindow(unsafe {
+            // SAFETY: STATIC is a built-in class, with no callback state or retained pointers.
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!("Update timer owner"),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(module_instance()?),
+                None,
+            )
+        }?);
+        let observed = std::cell::Cell::new(false);
+        let on_open = |window| unsafe {
+            // SAFETY: both windows are owned by this test; posted events carry only scalar IDs.
+            assert!(
+                PostMessageW(Some(owner.0), WM_TIMER, WPARAM(UPDATE_TIMER_ID), LPARAM(0)).is_ok()
+            );
+            assert!(PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok());
+        };
+        let result = settings_dialog::show(
+            owner.0,
+            &Settings::default(),
+            Category::General,
+            on_open,
+            |message| {
+                if super::super::update::is_update_timer(message, owner.0) {
+                    observed.set(true);
+                    true
+                } else {
+                    false
+                }
+            },
+        )?;
+        assert!(result.is_none());
+        assert!(observed.get(), "Settings consumed the app's update timer");
+        Ok(())
     }
 
     #[test]
@@ -225,68 +284,69 @@ mod tests {
         let Some((owner, settings)) = host.state.borrow_mut().prepare_settings_dialog() else {
             panic!("Settings must open from an idle switcher");
         };
-        let result =
-            settings_dialog::show(owner, &settings, Category::General, |settings_window| {
-                unsafe {
-                    // SAFETY: both windows are live and belong to this test thread.
-                    assert!(
-                        IsWindowEnabled(owner).as_bool(),
-                        "Settings must not disable the switcher"
-                    );
-                    assert!(
-                        GetWindow(settings_window, GW_OWNER).is_err(),
-                        "Settings must stay independent of the overlay's Z-order band"
-                    );
-                }
-                for tray_message in [WM_LBUTTONUP, WM_LBUTTONDBLCLK] {
-                    let tray_message = isize::try_from(tray_message)
-                        .unwrap_or_else(|error| panic!("invalid tray message: {error}"));
-                    let mut app = host.state.borrow_mut();
-                    app.handle_message(WM_TRAY_CALLBACK, WPARAM(0), LPARAM(tray_message));
-                    assert!(
-                        app.is_visible(),
-                        "the tray command must open the switcher during Settings"
-                    );
-                    let Some(position) = app
-                        .session
-                        .switcher()
-                        .positioned_visible_tasks()
-                        .find(|(_, task)| task.window_handle == settings_window.0 as isize)
-                        .map(|(position, _)| position)
-                    else {
-                        panic!("the open Settings window must remain switchable");
-                    };
-                    assert!(app.session.switcher_mut().select_visible_position(position));
-                    app.handle_message(WM_KEYDOWN, WPARAM(usize::from(VK_RETURN.0)), LPARAM(0));
-                    assert!(!app.is_visible(), "Enter must choose the selected window");
-                    unsafe {
-                        // SAFETY: Settings remains live through this callback and its nested loop.
-                        assert!(IsWindowVisible(settings_window).as_bool());
-                    }
-                }
-                host.state.borrow_mut().handle_message(
-                    WM_TRAY_CALLBACK,
-                    WPARAM(0),
-                    LPARAM(isize::try_from(WM_LBUTTONUP).unwrap_or_default()),
+        let on_open = |settings_window: HWND| {
+            unsafe {
+                // SAFETY: both windows are live and belong to this test thread.
+                assert!(
+                    IsWindowEnabled(owner).as_bool(),
+                    "Settings must not disable the switcher"
                 );
-                assert!(host.state.borrow().is_visible());
+                assert!(
+                    GetWindow(settings_window, GW_OWNER).is_err(),
+                    "Settings must stay independent of the overlay's Z-order band"
+                );
+            }
+            for tray_message in [WM_LBUTTONUP, WM_LBUTTONDBLCLK] {
+                let tray_message = isize::try_from(tray_message)
+                    .unwrap_or_else(|error| panic!("invalid tray message: {error}"));
+                let mut app = host.state.borrow_mut();
+                app.handle_message(WM_TRAY_CALLBACK, WPARAM(0), LPARAM(tray_message));
+                assert!(
+                    app.is_visible(),
+                    "the tray command must open the switcher during Settings"
+                );
+                let Some(position) = app
+                    .session
+                    .switcher()
+                    .positioned_visible_tasks()
+                    .find(|(_, task)| task.window_handle == settings_window.0 as isize)
+                    .map(|(position, _)| position)
+                else {
+                    panic!("the open Settings window must remain switchable");
+                };
+                assert!(app.session.switcher_mut().select_visible_position(position));
+                app.handle_message(WM_KEYDOWN, WPARAM(usize::from(VK_RETURN.0)), LPARAM(0));
+                assert!(!app.is_visible(), "Enter must choose the selected window");
                 unsafe {
-                    // SAFETY: the posted keys and close request carry no borrowed data. The real
-                    // Settings loop must dispatch Escape to the overlay before closing Settings.
-                    assert!(
-                        PostMessageW(
-                            Some(owner),
-                            WM_KEYDOWN,
-                            WPARAM(usize::from(VK_ESCAPE.0)),
-                            LPARAM(0)
-                        )
-                        .is_ok()
-                    );
-                    assert!(
-                        PostMessageW(Some(settings_window), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok()
-                    );
+                    // SAFETY: Settings remains live through this callback and its nested loop.
+                    assert!(IsWindowVisible(settings_window).as_bool());
                 }
-            })?;
+            }
+            host.state.borrow_mut().handle_message(
+                WM_TRAY_CALLBACK,
+                WPARAM(0),
+                LPARAM(isize::try_from(WM_LBUTTONUP).unwrap_or_default()),
+            );
+            assert!(host.state.borrow().is_visible());
+            unsafe {
+                // SAFETY: the posted keys and close request carry no borrowed data. The real
+                // Settings loop must dispatch Escape to the overlay before closing Settings.
+                assert!(
+                    PostMessageW(
+                        Some(owner),
+                        WM_KEYDOWN,
+                        WPARAM(usize::from(VK_ESCAPE.0)),
+                        LPARAM(0)
+                    )
+                    .is_ok()
+                );
+                assert!(
+                    PostMessageW(Some(settings_window), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok()
+                );
+            }
+        };
+        let result =
+            settings_dialog::show(owner, &settings, Category::General, on_open, |_| false)?;
         assert!(
             result.is_none(),
             "the test must cancel Settings without saving"

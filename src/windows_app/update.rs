@@ -9,14 +9,19 @@ use crate::windows_updater::{self, StagedUpdate};
 use alttabio::update::{Checked, Report, Step, Update, Updater};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    IDYES, MB_ICONINFORMATION, MB_OK, MB_YESNO, MessageBoxW, SetTimer,
+    IDYES, MB_ICONINFORMATION, MB_OK, MB_YESNO, MSG, MessageBoxW, SetTimer, WM_TIMER,
 };
 use windows::core::{PCWSTR, w};
 
 const FIRST_CHECK: Duration = Duration::from_mins(1);
 const RETRY: Duration = Duration::from_hours(1);
 const INTERVAL: Duration = Duration::from_hours(24);
+
+pub(super) fn is_update_timer(message: &MSG, owner: HWND) -> bool {
+    message.hwnd == owner && message.message == WM_TIMER && message.wParam.0 == UPDATE_TIMER_ID
+}
 
 enum Completion {
     Checked(Result<Checked, String>),
@@ -286,11 +291,12 @@ impl AppHost {
             let Ok(mut app) = self.state.try_borrow_mut() else {
                 return false;
             };
-            if app.dialog_state().any_open() {
+            if app.dialog_state().blocks_switcher() {
                 return false;
             }
             let automatic = app.settings.general.auto_update && windows_updater::is_release_build();
-            let can_restart = !app.is_visible() && app.pending_shell.is_none();
+            let can_restart =
+                !app.dialog_state().any_open() && !app.is_visible() && app.pending_shell.is_none();
             let action = app.updates.tick(automatic, can_restart);
             let ready = app.updates.policy.installed_version().is_some();
             if let Some(tray) = &app.tray

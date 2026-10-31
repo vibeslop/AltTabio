@@ -412,10 +412,7 @@ fn run_message_loop(host: &AppHost, hwnd: HWND) -> Result<()> {
         if result.0 == 0 {
             return Ok(());
         }
-        if message.hwnd == hwnd
-            && message.message == windows::Win32::UI::WindowsAndMessaging::WM_TIMER
-            && message.wParam.0 == crate::app_messages::UPDATE_TIMER_ID
-        {
+        if update::is_update_timer(&message, hwnd) {
             if host.update_tick() {
                 return Ok(());
             }

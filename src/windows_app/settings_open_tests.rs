@@ -261,7 +261,7 @@ fn check_first_settings_open(theme: Theme, category: Category) -> Result<()> {
     };
     let visible = Cell::new(false);
     let minimized = Cell::new(false);
-    let result = settings_dialog::show(owner, &settings, category, |window| {
+    let on_open = |window: HWND| {
         unsafe {
             // SAFETY: Settings owns this live window on the fixture's UI thread.
             visible.set(IsWindowVisible(window).as_bool());
@@ -320,7 +320,8 @@ fn check_first_settings_open(theme: Theme, category: Category) -> Result<()> {
             // SAFETY: the close request contains no borrowed data and runs on this UI thread.
             assert!(PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok());
         }
-    })?;
+    };
+    let result = settings_dialog::show(owner, &settings, category, on_open, |_| false)?;
     assert!(result.is_none(), "the fixture must close without saving");
     assert!(
         visible.get(),

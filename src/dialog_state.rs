@@ -15,7 +15,7 @@ impl DialogState {
         self.settings_dialog || self.blocking_dialog
     }
 
-    /// Gates background updates and restarts while any dialog or menu is open.
+    /// Gates restarts while any dialog or menu is open.
     #[must_use]
     pub const fn any_open(self) -> bool {
         self.dialog_open() || self.context_menu
@@ -33,7 +33,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_allows_switching_while_deferring_updates_and_other_dialogs() {
+    fn settings_allows_work_while_deferring_restarts_and_other_dialogs() {
         let settings = DialogState {
             settings_dialog: true,
             ..DialogState::default()
