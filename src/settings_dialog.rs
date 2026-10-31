@@ -26,7 +26,7 @@ use alttabio::failure_run::SharedFailureRun;
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
     Category, Choices, Control, DialogButton, ICON_CHOICES, MIN_CLIENT_HEIGHT, MIN_CLIENT_WIDTH,
-    REPOSITORY_URL, Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
+    Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
 };
 use alttabio::theme::ResolvedTheme;
 use controls::{DialogControls, is_checked, selected_index};
@@ -41,16 +41,15 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
-use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
-    MINMAXINFO, MSG, PostMessageW, SC_MAXIMIZE, SW_SHOWNORMAL, SendMessageW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL,
-    WM_SIZE, WM_SYSCOMMAND, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-    WS_EX_COMPOSITED, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MINIMIZEBOX, WS_OVERLAPPED,
-    WS_SYSMENU, WS_THICKFRAME,
+    MINMAXINFO, MSG, PostMessageW, SC_MAXIMIZE, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_SIZE,
+    WM_SYSCOMMAND, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    WS_THICKFRAME,
 };
-use windows::core::{PCWSTR, Result, w};
+use windows::core::Result;
 
 pub(crate) const WINDOW_CLASS_NAME: &str = "AltTabioRustSettings";
 const WM_SETTINGS_FOCUS: u32 = WM_APP + 21;
@@ -142,8 +141,8 @@ pub fn show(
         if message.hwnd != window || message.message != WM_SETTINGS_OPEN_REPOSITORY {
             return false;
         }
-        // The browser may run a nested native loop. No dialog-state borrow spans this action.
-        if let Err(error) = open_repository(window) {
+        // Launch outside native callbacks and dialog-state borrows.
+        if let Err(error) = crate::windows_app::open_repository() {
             crate::windows_app::show_error_for_window(window, &error);
         }
         true
@@ -164,30 +163,6 @@ pub(crate) fn navigate(window: HWND, category: Category) -> Result<()> {
             WPARAM(category as usize),
             LPARAM(0),
         )
-    }
-}
-
-fn open_repository(owner: HWND) -> std::result::Result<(), String> {
-    let url = win32::wide(REPOSITORY_URL);
-    // SAFETY: the owner and terminated URL remain live for this call; other strings are static
-    // or null. This runs in the message loop, outside the native callback and state borrow.
-    let result = unsafe {
-        ShellExecuteW(
-            Some(owner),
-            w!("open"),
-            PCWSTR(url.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    let code = result.0 as usize;
-    if code <= 32 {
-        Err(format!(
-            "Could not open the AltTabio GitHub page (ShellExecuteW returned {code})"
-        ))
-    } else {
-        Ok(())
     }
 }
 

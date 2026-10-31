@@ -177,6 +177,10 @@ pub fn show_fatal_error(message: &str) {
     show_error_box(None, message);
 }
 
+pub(crate) fn open_repository() -> std::result::Result<(), String> {
+    commands::open_repository()
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "independent Win32 lifecycle and input flags do not form one shared state machine"

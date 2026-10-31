@@ -3,6 +3,7 @@ use super::test_support::RenderTarget;
 use super::*;
 use crate::dialog_host::DialogHost;
 use alttabio::dialog_layout::{BASE_DPI, Point};
+use alttabio::settings_form::REPOSITORY_URL;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 use windows::Win32::UI::WindowsAndMessaging::{

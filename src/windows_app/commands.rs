@@ -24,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
     TrackPopupMenu, WM_CLOSE,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{PCWSTR, PWSTR, w};
 
 pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let created = unsafe {
@@ -172,7 +172,7 @@ fn run_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
             return false;
         }
     };
-    if let Err(error) = launch_with_shell_token(&path) {
+    if let Err(error) = launch_with_shell_token(&path, None) {
         eprintln!(
             "Could not start {} without elevation: {error}",
             path.display()
@@ -232,7 +232,39 @@ fn open_selected_process_with<P>(
     Some(process)
 }
 
-fn launch_with_shell_token(path: &std::path::Path) -> Result<(), String> {
+pub(super) fn open_repository() -> Result<(), String> {
+    let system = crate::win32::system_directory()?;
+    let explorer = system
+        .parent()
+        .ok_or_else(|| "Windows has no system root".to_owned())?
+        .join("explorer.exe");
+    if !current_process_is_elevated()? {
+        let _launcher = std::process::Command::new(&explorer)
+            .arg(alttabio::settings_form::REPOSITORY_URL)
+            .spawn()
+            .map_err(|error| format!("Could not open the repository page: {error}"))?;
+        return Ok(());
+    }
+    launch_with_shell_token(&explorer, Some(alttabio::settings_form::REPOSITORY_URL))
+}
+
+fn current_process_is_elevated() -> Result<bool, String> {
+    let mut token = HANDLE::default();
+    // SAFETY: the current-process handle is borrowed; the token output is writable and its
+    // successful query handle is immediately placed under an owning guard.
+    unsafe {
+        OpenProcessToken(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            TOKEN_QUERY,
+            &raw mut token,
+        )
+    }
+    .map_err(|error| format!("Could not inspect the app's token: {error}"))?;
+    let token = OwnedHandle(token);
+    token_is_elevated(token.0)
+}
+
+fn unelevated_shell_token() -> Result<OwnedHandle, String> {
     let shell_window = unsafe {
         // SAFETY: GetShellWindow has no preconditions and returns a borrowed handle.
         GetShellWindow()
@@ -260,25 +292,40 @@ fn launch_with_shell_token(path: &std::path::Path) -> Result<(), String> {
     if token_is_elevated(shell_token.0)? {
         return Err("the Windows shell token is elevated".to_owned());
     }
+    Ok(shell_token)
+}
 
+fn launch_with_shell_token(path: &std::path::Path, argument: Option<&str>) -> Result<(), String> {
+    let shell_token = unelevated_shell_token()?;
     let application = path
         .as_os_str()
         .encode_wide()
         .chain([0])
         .collect::<Vec<_>>();
+    // The only argument is the fixed HTTPS repository URL. CreateProcess parses arguments,
+    // not shell syntax; quoting keeps the executable path and URL as separate arguments.
+    let mut command_line = argument.map(|argument| {
+        let mut line = vec![u16::from(b'"')];
+        line.extend(path.as_os_str().encode_wide());
+        line.extend("\" \"".encode_utf16());
+        line.extend(argument.encode_utf16());
+        line.extend("\"\0".encode_utf16());
+        line
+    });
     let mut startup = STARTUPINFOW {
         cb: u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or_default(),
         ..STARTUPINFOW::default()
     };
     let mut process = PROCESS_INFORMATION::default();
     unsafe {
-        // SAFETY: the shell token is a live primary token; application is null-terminated; startup
-        // and process are writable for the synchronous creation call. No Rust references are kept.
+        // SAFETY: the shell token is a live primary token. The application and optional mutable
+        // command line are terminated and live through this call, as are the writable outputs.
+        // Windows retains no Rust references after synchronous process creation returns.
         CreateProcessWithTokenW(
             shell_token.0,
             LOGON_WITH_PROFILE,
             PCWSTR(application.as_ptr()),
-            None,
+            command_line.as_mut().map(|line| PWSTR(line.as_mut_ptr())),
             PROCESS_CREATION_FLAGS::default(),
             None,
             PCWSTR::null(),
@@ -350,6 +397,14 @@ impl Drop for OwnedMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an elevated test process and an interactive non-elevated Windows shell"]
+    fn shell_launch_token_stays_unelevated_when_the_app_is_elevated() {
+        assert_eq!(current_process_is_elevated(), Ok(true));
+        let shell_token = unelevated_shell_token().unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(token_is_elevated(shell_token.0), Ok(false));
+    }
 
     #[test]
     fn close_command_posts_to_one_window_without_waiting_for_shutdown() {
