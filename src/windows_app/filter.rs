@@ -80,6 +80,13 @@ impl App {
         self.request_redraw();
     }
 
+    pub(super) fn sync_filter_geometry(&mut self) {
+        if let Some(popup) = &mut self.filter_popup {
+            popup.invalidate_geometry();
+        }
+        self.sync_filter_popup();
+    }
+
     pub(super) fn sync_filter_popup(&mut self) {
         if !self.session.filter_visible() || self.session.context_menu_open() {
             self.hide_filter_feedback();

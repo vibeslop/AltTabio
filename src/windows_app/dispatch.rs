@@ -43,7 +43,7 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_MOVE => {
-                self.sync_filter_popup();
+                self.sync_filter_geometry();
                 Some(LRESULT(0))
             }
             WM_DPICHANGED => {
@@ -96,6 +96,7 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
+                self.sync_filter_geometry();
                 match self.refresh_theme() {
                     Ok(true) => self.request_redraw(),
                     Ok(false) => {}

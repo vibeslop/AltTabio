@@ -12,6 +12,7 @@ use crate::win32::{
 use alttabio::dialog_layout::Rect;
 use alttabio::filter_feedback::popup_bounds;
 use alttabio::overlay_layout::layout_dpi;
+use alttabio::text_edit::QueryText;
 use alttabio::theme::ResolvedTheme;
 use paint::Painter;
 use std::cell::Cell;
@@ -42,6 +43,17 @@ struct Frame {
     bounds: Rect,
     dpi: u16,
     theme: ResolvedTheme,
+    compact: bool,
+}
+
+impl Frame {
+    fn matches_editor(&self, editor: &QueryText, theme: ResolvedTheme, compact: bool) -> bool {
+        self.query == editor.text()
+            && self.caret == editor.caret()
+            && self.selection == editor.selection()
+            && self.theme == theme
+            && self.compact == compact
+    }
 }
 
 struct Events {
@@ -59,6 +71,7 @@ pub(crate) struct FilterPopup {
     events: Option<Box<Events>>,
     painter: Painter,
     frame: Option<Frame>,
+    shown: Cell<bool>,
 }
 
 impl FilterPopup {
@@ -119,17 +132,30 @@ impl FilterPopup {
             events: Some(events),
             painter,
             frame: None,
+            shown: Cell::new(false),
         })
     }
 
     pub fn update(
         &mut self,
         owner: HWND,
-        editor: &alttabio::text_edit::QueryText,
+        editor: &QueryText,
         theme: ResolvedTheme,
         compact: bool,
     ) -> Result<()> {
         self.check_events()?;
+        if self.shown.get()
+            && !self
+                .events
+                .as_ref()
+                .is_some_and(|events| events.destroyed.get())
+            && self
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.matches_editor(editor, theme, compact))
+        {
+            return Ok(());
+        }
         let mut panel = RECT::default();
         let window_dpi = unsafe {
             // SAFETY: owner is the live borrowed overlay and panel is writable for the call.
@@ -152,6 +178,7 @@ impl FilterPopup {
             bounds,
             dpi: layout_dpi(window_dpi),
             theme,
+            compact,
         };
         if self.frame.as_ref() != Some(&frame) {
             let surface =
@@ -191,15 +218,18 @@ impl FilterPopup {
             }
             self.frame = Some(frame);
         }
-        unsafe {
-            // SAFETY: the owned popup has valid layered contents and this show cannot activate
-            // it. Its owner keeps it above the switcher without making it independently topmost.
-            let _previous_visibility = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        if !self.shown.replace(true) {
+            unsafe {
+                // SAFETY: the owned popup has valid layered contents and this show cannot activate
+                // it. Its owner keeps it above the switcher without making it independently topmost.
+                let _previous_visibility = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            }
         }
         Ok(())
     }
 
     pub fn hide(&self) {
+        let was_shown = self.shown.replace(false);
         if let Some(events) = &self.events {
             events.clear_start.set(false);
             events.selecting.set(false);
@@ -207,10 +237,18 @@ impl FilterPopup {
                 return;
             }
         }
+        if !was_shown {
+            return;
+        }
         unsafe {
             // SAFETY: the popup remains live until this wrapper is dropped.
             let _previous_visibility = ShowWindow(self.hwnd, SW_HIDE);
         }
+    }
+
+    /// Move, size, DPI, and work-area notifications invalidate the cached placement.
+    pub fn invalidate_geometry(&mut self) {
+        self.frame = None;
     }
 
     pub fn visible_bounds(&self) -> Option<Rect> {
@@ -410,6 +448,70 @@ mod tests {
             // SAFETY: the test uniquely owns this hidden window on its creating thread.
             assert!(unsafe { DestroyWindow(self.0) }.is_ok());
         }
+    }
+
+    #[test]
+    fn unchanged_redraws_reuse_the_popup_until_editor_or_geometry_changes() -> Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let mut popup = FilterPopup::new(HWND::default())?;
+        let mut editor = QueryText::default();
+        editor.insert("filter");
+        // Seed a rendered state on a hidden fixture. A null owner makes any geometry read
+        // fail before painting or showing a window, so this also checks the actual fast path.
+        popup.frame = Some(Frame {
+            query: editor.text().to_owned(),
+            caret: editor.caret(),
+            selection: editor.selection(),
+            bounds: Rect::new(0, 0, 200, 40),
+            dpi: 96,
+            theme: ResolvedTheme::Dark,
+            compact: true,
+        });
+        popup.shown.set(true);
+        for _ in 0..10 {
+            popup.update(HWND::default(), &editor, ResolvedTheme::Dark, true)?;
+        }
+        assert!(
+            popup
+                .update(HWND::default(), &editor, ResolvedTheme::Light, true)
+                .is_err()
+        );
+        assert!(
+            popup
+                .update(HWND::default(), &editor, ResolvedTheme::Dark, false)
+                .is_err()
+        );
+        let _changed = editor.command(alttabio::text_edit::TextCommand::SelectAll);
+        assert!(
+            popup
+                .update(HWND::default(), &editor, ResolvedTheme::Dark, true)
+                .is_err()
+        );
+        let _changed = editor.command(alttabio::text_edit::TextCommand::End);
+        let _changed = editor.command(alttabio::text_edit::TextCommand::Left);
+        assert!(
+            popup
+                .update(HWND::default(), &editor, ResolvedTheme::Dark, true)
+                .is_err()
+        );
+        editor.insert("new");
+        assert!(
+            popup
+                .update(HWND::default(), &editor, ResolvedTheme::Dark, true)
+                .is_err()
+        );
+        editor = QueryText::default();
+        editor.insert("filter");
+        popup.update(HWND::default(), &editor, ResolvedTheme::Dark, true)?;
+        popup.invalidate_geometry();
+        assert!(
+            popup
+                .update(HWND::default(), &editor, ResolvedTheme::Dark, true)
+                .is_err()
+        );
+        // SAFETY: the test owns this window and never asked Windows to show it.
+        assert!(!unsafe { IsWindowVisible(popup.hwnd) }.as_bool());
+        Ok(())
     }
 
     #[test]
