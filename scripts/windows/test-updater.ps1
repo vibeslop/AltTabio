@@ -5,6 +5,7 @@ $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell/v1.0/powershell.exe'
 $download = Get-Content -LiteralPath (Join-Path $repo 'src/windows_updater/download.ps1') -Raw
 $relaunch = Get-Content -LiteralPath (Join-Path $repo 'src/windows_updater/relaunch.ps1') -Raw
+$environment = Get-Content -LiteralPath (Join-Path $repo 'src/windows_updater/environment.ps1') -Raw
 $artifact = Join-Path $repo 'target/release/AltTabio.exe'
 if (-not (Test-Path -LiteralPath $artifact)) { throw 'Build target/release/AltTabio.exe first.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($artifact).ProductVersion
@@ -139,7 +140,7 @@ function New-Object {
     }
     Microsoft.PowerShell.Utility\New-Object -TypeName $TypeName
 }
-function Start-Process {
+function Start-UpdatedApp {
     param($FilePath, $WorkingDirectory, $WindowStyle, $ErrorAction)
     [IO.File]::AppendAllText($LaunchLog + '.styles', "$WindowStyle`n")
     $script:LaunchCount++
@@ -153,7 +154,7 @@ function Start-Process {
         Assert ($body.Contains($replace)) 'The replacement failure fixture has no injection point'
         $body = $body.Replace($replace, "[IO.File]::Move(`$Target, `$previous); throw 'Simulated partial replacement failure'")
     }
-    $script = "`$Work = $(Literal $work)`n`$Target = $(Literal $target)`n`$Hash = '$hash'`n`$ParentId = $($parent.Id)`n`$LaunchLog = $(Literal $launchLog)`n`$FailLaunch = `$$FailLaunch`n`$FailPermissions = `$$FailPermissions`n" + $mock + "`n" + $body
+    $script = "`$Work = $(Literal $work)`n`$Target = $(Literal $target)`n`$Hash = '$hash'`n`$ParentId = $($parent.Id)`n`$LaunchLog = $(Literal $launchLog)`n`$FailLaunch = `$$FailLaunch`n`$FailPermissions = `$$FailPermissions`n" + $environment + "`n" + $mock + "`n" + $body
     try { $result = Run-Script $script $parent }
     finally {
         if (-not $parent.HasExited) { $parent.Kill() }
@@ -189,7 +190,7 @@ try {
     # an explicit, modern ACL so the exact assertion below measures preservation of its policy.
     Set-FixtureDirectoryAcl $root $true
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-    foreach ($text in @($download, $relaunch)) {
+    foreach ($text in @($download, $relaunch, $environment)) {
         $tokens = $null; $errors = $null
         $null = [Management.Automation.Language.Parser]::ParseInput($text, [ref] $tokens, [ref] $errors)
         Assert ($errors.Count -eq 0) "PowerShell syntax errors: $errors"

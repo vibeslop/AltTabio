@@ -44,7 +44,7 @@ try {
     $replaced = $true
     try {
         Restore-Access $permissions
-        Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) -ErrorAction Stop
+        Start-UpdatedApp -FilePath $Target
     } catch {
         [IO.File]::Replace($previous, $Target, (Join-Path $Work 'failed.exe'))
         Restore-Access $permissions
@@ -70,7 +70,7 @@ try {
         }
     }
     if (-not $replaced -and -not $recoveryFailed -and $parentExited -and (Test-Path -LiteralPath $Target)) {
-        try { Start-Process -FilePath $Target -WorkingDirectory ([IO.Path]::GetDirectoryName($Target)) }
+        try { Start-UpdatedApp -FilePath $Target }
         catch { [Console]::Error.WriteLine("Could not restart the previous AltTabio: $($_.Exception.Message)") }
     }
     [Console]::Error.WriteLine($message)

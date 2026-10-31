@@ -27,6 +27,7 @@ use windows::core::{PCWSTR, w};
 
 const DOWNLOAD_SCRIPT: &str = include_str!("windows_updater/download.ps1");
 const RELAUNCH_SCRIPT: &str = include_str!("windows_updater/relaunch.ps1");
+const ENVIRONMENT_SCRIPT: &str = include_str!("windows_updater/environment.ps1");
 
 pub fn is_release_build() -> bool {
     option_env!("ALTTABIO_RELEASE") == Some("1") && !cfg!(debug_assertions)
@@ -155,7 +156,7 @@ pub fn stage(update: &Update) -> Result<StagedUpdate, String> {
 pub fn relaunch(staged: &mut StagedUpdate) -> Result<(), String> {
     validate_update_target(&staged.target)?;
     let script = format!(
-        "$Work = {}\n$Target = {}\n$Hash = '{}'\n$ParentId = {}\n{RELAUNCH_SCRIPT}",
+        "$Work = {}\n$Target = {}\n$Hash = '{}'\n$ParentId = {}\n{ENVIRONMENT_SCRIPT}\n{RELAUNCH_SCRIPT}",
         literal(&staged.work.path)?,
         literal(&staged.target)?,
         staged.hash,
@@ -490,6 +491,45 @@ mod tests {
         assert!(read_releases("not metadata").is_err());
         assert!(read_releases("v1.2.3\tunknown\tFalse\tx\ty").is_err());
         assert_eq!(read_releases(""), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn relaunched_app_gets_a_normal_environment_without_changing_the_helper() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("AltTabio-environment-probe-{nonce}.exe"));
+        let name = probe
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or_else(|| panic!("probe name"));
+        let source = r#"using System; using System.IO; using System.Reflection;
+public static class Probe {
+    public static void Main() {
+        string temp = Environment.GetEnvironmentVariable("TEMP");
+        bool normal = !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PATH"))
+            && !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("APPDATA"))
+            && Directory.Exists(temp)
+            && !String.Equals(Path.GetFullPath(temp).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        File.WriteAllText(Assembly.GetExecutingAssembly().Location + ".result", normal ? "ok" : "bad");
+    }
+}"#;
+        let script = format!(
+            "{ENVIRONMENT_SCRIPT}\n$helperTemp = $env:TEMP\n$probe = {}\nAdd-Type -TypeDefinition @'\n{source}\n'@ -OutputAssembly $probe -OutputType ConsoleApplication\nStart-UpdatedApp -FilePath $probe\nforeach ($process in [Diagnostics.Process]::GetProcessesByName('{name}')) {{ try {{ if (-not $process.WaitForExit(5000)) {{ throw 'The environment probe did not exit' }} }} finally {{ $process.Dispose() }} }}\n[Console]::Write([IO.File]::ReadAllText($probe + '.result'))\n[Console]::Write(':' + [string]::IsNullOrEmpty($env:APPDATA))\n[Console]::Write(':' + ($env:TEMP -ceq $helperTemp))",
+            literal(&probe).unwrap_or_else(|error| panic!("{error}"))
+        );
+        let result = run_script(&script);
+        for path in [&probe, &probe.with_extension("exe.result")] {
+            if let Err(error) = std::fs::remove_file(path) {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+            }
+        }
+        assert_eq!(result, Ok("ok:True:True".to_owned()));
     }
 
     #[test]
