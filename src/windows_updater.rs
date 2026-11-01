@@ -262,6 +262,9 @@ fn powershell(script: &str, temporary: &Path) -> Result<Command, String> {
         .env("TEMP", temporary)
         .env("TMP", temporary)
         .env("PSModulePath", &modules)
+        // PowerShell uses PATHEXT even for absolute executable paths. Without it,
+        // native commands are launched without collecting their output or exit status.
+        .env("PATHEXT", ".EXE")
         .current_dir(&system)
         .args([
             "-NoLogo",
@@ -390,6 +393,18 @@ mod tests {
             script,
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("target"),
         )
+    }
+
+    #[test]
+    fn updater_powershell_waits_for_native_executables_and_reads_their_output() {
+        assert_eq!(
+            run_script(
+                "$output = & ($env:SystemRoot + '\\System32\\cmd.exe') /d /c 'echo native-output&exit /b 37'\n\
+                 if ($LASTEXITCODE -ne 37) { throw 'The native command was not awaited' }\n\
+                 [Console]::Write($output)"
+            ),
+            Ok("native-output".to_owned())
+        );
     }
 
     #[test]
