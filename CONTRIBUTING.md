@@ -42,6 +42,8 @@ The version bump can be in the release PR, followed by more fixes under the same
 
 The Release workflow builds the Windows and macOS archives, signs the macOS one with the [release certificate](#the-macos-release-certificate), and attaches both to a draft release. Write its notes, one section per platform, and publish it; the install script and both updaters only see published releases.
 
+Windows MSVC builds statically link the C runtime through `.cargo/config.toml`, so the executable does not require a separate Visual C++ Redistributable installation. Runtime fixes are delivered by rebuilding and releasing AltTabio.
+
 The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the updater. Ordinary source builds leave it unset so they never download over local work. Windows verifies the archive's GitHub asset digest, stages only `AltTabio.exe` in a protected folder beside the installation, and uses a helper to replace and restart it once the running copy exits. Run `powershell.exe -NoProfile -File scripts/windows/test-updater.ps1` to exercise verification failures, replacement, and rollback without downloading or launching a release.
 
 Before publishing a Windows release, manually check Alt+Tab, Shift+Alt+Tab, Win+Tab, opening the switcher over Start and Search, and typing and editing a filter with an AltGr layout. Also verify a real install, update, and relaunch in a disposable Windows VM, starting from the autostart task and using a throwaway release repository or tag. Script mocks and hidden-window tests do not replace these checks.
