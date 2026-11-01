@@ -49,6 +49,7 @@ pub struct TrayIcon {
     theme: ResolvedTheme,
     dark_mode_api: Option<DarkModeApi>,
     update_installed: Cell<bool>,
+    registered: Cell<bool>,
 }
 
 impl TrayIcon {
@@ -113,10 +114,15 @@ impl TrayIcon {
             szTip: tip,
             ..NOTIFYICONDATAW::default()
         };
-        if let Err(error) = add_icon(&data) {
-            destroy_menu(menu);
-            return Err(error);
-        }
+        // A logon task can run before Explorer's notification area is ready. Keep the
+        // owned resources alive for TaskbarCreated and the outer loop's registration retry.
+        let registered = match register_icon(&data) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("The notification area is unavailable; waiting for Explorer: {error}");
+                false
+            }
+        };
         Ok(Self {
             data,
             icon,
@@ -126,6 +132,7 @@ impl TrayIcon {
             theme,
             dark_mode_api,
             update_installed: Cell::new(false),
+            registered: Cell::new(registered),
         })
     }
 
@@ -193,7 +200,18 @@ impl TrayIcon {
     }
 
     pub fn restore_for_message(&self, message: u32) -> Option<Result<()>> {
-        is_recreation_message(message, self.recreation_message).then(|| add_icon(&self.data))
+        is_recreation_message(message, self.recreation_message).then(|| {
+            self.registered.set(false);
+            self.retry_registration()
+        })
+    }
+
+    pub fn retry_registration(&self) -> Result<()> {
+        if !self.registered.get() {
+            register_icon(&self.data)?;
+            self.registered.set(true);
+        }
+        Ok(())
     }
 
     pub fn set_icon(&mut self, icon: IconColor) -> Result<()> {
@@ -216,10 +234,12 @@ impl TrayIcon {
     }
 }
 
-fn add_icon(data: &NOTIFYICONDATAW) -> Result<()> {
+fn register_icon(data: &NOTIFYICONDATAW) -> Result<()> {
     let added = unsafe {
-        // SAFETY: data is fully initialized and remains alive for the synchronous shell call.
-        Shell_NotifyIconW(NIM_ADD, data).as_bool()
+        // SAFETY: data is fully initialized and remains alive for both synchronous shell calls.
+        // A timer retry can race TaskbarCreated; modifying an existing icon makes registration
+        // idempotent when the shell already accepted its HWND/id.
+        Shell_NotifyIconW(NIM_ADD, data).as_bool() || Shell_NotifyIconW(NIM_MODIFY, data).as_bool()
     };
     if added {
         Ok(())
@@ -261,13 +281,15 @@ fn action_for_command(command: usize) -> TrayAction {
 
 impl Drop for TrayIcon {
     fn drop(&mut self) {
-        let deleted = unsafe {
-            // SAFETY: data identifies the icon added by this guard and the shell copies it during
-            // the synchronous deletion call.
-            Shell_NotifyIconW(NIM_DELETE, &raw const self.data).as_bool()
-        };
-        if !deleted {
-            eprintln!("Could not remove the AltTabio tray icon");
+        if self.registered.get() {
+            let deleted = unsafe {
+                // SAFETY: data identifies the icon added by this guard and the shell copies it
+                // during the synchronous deletion call.
+                Shell_NotifyIconW(NIM_DELETE, &raw const self.data).as_bool()
+            };
+            if !deleted {
+                eprintln!("Could not remove the AltTabio tray icon");
+            }
         }
         destroy_menu(self.menu);
     }

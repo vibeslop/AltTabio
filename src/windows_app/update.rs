@@ -310,6 +310,13 @@ impl AppHost {
             let Ok(mut app) = self.state.try_borrow_mut() else {
                 return false;
             };
+            // The update timer also wakes this outer-loop work once per second. A logon
+            // launch must recover even if TaskbarCreated arrived during initialization.
+            if let Some(tray) = &app.tray
+                && let Err(error) = tray.retry_registration()
+            {
+                eprintln!("Could not register the AltTabio tray icon yet: {error}");
+            }
             let action = app.poll_updates();
             let ready = app.updates.policy.installed_version().is_some();
             if let Some(tray) = &app.tray
