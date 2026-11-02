@@ -7,6 +7,7 @@ mod first_frame_tests;
 use crate::task_icon::TaskIcons;
 use alttabio::close_button::CloseButtonVisualState;
 use alttabio::failure_run::FailureRun;
+use alttabio::filter_feedback::list_height;
 use alttabio::overlay_layout::{for_compact_list, layout_dpi, layout_scale};
 use alttabio::settings::AppearanceSettings;
 use alttabio::switcher::Switcher;
@@ -173,13 +174,14 @@ impl Renderer {
         }
     }
 
-    pub fn visible_row_count(&self, compact_list: bool) -> usize {
+    pub fn visible_row_count(&self, compact_list: bool, filter_visible: bool) -> usize {
         self.resources.as_ref().map_or(0, |resources| {
             let size = unsafe {
                 // SAFETY: the render target is live and used only on its owning UI thread.
                 resources.target.GetSize()
             };
-            for_compact_list(compact_list).visible_row_count(size.height)
+            let layout = for_compact_list(compact_list);
+            layout.visible_row_count(list_height(size.height, layout, filter_visible))
         })
     }
 

@@ -32,7 +32,7 @@ impl TextRun {
         previous_scroll: f32,
     ) -> Result<Self> {
         let clip = D2D_RECT_F {
-            left: 52.0,
+            left: 32.0,
             top: 0.0,
             right: width - 35.0,
             bottom: height,

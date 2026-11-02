@@ -1,5 +1,6 @@
 //! Which row of the overlay's task list, or which close button, a point lands on.
 
+use crate::filter_feedback::list_height;
 use crate::overlay_layout::{for_compact_list, layout_scale};
 use crate::switcher::Switcher;
 
@@ -53,6 +54,7 @@ fn hit_test_at_scale(
     scale: f32,
 ) -> Option<TaskListHit> {
     let layout = for_compact_list(compact_list);
+    let client_height = list_height(client_height, layout, !switcher.filter().is_empty());
     let list_width = layout.list_width(client_width, scale);
     if x < layout.outer_padding || x >= list_width || y < layout.list_top() {
         return None;
@@ -300,6 +302,75 @@ mod tests {
             hit_test_task_list(&mut switcher, 900.0, 600.0, 390.0, 81.0, false),
             None
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        reason = "fixture coordinates are small positive physical pixels"
+    )]
+    fn footer_shrinks_only_the_bottom_of_the_clickable_list_at_each_dpi() {
+        for compact in [false, true] {
+            for dpi in [96, 120, 144, 168, 192, 288] {
+                let scale = layout_scale(dpi);
+                let layout = for_compact_list(compact);
+                // Fit ten complete rows with only two DIP to spare, so reserving the footer
+                // must remove a row at every tested scale, including fractional DPI.
+                let full_height = 2.0 * layout.outer_padding
+                    + 10.0 * layout.row_height
+                    + 9.0 * layout.row_gap
+                    + 2.0;
+                let client = (1_260, (full_height * scale).round() as i32);
+                let height = client.1 as f32 / scale;
+                let idle_rows = layout.visible_row_count(height);
+                let active_rows = layout.visible_row_count(list_height(height, layout, true));
+                assert!(active_rows < idle_rows);
+                let point = |row| {
+                    let bounds = layout.row_bounds(row, 300.0);
+                    (
+                        ((layout.outer_padding + 10.0) * scale).round() as i32,
+                        (f32::midpoint(bounds.top, bounds.bottom) * scale).round() as i32,
+                    )
+                };
+                let mut switcher = switcher_with_tasks(30);
+                assert_eq!(
+                    hit_test_pixels(&mut switcher, client, point(0), dpi, compact),
+                    Some(Task(1))
+                );
+                switcher.append_filter_character('a'); // Every fixture task matches.
+                for row in 0..active_rows {
+                    assert_eq!(
+                        hit_test_pixels(&mut switcher, client, point(row), dpi, compact),
+                        Some(Task(row + 1))
+                    );
+                }
+                assert_eq!(
+                    hit_test_pixels(&mut switcher, client, point(active_rows), dpi, compact),
+                    None,
+                    "a row displaced by the footer must not retain a hit target"
+                );
+                assert_eq!(
+                    hit_test_pixels(
+                        &mut switcher,
+                        client,
+                        (
+                            point(0).0,
+                            client.1 - (layout.outer_padding * scale) as i32 - 16
+                        ),
+                        dpi,
+                        compact,
+                    ),
+                    None,
+                    "the footer must never activate a window behind it"
+                );
+                switcher.backspace_filter();
+                assert_eq!(
+                    hit_test_pixels(&mut switcher, client, point(idle_rows - 1), dpi, compact),
+                    Some(Task(idle_rows))
+                );
+            }
+        }
     }
 
     #[test]
