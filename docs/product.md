@@ -50,7 +50,7 @@ It is a practical answer for people searching for:
 - Eight app-icon colors (Azure default, plus Copper, Ember, Indigo, Orchid, Rosewood, Vermilion, Violet)
 - Portable settings in `AltTabio.ini` next to the executable
 - Optional start with Windows via a scheduled task
-- Automatic updates from GitHub Releases, with SHA-256 verification and a restart after five minutes without keyboard or mouse input
+- Automatic updates from GitHub Releases, with Minisign signature and SHA-256 verification and a restart after five minutes without keyboard or mouse input
 - Single self-contained `AltTabio.exe`
 
 ## Features on macOS
@@ -77,7 +77,7 @@ It is a practical answer for people searching for:
 
 Windows asks for permission because AltTabio installs a global input hook (so it can handle Alt+Tab before Windows does) and window-management commands (so it can close a frozen program when you ask). That approval is for those jobs only.
 
-Release builds check GitHub for updates about a minute after startup and then daily, retrying after an hour if a check fails. Updates are downloaded automatically, verified against GitHub's SHA-256 digest, and applied after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder; `AltTabio.ini` and the startup task are preserved. Settings lets you turn off automatic updates. **Check for Updates** in the tray menu checks immediately and offers to install a newer release; **Relaunch to Update** applies an already downloaded update. Ordinary Windows builds from source do not check for or install published updates.
+Release builds check GitHub for updates about a minute after startup and then daily, retrying after an hour if a check fails. Updates are downloaded automatically, verified against the app's embedded Minisign public key and GitHub's SHA-256 digest, and applied after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder; `AltTabio.ini` and the startup task are preserved. Settings lets you turn off automatic updates. **Check for Updates** in the tray menu checks immediately and offers to install a newer release; **Relaunch to Update** applies an already downloaded update. Ordinary Windows builds from source do not check for or install published updates.
 
 To uninstall: turn off start-with-Windows if you enabled it, exit from the tray icon, and delete the folder.
 

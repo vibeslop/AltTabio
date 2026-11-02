@@ -38,7 +38,7 @@ The user can also press 1-9 to jump when the query is empty, use arrows or the m
 
 ## Windows updates
 
-Release builds check GitHub for updates about a minute after startup and then daily, with an hourly retry after a failed check. They download newer stable releases, verify the archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder, preserving `AltTabio.ini` and the startup task. Automatic updates can be turned off in Settings. The tray menu has Check for Updates to check immediately and offer installation, and Relaunch to Update when an update is ready. Ordinary Windows source builds do not check for or install published updates.
+Release builds check GitHub for updates about a minute after startup and then daily, with an hourly retry after a failed check. They download newer stable releases, verify the archive's pinned-key Minisign signature and GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder, preserving `AltTabio.ini` and the startup task. Automatic updates can be turned off in Settings. The tray menu has Check for Updates to check immediately and offer installation, and Relaunch to Update when an update is ready. Ordinary Windows source builds do not check for or install published updates.
 
 ## On macOS
 

@@ -64,6 +64,15 @@ jobs:
       - name: Build Rust release executable
         run: cargo build --release --quiet
 
+      - name: Verify signing tool formatting
+        run: cargo fmt --manifest-path tools/windows-update-signing/Cargo.toml -- --check
+
+      - name: Lint signing tool
+        run: cargo clippy --manifest-path tools/windows-update-signing/Cargo.toml --locked --quiet --all-targets -- -D warnings
+
+      - name: Test signing tool
+        run: cargo test --manifest-path tools/windows-update-signing/Cargo.toml --locked --quiet
+
       - name: Verify Windows updater scripts
         run: powershell.exe -NoProfile -NonInteractive -File scripts/windows/test-updater.ps1
 

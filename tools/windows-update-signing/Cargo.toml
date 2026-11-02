@@ -1,0 +1,15 @@
+[package]
+name = "windows-update-signing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+alttabio = { path = "../.." }
+minisign = "=0.10.0"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"

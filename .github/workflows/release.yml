@@ -3,7 +3,8 @@ name: Release
 # Builds a version tag's release archives and attaches them to the tag's release, creating it as a
 # draft when there is none: AltTabio-<version>-windows-x64.zip, and AltTabio-<version>-macos.zip
 # signed with the release certificate, where docs/install.sh finds it. Run it by hand with a tag to
-# build that tag's Windows archive alone; re-running a tag's own run rebuilds both.
+# build that tag's Windows archive alone, selecting the same tag as the workflow ref.
+# Re-running a tag's own run rebuilds both.
 
 on:
   push:
@@ -41,6 +42,10 @@ jobs:
             echo "::error::$tag is not a version tag such as v1.1.0."
             exit 1
           fi
+          if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then
+            echo "::error::Select the same version tag as the workflow ref. Signing is restricted to tags."
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
@@ -73,6 +78,9 @@ jobs:
   windows:
     needs: draft
     runs-on: windows-latest
+    # Separate tag-only environment. Never expose the Windows key to PR checks or macOS.
+    environment: windows-release
+    if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Check out the tag
@@ -109,12 +117,24 @@ jobs:
             -DestinationPath $archive
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Attach the archive to the release
+      - name: Build Windows signing tool without secrets
+        run: cargo build --manifest-path tools/windows-update-signing/Cargo.toml --target-dir target/signing-tool --locked --quiet
+
+      - name: Sign and verify Windows update archive
+        env:
+          WINDOWS_UPDATE_SIGNING_KEY: ${{ secrets.WINDOWS_UPDATE_SIGNING_KEY }}
+          WINDOWS_UPDATE_SIGNING_PASSWORD: ${{ secrets.WINDOWS_UPDATE_SIGNING_PASSWORD }}
+          VERSION: ${{ needs.draft.outputs.version }}
+        run: |
+          & target/signing-tool/debug/windows-update-signing.exe sign $env:ARCHIVE $env:VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'Windows update signing failed; no assets will be uploaded.' }
+
+      - name: Attach the archive and signature to the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.draft.outputs.tag }}
-        run: gh release upload $env:TAG $env:ARCHIVE --clobber
+        run: gh release upload $env:TAG $env:ARCHIVE "$env:ARCHIVE.minisig" --clobber
 
   macos:
     needs: draft
