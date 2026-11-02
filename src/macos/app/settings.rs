@@ -74,9 +74,8 @@ impl App {
         self.save_settings();
     }
 
-    /// The defaults promise launch at login, but only a registration makes it true. Saving right
-    /// away marks the first start as done, so a login item the user later removes in System
-    /// Settings stays removed.
+    /// Saves the system's login-item state on first start. Saving right away marks the first
+    /// start as done, so a login item the user later removes in System Settings stays removed.
     pub(crate) fn complete_first_start(&mut self) {
         if self.settings.general.autostart
             && let Err(error) = autostart::set_enabled(true)

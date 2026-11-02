@@ -194,7 +194,8 @@ mod tests {
 
     /// Turns autostart off and changes the hooks, so every step has something to apply.
     fn full_change() -> (Settings, Settings) {
-        let previous = Settings::default();
+        let mut previous = Settings::default();
+        previous.general.autostart = true;
         let mut next = previous.clone();
         next.general.autostart = false;
         next.general.replace_alt_tab = false;
@@ -203,7 +204,8 @@ mod tests {
 
     /// Changes only an appearance setting, which neither autostart nor the hooks read.
     fn appearance_change() -> (Settings, Settings) {
-        let previous = Settings::default();
+        let mut previous = Settings::default();
+        previous.general.autostart = true;
         let mut next = previous.clone();
         next.appearance.compact_list = !previous.appearance.compact_list;
         (previous, next)
