@@ -47,9 +47,26 @@ try {
         & $Curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' `
             --max-time 600 --max-filesize 104857600 --user-agent AltTabio --output $archive $url
         if ($LASTEXITCODE -ne 0) { throw 'Could not download the update.' }
+        if ((Get-Item -LiteralPath $archive).Length -ne $asset.size) { throw 'The downloaded archive has the wrong size.' }
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $asset.digest.Substring(7)) {
             throw 'The downloaded archive failed its SHA-256 check.'
         }
+        $signatureName = "$name.minisig"
+        $signatures = @($release.assets | Where-Object { $_.name -ceq $signatureName })
+        $signatureUrl = "https://github.com/vibeslop/AltTabio/releases/download/v$Version/$signatureName"
+        if ($signatures.Count -ne 1 -or $signatures[0].browser_download_url -cne $signatureUrl -or
+            $signatures[0].size -le 0 -or $signatures[0].size -gt 4096) {
+            throw 'The release has no unique Windows update signature of an allowed size.'
+        }
+        $signaturePath = Join-Path $Work 'download.zip.minisig'
+        & $Curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' `
+            --max-time 30 --max-filesize 4096 --user-agent AltTabio --output $signaturePath $signatureUrl
+        if ($LASTEXITCODE -ne 0) { throw 'Could not download the update signature.' }
+        if ((Get-Item -LiteralPath $signaturePath).Length -ne $signatures[0].size) { throw 'The downloaded signature has the wrong size.' }
+        # Return to Rust on the worker. It authenticates both the complete archive and the
+        # signed version/platform/asset identity with the embedded key before extraction.
+    } elseif ($Mode -eq 'extract') {
+        $archive = Join-Path $Work 'download.zip'
         Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($archive)
         try {

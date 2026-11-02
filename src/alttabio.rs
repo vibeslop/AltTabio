@@ -28,4 +28,5 @@ pub mod task_refresh;
 pub mod text_edit;
 pub mod theme;
 pub mod update;
+pub mod update_signature;
 pub mod window_command;

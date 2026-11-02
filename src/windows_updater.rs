@@ -9,6 +9,8 @@ mod readiness;
 
 use crate::win32::{system_directory, wide};
 use alttabio::update::{Asset, Checked, Release, Update, Version, newest_windows_update};
+use alttabio::update_signature;
+use std::io::Read;
 use std::mem::size_of;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -137,19 +139,53 @@ pub fn stage(update: &Update) -> Result<StagedUpdate, String> {
     let target = std::env::current_exe().map_err(|error| error.to_string())?;
     validate_update_target(&target)?;
     let work = WorkFolder::create(&target)?;
+    stage_payload(
+        update.version,
+        &work.path,
+        DOWNLOAD_SCRIPT,
+        update_signature::PUBLIC_KEY,
+    )
+    .map(|hash| StagedUpdate { work, hash, target })
+}
+
+fn stage_payload(
+    version: Version,
+    work: &Path,
+    script: &str,
+    public_key: &str,
+) -> Result<String, String> {
+    run_script_in(
+        &format!(
+            "$Mode = 'stage'\n$Version = '{version}'\n$Work = {}\n{script}",
+            literal(work)?
+        ),
+        work,
+    )?;
+    let mut signature = String::new();
+    std::fs::File::open(work.join("download.zip.minisig"))
+        .and_then(|file| {
+            file.take(update_signature::MAX_SIGNATURE_BYTES + 1)
+                .read_to_string(&mut signature)
+        })
+        .map_err(|error| format!("Could not read the update signature: {error}"))?;
+    update_signature::verify(
+        std::fs::File::open(work.join("download.zip")).map_err(|error| error.to_string())?,
+        &signature,
+        version,
+        public_key,
+    )?;
     let hash = run_script_in(
         &format!(
-            "$Mode = 'stage'\n$Version = '{}'\n$Work = {}\n{DOWNLOAD_SCRIPT}",
-            update.version,
-            literal(&work.path)?
+            "$Mode = 'extract'\n$Version = '{version}'\n$Work = {}\n{script}",
+            literal(work)?
         ),
-        &work.path,
+        work,
     )?;
     let hash = hash.trim().to_owned();
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("The update did not return an executable checksum".to_owned());
     }
-    Ok(StagedUpdate { work, hash, target })
+    Ok(hash)
 }
 
 /// Returns only once the helper has acquired this process and is waiting for it to exit.
@@ -386,6 +422,37 @@ impl Drop for WorkFolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_authenticates_before_any_extraction() {
+        let work = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("signature-worker-{}", std::process::id()));
+        std::fs::create_dir(&work).unwrap_or_else(|error| panic!("{error}"));
+        let archive = include_bytes!("../tests/fixtures/update-signature/archive.txt");
+        let signature = include_str!("../tests/fixtures/update-signature/valid.minisig");
+        let public = include_str!("../tests/fixtures/update-signature/fixture.pub");
+        let version = Version::parse("9.0.0").unwrap_or_else(|| panic!("valid version"));
+        let script = "if ($Mode -eq 'extract') { [IO.File]::WriteAllText((Join-Path $Work 'extracted'), 'yes'); [Console]::Write(('A' * 64)) }";
+        std::fs::write(work.join("download.zip"), archive)
+            .unwrap_or_else(|error| panic!("{error}"));
+        for bad in [None, Some("malformed"), Some(signature)] {
+            if let Some(bad) = bad {
+                std::fs::write(work.join("download.zip.minisig"), bad)
+                    .unwrap_or_else(|error| panic!("{error}"));
+            }
+            // Even a cryptographically valid release-supplied key is never a production key.
+            assert!(stage_payload(version, &work, script, update_signature::PUBLIC_KEY).is_err());
+            assert!(!work.join("extracted").exists());
+        }
+        assert_eq!(
+            stage_payload(version, &work, script, public),
+            Ok("A".repeat(64))
+        );
+        assert!(work.join("extracted").exists());
+        assert!(work.starts_with(Path::new(env!("CARGO_MANIFEST_DIR")).join("target")));
+        std::fs::remove_dir_all(work).unwrap_or_else(|error| panic!("{error}"));
+    }
 
     fn run_script(script: &str) -> Result<String, String> {
         // Test scripts use inert fixtures and never download or execute an update.

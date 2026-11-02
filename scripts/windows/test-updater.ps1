@@ -9,6 +9,10 @@ $environment = Get-Content -LiteralPath (Join-Path $repo 'src/windows_updater/en
 $artifact = Join-Path $repo 'target/release/AltTabio.exe'
 if (-not (Test-Path -LiteralPath $artifact)) { throw 'Build target/release/AltTabio.exe first.' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($artifact).ProductVersion
+$toolTarget = Join-Path $repo 'target/signing-tool'
+& cargo build --manifest-path (Join-Path $repo 'tools/windows-update-signing/Cargo.toml') --target-dir $toolTarget --locked --quiet
+if ($LASTEXITCODE -ne 0) { throw 'Could not build offline signature test tool.' }
+$signer = Join-Path $toolTarget 'debug/windows-update-signing.exe'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('AltTabio-updater-test-' + [Guid]::NewGuid())
 $null = New-Item -ItemType Directory -Path $root
 
@@ -71,15 +75,23 @@ function New-Archive([string] $Name, [bool] $Duplicate = $false) {
     return $path
 }
 
-function Download-Case([string] $Name, [string] $Archive, [string] $Digest, [string] $ExpectedVersion = $version) {
+function Download-Case([string] $Name, [string] $Archive, [string] $Digest, [string] $ExpectedVersion = $version, [string] $SignatureCase = 'valid') {
     $work = Join-Path $root $Name
     $null = New-Item -ItemType Directory -Path $work
+    & $signer fixtures $Archive $ExpectedVersion $work
+    if ($LASTEXITCODE -ne 0) { throw 'Could not sign offline fixture.' }
+    $signature = Join-Path $work "$SignatureCase.minisig"
+    if ($SignatureCase -eq 'malformed') { [IO.File]::WriteAllText($signature, 'not a signature') }
     $release = @{
         tag_name = "v$ExpectedVersion"; draft = $false; prerelease = $false
         assets = @(@{
             name = "AltTabio-$ExpectedVersion-windows-x64.zip"
             browser_download_url = "https://github.com/vibeslop/AltTabio/releases/download/v$ExpectedVersion/AltTabio-$ExpectedVersion-windows-x64.zip"
             digest = $Digest; size = (Get-Item -LiteralPath $Archive).Length
+        }, @{
+            name = "AltTabio-$ExpectedVersion-windows-x64.zip.minisig"
+            browser_download_url = "https://github.com/vibeslop/AltTabio/releases/download/v$ExpectedVersion/AltTabio-$ExpectedVersion-windows-x64.zip.minisig"
+            size = if (Test-Path -LiteralPath $signature) { (Get-Item -LiteralPath $signature).Length } else { 0 }
         })
     } | ConvertTo-Json -Depth 4 -Compress
     $preamble = @'
@@ -87,13 +99,24 @@ function Mock-Curl {
     if ($args.Count -eq 0 -or $args[0] -cne '-q') { throw 'curl must disable user configuration before any other argument' }
     $global:LASTEXITCODE = 0
     $index = [Array]::IndexOf($args, '--output')
-    if ($index -ge 0) { Copy-Item -LiteralPath $Fixture -Destination $args[$index + 1] }
+    if ($index -ge 0) {
+        $source = if ($args[-1].EndsWith('.minisig')) { $Signature } else { $Fixture }
+        Copy-Item -LiteralPath $source -Destination $args[$index + 1]
+    }
     else { $ReleaseJson }
 }
 $Curl = 'Mock-Curl'
 $Mode = 'stage'
 '@
-    $result = Run-Script ("`$Fixture = $(Literal $Archive)`n`$ReleaseJson = $(Literal $release)`n`$Version = $(Literal $ExpectedVersion)`n`$Work = $(Literal $work)`n" + $preamble + "`n" + $download)
+    $result = Run-Script ("`$Signature = $(Literal $signature)`n`$Fixture = $(Literal $Archive)`n`$ReleaseJson = $(Literal $release)`n`$Version = $(Literal $ExpectedVersion)`n`$Work = $(Literal $work)`n" + $preamble + "`n" + $download)
+    if ($result.Code -eq 0) {
+        # Mirror the worker boundary: authenticate with a local test key, then extract.
+        # The real adapter always uses the production key compiled into the executable.
+        $result = Run-Script ("& $(Literal $signer) verify $(Literal (Join-Path $work 'download.zip')) $(Literal (Join-Path $work 'download.zip.minisig')) $(Literal $ExpectedVersion) $(Literal (Join-Path $work 'fixture.pub'))`nexit `$LASTEXITCODE")
+        if ($result.Code -eq 0) {
+            $result = Run-Script ("`$Mode = 'extract'`n`$Version = $(Literal $ExpectedVersion)`n`$Work = $(Literal $work)`n" + $download)
+        }
+    }
     return @{ Result = $result; Work = $work }
 }
 
@@ -205,6 +228,11 @@ try {
         $bad = Download-Case ([Guid]::NewGuid().ToString()) $archive $badDigest
         Assert ($bad.Result.Code -eq 1) 'Unverified archive was accepted'
         Assert (-not (Test-Path -LiteralPath (Join-Path $bad.Work 'AltTabio.exe'))) 'Unverified archive was extracted'
+    }
+    foreach ($signatureCase in @('missing', 'malformed', 'wrong-key')) {
+        $bad = Download-Case "signature-$signatureCase" $archive $digest -SignatureCase $signatureCase
+        Assert ($bad.Result.Code -eq 1) "$signatureCase signature was accepted"
+        Assert (-not (Test-Path -LiteralPath (Join-Path $bad.Work 'AltTabio.exe'))) "$signatureCase signature allowed extraction"
     }
     $wrongVersion = Download-Case 'wrong-version' $archive $digest '999.0.0'
     Assert ($wrongVersion.Result.Code -eq 1) 'Executable version mismatch was accepted'
