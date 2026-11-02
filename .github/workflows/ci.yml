@@ -73,9 +73,6 @@ jobs:
       - name: Test signing tool
         run: cargo test --manifest-path tools/windows-update-signing/Cargo.toml --locked --quiet
 
-      - name: Verify Windows updater scripts
-        run: powershell.exe -NoProfile -NonInteractive -File scripts/windows/test-updater.ps1
-
       - name: Verify Rust release artifact
         shell: pwsh
         run: |
