@@ -282,6 +282,9 @@ fn powershell(script: &str, temporary: &Path) -> Result<Command, String> {
     let root = system
         .parent()
         .ok_or_else(|| "Windows has no system root".to_owned())?;
+    let Some(std::path::Component::Prefix(system_drive)) = root.components().next() else {
+        return Err("Windows has no system drive".to_owned());
+    };
     let modules = system.join("WindowsPowerShell/v1.0/Modules");
     let mut imports = String::new();
     for module in ["Management", "Utility", "Security"] {
@@ -295,6 +298,9 @@ fn powershell(script: &str, temporary: &Path) -> Result<Command, String> {
         .env_clear()
         .env("SystemRoot", root)
         .env("windir", root)
+        // CreateEnvironmentBlock needs this to expand shared profile paths for the GUI child.
+        // Derive it from Windows, rather than inheriting the caller's environment.
+        .env("SystemDrive", system_drive.as_os_str())
         .env("TEMP", temporary)
         .env("TMP", temporary)
         .env("PSModulePath", &modules)
@@ -592,8 +598,16 @@ mod tests {
 public static class Probe {
     public static void Main() {
         string temp = Environment.GetEnvironmentVariable("TEMP");
+        string systemDrive = Environment.GetEnvironmentVariable("SystemDrive");
+        string programData = Environment.GetEnvironmentVariable("ProgramData");
         bool normal = !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PATH"))
             && !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("APPDATA"))
+            && !String.IsNullOrEmpty(systemDrive)
+            && !String.IsNullOrEmpty(programData)
+            && Path.IsPathRooted(programData)
+            && !programData.Contains("%")
+            && String.Equals(Environment.GetEnvironmentVariable("ALLUSERSPROFILE"),
+                programData, StringComparison.OrdinalIgnoreCase)
             && Directory.Exists(temp)
             && !String.Equals(Path.GetFullPath(temp).TrimEnd(Path.DirectorySeparatorChar),
                 Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar),
