@@ -3,6 +3,7 @@ use crate::app_messages::WM_TRAY_CALLBACK;
 use crate::native_theme::{DarkModeApi, PreferredAppMode, preferred_app_mode};
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
+use std::cell::Cell;
 use std::mem::size_of;
 use windows::Win32::Foundation::{HINSTANCE, HWND, POINT};
 use windows::Win32::UI::Shell::{
@@ -10,9 +11,9 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_SEPARATOR, MF_STRING,
-    RegisterWindowMessageW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HMENU, MF_BYCOMMAND, MF_SEPARATOR,
+    MF_STRING, ModifyMenuW, RegisterWindowMessageW, SetForegroundWindow, TPM_BOTTOMALIGN,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
 };
 use windows::core::{Error, PCWSTR, Result, w};
 
@@ -20,16 +21,18 @@ const fn is_recreation_message(message: u32, registered_message: u32) -> bool {
     registered_message != 0 && message == registered_message
 }
 
-const SHOW_COMMAND: usize = 1;
+const OPEN_SWITCHER_COMMAND: usize = 1;
 const SETTINGS_COMMAND: usize = 2;
 const ABOUT_COMMAND: usize = 3;
 const EXIT_COMMAND: usize = 4;
+const UPDATE_COMMAND: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TrayAction {
-    Show,
+    OpenSwitcher,
     Settings,
     About,
+    Update,
     Exit,
     #[default]
     None,
@@ -39,12 +42,14 @@ pub struct TrayIcon {
     data: NOTIFYICONDATAW,
     /// Owns the icon in `data.hIcon`. Fields drop after `Drop::drop` deletes the notification
     /// icon, so the shell has let go of it by then.
-    icon: app_icon::TrayImage,
+    icon: app_icon::OwnedIcon,
     menu: HMENU,
     instance: HINSTANCE,
     recreation_message: u32,
     theme: ResolvedTheme,
     dark_mode_api: Option<DarkModeApi>,
+    update_installed: Cell<bool>,
+    registered: Cell<bool>,
 }
 
 impl TrayIcon {
@@ -78,14 +83,19 @@ impl TrayIcon {
             // SAFETY: menu is live, command ids are application-owned, and labels are static
             // null-terminated UTF-16 strings. A zero-id separator cannot emit an application
             // command.
-            AppendMenuW(menu, MF_STRING, SHOW_COMMAND, w!("Show")).and_then(|()| {
-                AppendMenuW(menu, MF_STRING, SETTINGS_COMMAND, w!("Settings"))
-                    .and_then(|()| {
-                        AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio"))
-                    })
-                    .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
-                    .and_then(|()| AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("Exit")))
-            })
+            AppendMenuW(menu, MF_STRING, OPEN_SWITCHER_COMMAND, w!("Open Switcher")).and_then(
+                |()| {
+                    AppendMenuW(menu, MF_STRING, SETTINGS_COMMAND, w!("Settings"))
+                        .and_then(|()| {
+                            AppendMenuW(menu, MF_STRING, ABOUT_COMMAND, w!("About AltTabio"))
+                        })
+                        .and_then(|()| {
+                            AppendMenuW(menu, MF_STRING, UPDATE_COMMAND, w!("Check for Updates..."))
+                        })
+                        .and_then(|()| AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()))
+                        .and_then(|()| AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("Exit")))
+                },
+            )
         };
         if let Err(error) = menu_result {
             destroy_menu(menu);
@@ -104,10 +114,15 @@ impl TrayIcon {
             szTip: tip,
             ..NOTIFYICONDATAW::default()
         };
-        if let Err(error) = add_icon(&data) {
-            destroy_menu(menu);
-            return Err(error);
-        }
+        // A logon task can run before Explorer's notification area is ready. Keep the
+        // owned resources alive for TaskbarCreated and the outer loop's registration retry.
+        let registered = match register_icon(&data) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("The notification area is unavailable; waiting for Explorer: {error}");
+                false
+            }
+        };
         Ok(Self {
             data,
             icon,
@@ -116,6 +131,8 @@ impl TrayIcon {
             recreation_message,
             theme,
             dark_mode_api,
+            update_installed: Cell::new(false),
+            registered: Cell::new(registered),
         })
     }
 
@@ -159,8 +176,42 @@ impl TrayIcon {
         }
     }
 
+    pub fn set_update_installed(&self, installed: bool) -> Result<()> {
+        if self.update_installed.get() == installed {
+            return Ok(());
+        }
+        let label = if installed {
+            w!("Relaunch to Update")
+        } else {
+            w!("Check for Updates...")
+        };
+        unsafe {
+            // SAFETY: menu is owned by this guard, the command exists, and label is static UTF-16.
+            ModifyMenuW(
+                self.menu,
+                u32::try_from(UPDATE_COMMAND).unwrap_or_default(),
+                MF_BYCOMMAND | MF_STRING,
+                UPDATE_COMMAND,
+                label,
+            )
+        }?;
+        self.update_installed.set(installed);
+        Ok(())
+    }
+
     pub fn restore_for_message(&self, message: u32) -> Option<Result<()>> {
-        is_recreation_message(message, self.recreation_message).then(|| add_icon(&self.data))
+        is_recreation_message(message, self.recreation_message).then(|| {
+            self.registered.set(false);
+            self.retry_registration()
+        })
+    }
+
+    pub fn retry_registration(&self) -> Result<()> {
+        if !self.registered.get() {
+            register_icon(&self.data)?;
+            self.registered.set(true);
+        }
+        Ok(())
     }
 
     pub fn set_icon(&mut self, icon: IconColor) -> Result<()> {
@@ -183,10 +234,12 @@ impl TrayIcon {
     }
 }
 
-fn add_icon(data: &NOTIFYICONDATAW) -> Result<()> {
+fn register_icon(data: &NOTIFYICONDATAW) -> Result<()> {
     let added = unsafe {
-        // SAFETY: data is fully initialized and remains alive for the synchronous shell call.
-        Shell_NotifyIconW(NIM_ADD, data).as_bool()
+        // SAFETY: data is fully initialized and remains alive for both synchronous shell calls.
+        // A timer retry can race TaskbarCreated; modifying an existing icon makes registration
+        // idempotent when the shell already accepted its HWND/id.
+        Shell_NotifyIconW(NIM_ADD, data).as_bool() || Shell_NotifyIconW(NIM_MODIFY, data).as_bool()
     };
     if added {
         Ok(())
@@ -217,9 +270,10 @@ fn apply_menu_theme(api: &impl MenuThemeApi, theme: ResolvedTheme) {
 
 fn action_for_command(command: usize) -> TrayAction {
     match command {
-        SHOW_COMMAND => TrayAction::Show,
+        OPEN_SWITCHER_COMMAND => TrayAction::OpenSwitcher,
         SETTINGS_COMMAND => TrayAction::Settings,
         ABOUT_COMMAND => TrayAction::About,
+        UPDATE_COMMAND => TrayAction::Update,
         EXIT_COMMAND => TrayAction::Exit,
         _ => TrayAction::None,
     }
@@ -227,13 +281,15 @@ fn action_for_command(command: usize) -> TrayAction {
 
 impl Drop for TrayIcon {
     fn drop(&mut self) {
-        let deleted = unsafe {
-            // SAFETY: data identifies the icon added by this guard and the shell copies it during
-            // the synchronous deletion call.
-            Shell_NotifyIconW(NIM_DELETE, &raw const self.data).as_bool()
-        };
-        if !deleted {
-            eprintln!("Could not remove the AltTabio tray icon");
+        if self.registered.get() {
+            let deleted = unsafe {
+                // SAFETY: data identifies the icon added by this guard and the shell copies it
+                // during the synchronous deletion call.
+                Shell_NotifyIconW(NIM_DELETE, &raw const self.data).as_bool()
+            };
+            if !deleted {
+                eprintln!("Could not remove the AltTabio tray icon");
+            }
         }
         destroy_menu(self.menu);
     }
@@ -285,9 +341,13 @@ mod tests {
 
     #[test]
     fn tray_commands_map_to_their_actions() {
-        assert_eq!(action_for_command(SHOW_COMMAND), TrayAction::Show);
+        assert_eq!(
+            action_for_command(OPEN_SWITCHER_COMMAND),
+            TrayAction::OpenSwitcher
+        );
         assert_eq!(action_for_command(SETTINGS_COMMAND), TrayAction::Settings);
         assert_eq!(action_for_command(ABOUT_COMMAND), TrayAction::About);
+        assert_eq!(action_for_command(UPDATE_COMMAND), TrayAction::Update);
         assert_eq!(action_for_command(EXIT_COMMAND), TrayAction::Exit);
         assert_eq!(action_for_command(0), TrayAction::None);
     }

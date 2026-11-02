@@ -12,16 +12,15 @@ use std::sync::{
 pub const INTERCEPTION_SUSPENDED: usize = 1;
 pub const SEARCH_ACTIVE: usize = 2;
 pub const OVERLAY_ACTIVE: usize = 4;
-pub const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE;
-// Generations are multiples of 8, so the flags share their word.
+pub const FILTER_VISIBLE: usize = 8;
+pub const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE | FILTER_VISIBLE;
+// Generations are multiples of 16, so the flags share their word.
 const FLAG_BITS: usize = INTERCEPTION_SUSPENDED | OVERLAY_FLAGS;
+const GENERATION_SHIFT: usize = 4;
 
 const ACTION_SWITCH: usize = 1;
 const ACTION_ACTIVATE_POSITION: usize = 2;
 const ACTION_ALT_RELEASED: usize = 3;
-const ACTION_RIGHT_BUTTON_PRESSED: usize = 4;
-const ACTION_RIGHT_BUTTON_RELEASED: usize = 5;
-const ACTION_MOUSE_WHEEL: usize = 6;
 const ACTION_APPEND_SEARCH_CHARACTER: usize = 8;
 const ACTION_BACKSPACE_SEARCH: usize = 9;
 const ACTION_NAVIGATE: usize = 10;
@@ -31,16 +30,18 @@ const ACTION_SELECT_LAST: usize = 13;
 const ACTION_DISMISS_OVERLAY: usize = 14;
 const ACTION_CLOSE_SELECTED: usize = 15;
 const ACTION_WINDOW_COMMAND: usize = 16;
+const ACTION_EDIT_SEARCH: usize = 17;
+const ACTION_NUMBER_KEY: usize = 18;
 const ACTION_CODE_MASK: usize = 0xFF;
 const ACTION_EPOCH_MASK: usize = usize::MAX >> 8;
 static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
 
 fn next_hook_generation() -> usize {
-    (NEXT_HOOK_EPOCH.fetch_add(1, Ordering::Relaxed) & ACTION_EPOCH_MASK) << 3
+    (NEXT_HOOK_EPOCH.fetch_add(1, Ordering::Relaxed) & ACTION_EPOCH_MASK) << GENERATION_SHIFT
 }
 
 const fn action_wparam(code: usize, generation: usize) -> usize {
-    (((generation >> 3) & ACTION_EPOCH_MASK) << 8) | (code & ACTION_CODE_MASK)
+    (((generation >> GENERATION_SHIFT) & ACTION_EPOCH_MASK) << 8) | (code & ACTION_CODE_MASK)
 }
 
 /// Encodes an action as the `(wparam, lparam)` payload of a message stamped with `generation`.
@@ -62,15 +63,16 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
             ACTION_ACTIVATE_POSITION,
             isize::try_from(position).unwrap_or_default(),
         ),
+        InputAction::NumberKey { position, text } => {
+            (ACTION_NUMBER_KEY, encode_number_key(position, text))
+        }
         InputAction::AltReleased => (ACTION_ALT_RELEASED, 0),
-        InputAction::RightButtonPressed => (ACTION_RIGHT_BUTTON_PRESSED, 0),
-        InputAction::RightButtonReleased => (ACTION_RIGHT_BUTTON_RELEASED, 0),
-        InputAction::MouseWheel(delta) => (ACTION_MOUSE_WHEEL, delta as isize),
         InputAction::AppendSearchCharacter(character) => (
             ACTION_APPEND_SEARCH_CHARACTER,
             isize::try_from(u32::from(character)).unwrap_or_default(),
         ),
         InputAction::BackspaceSearch => (ACTION_BACKSPACE_SEARCH, 0),
+        InputAction::EditSearch(command) => (ACTION_EDIT_SEARCH, isize::from(command as u8)),
     };
     (action_wparam(code, generation), value)
 }
@@ -84,15 +86,17 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
         ACTION_ACTIVATE_POSITION => usize::try_from(lparam)
             .ok()
             .map(InputAction::ActivateVisiblePosition),
+        ACTION_NUMBER_KEY => decode_number_key(lparam),
         ACTION_ALT_RELEASED => Some(InputAction::AltReleased),
-        ACTION_RIGHT_BUTTON_PRESSED => Some(InputAction::RightButtonPressed),
-        ACTION_RIGHT_BUTTON_RELEASED => Some(InputAction::RightButtonReleased),
-        ACTION_MOUSE_WHEEL => i32::try_from(lparam).ok().map(InputAction::MouseWheel),
         ACTION_APPEND_SEARCH_CHARACTER => u32::try_from(lparam)
             .ok()
             .and_then(char::from_u32)
             .map(InputAction::AppendSearchCharacter),
         ACTION_BACKSPACE_SEARCH => Some(InputAction::BackspaceSearch),
+        ACTION_EDIT_SEARCH => u8::try_from(lparam)
+            .ok()
+            .and_then(crate::text_edit::TextCommand::from_code)
+            .map(InputAction::EditSearch),
         ACTION_NAVIGATE => i32::try_from(lparam).ok().map(InputAction::Navigate),
         ACTION_ACTIVATE_SELECTED => Some(InputAction::ActivateSelected),
         ACTION_SELECT_FIRST => Some(InputAction::SelectFirst),
@@ -105,6 +109,29 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
             .map(InputAction::WindowCommand),
         _ => None,
     }
+}
+
+// Four bits hold positions 1-9; the remaining 21 bits hold a Unicode scalar plus one, with zero
+// meaning no translated text. The complete payload fits a signed 32-bit message parameter.
+fn encode_number_key(position: usize, text: Option<char>) -> isize {
+    let Ok(position @ 1..=9) = u32::try_from(position) else {
+        return -1;
+    };
+    let value = (text.map_or(0, |character| u32::from(character) + 1) << 4) | position;
+    isize::try_from(value).unwrap_or(-1)
+}
+
+fn decode_number_key(value: isize) -> Option<InputAction> {
+    let value = u32::try_from(value).ok()?;
+    let position = usize::try_from(value & 0xF).ok()?;
+    if !(1..=9).contains(&position) {
+        return None;
+    }
+    let text = match value >> 4 {
+        0 => None,
+        code => Some(char::from_u32(code - 1)?),
+    };
+    Some(InputAction::NumberKey { position, text })
 }
 
 /// The interception flags and their generation in one word, so either thread reads or swaps
@@ -133,7 +160,7 @@ impl HookFlags {
         let flags = self.load();
         !self.recovery_pending()
             && flags & INTERCEPTION_SUSPENDED == 0
-            && (wparam >> 8) == ((flags >> 3) & ACTION_EPOCH_MASK)
+            && (wparam >> 8) == ((flags >> GENERATION_SHIFT) & ACTION_EPOCH_MASK)
     }
 
     /// Whether work begun under `generation`, as the hook last synchronized it, may still reach
@@ -157,6 +184,21 @@ impl HookFlags {
         } else {
             self.value.fetch_and(!flag, Ordering::AcqRel);
         }
+    }
+
+    /// Publishes capture and query presence together without changing the action generation.
+    pub fn set_search_state(&self, active: bool, filtered: bool) {
+        let search = if active { SEARCH_ACTIVE } else { 0 }
+            | if active && filtered {
+                FILTER_VISIBLE
+            } else {
+                0
+            };
+        let _previous = self
+            .value
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                Some((value & !(SEARCH_ACTIVE | FILTER_VISIBLE)) | search)
+            });
     }
 
     pub fn suspend(&self, suspended: bool) {
@@ -205,7 +247,12 @@ impl HookFlags {
             return false;
         }
         let flags = if active {
-            OVERLAY_ACTIVE | if typed_search { SEARCH_ACTIVE } else { 0 }
+            OVERLAY_ACTIVE
+                | if typed_search {
+                    SEARCH_ACTIVE | (value & FILTER_VISIBLE)
+                } else {
+                    0
+                }
         } else {
             0
         };
@@ -253,6 +300,46 @@ impl Drop for HookInterceptionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_presence_tracks_search_without_invalidating_queued_actions() {
+        let flags = HookFlags::new();
+        let generation = flags.load();
+        let (action, _) = encode_action(InputAction::Navigate(1), generation);
+        for (active, filtered, expected) in [
+            (true, true, SEARCH_ACTIVE | FILTER_VISIBLE),
+            (true, false, SEARCH_ACTIVE),
+            (false, true, 0),
+            (false, false, 0),
+        ] {
+            flags.set_search_state(active, filtered);
+            assert_eq!(flags.load() & (SEARCH_ACTIVE | FILTER_VISIBLE), expected);
+            assert!(flags.action_is_current(action));
+            assert!(flags.update_overlay(generation, true, true));
+            assert_eq!(flags.load() & FILTER_VISIBLE, expected & FILTER_VISIBLE);
+        }
+    }
+
+    #[test]
+    fn number_shortcuts_preserve_translated_text_across_the_message_boundary() {
+        for position in [1, 9] {
+            for text in [
+                None,
+                Some('&'),
+                Some('!'),
+                Some('ą'),
+                Some('\0'),
+                Some('\u{10FFFF}'),
+            ] {
+                let action = InputAction::NumberKey { position, text };
+                let (code, value) = encode_action(action, 0);
+                assert_eq!(decode_action(code, value), Some(action));
+            }
+        }
+        assert!(decode_action(ACTION_NUMBER_KEY, -1).is_none());
+        assert!(decode_action(ACTION_NUMBER_KEY, 0).is_none());
+        assert!(decode_action(ACTION_NUMBER_KEY, (0x0011_0001 << 4) | 1).is_none());
+    }
     use crate::input::{Key, decode_virtual_key};
 
     #[test]
@@ -276,11 +363,19 @@ mod tests {
 
     #[test]
     fn action_epoch_encoding_and_validation_use_the_same_wrap_mask() {
-        for generation in [0, 8, ACTION_EPOCH_MASK << 3, usize::MAX & !7] {
+        for generation in [
+            0,
+            16,
+            ACTION_EPOCH_MASK << GENERATION_SHIFT,
+            usize::MAX & !FLAG_BITS,
+        ] {
             let flags = HookFlags::with_value(generation);
             let action = action_wparam(ACTION_CLOSE_SELECTED, generation);
             assert_eq!(action & ACTION_CODE_MASK, ACTION_CLOSE_SELECTED);
-            assert_eq!(action >> 8, (generation >> 3) & ACTION_EPOCH_MASK);
+            assert_eq!(
+                action >> 8,
+                (generation >> GENERATION_SHIFT) & ACTION_EPOCH_MASK
+            );
             assert!(flags.action_is_current(action));
             assert_eq!(decode_action(action, 0), Some(InputAction::CloseSelected));
         }
@@ -288,19 +383,19 @@ mod tests {
 
     #[test]
     fn scoped_suspension_restores_every_flag_combination_with_new_generations() {
-        for saved_flags in 0..=7 {
+        for saved_flags in 0..=FLAG_BITS {
             let flags = Arc::new(HookFlags::with_value(saved_flags));
-            let initial_generation = flags.load() & !7;
+            let initial_generation = flags.load() & !FLAG_BITS;
             let guard = HookInterceptionGuard::new(Arc::clone(&flags));
             let suspended = flags.load();
-            assert_eq!(suspended & 7, INTERCEPTION_SUSPENDED);
-            assert_ne!(suspended & !7, initial_generation);
+            assert_eq!(suspended & FLAG_BITS, INTERCEPTION_SUSPENDED);
+            assert_ne!(suspended & !FLAG_BITS, initial_generation);
             assert!(!flags.update_overlay(initial_generation, true, true));
             flags.set(SEARCH_ACTIVE, true);
             flags.set(OVERLAY_ACTIVE, true);
             drop(guard);
-            assert_eq!(flags.load() & 7, saved_flags);
-            assert_ne!(flags.load() & !7, suspended & !7);
+            assert_eq!(flags.load() & FLAG_BITS, saved_flags);
+            assert_ne!(flags.load() & !FLAG_BITS, suspended & !FLAG_BITS);
             assert!(!flags.update_overlay(suspended & !OVERLAY_FLAGS, true, true));
         }
     }
@@ -312,12 +407,15 @@ mod tests {
         flags.set(SEARCH_ACTIVE, true);
         {
             let _inner = HookInterceptionGuard::new(Arc::clone(&flags));
-            assert_eq!(flags.load() & 7, INTERCEPTION_SUSPENDED);
+            assert_eq!(flags.load() & FLAG_BITS, INTERCEPTION_SUSPENDED);
             flags.set(OVERLAY_ACTIVE, true);
         }
-        assert_eq!(flags.load() & 7, INTERCEPTION_SUSPENDED | SEARCH_ACTIVE);
+        assert_eq!(
+            flags.load() & FLAG_BITS,
+            INTERCEPTION_SUSPENDED | SEARCH_ACTIVE
+        );
         drop(outer);
-        assert_eq!(flags.load() & 7, OVERLAY_FLAGS);
+        assert_eq!(flags.load() & FLAG_BITS, OVERLAY_FLAGS);
     }
 
     #[test]
@@ -328,7 +426,7 @@ mod tests {
             panic!("modal call failed");
         });
         assert!(result.is_err());
-        assert_eq!(flags.load() & 7, OVERLAY_FLAGS);
+        assert_eq!(flags.load() & FLAG_BITS, OVERLAY_FLAGS);
     }
 
     #[test]
@@ -415,9 +513,6 @@ mod tests {
             InputAction::WindowCommand(WindowCommand::Run),
             InputAction::ActivateVisiblePosition(9),
             InputAction::AltReleased,
-            InputAction::RightButtonPressed,
-            InputAction::RightButtonReleased,
-            InputAction::MouseWheel(-1),
             InputAction::AppendSearchCharacter('é'),
             InputAction::BackspaceSearch,
         ] {
@@ -429,33 +524,33 @@ mod tests {
 
     #[test]
     fn generation_stays_current_until_recovery_a_boundary_or_suspension() {
-        let flags = HookFlags::with_value(8 | OVERLAY_FLAGS);
-        assert!(flags.generation_is_current(8));
+        let flags = HookFlags::with_value(16 | OVERLAY_FLAGS);
+        assert!(flags.generation_is_current(16));
         flags.set(SEARCH_ACTIVE, false);
         assert!(
-            flags.generation_is_current(8),
+            flags.generation_is_current(16),
             "UI flags are not a boundary"
         );
-        assert!(!flags.generation_is_current(16));
+        assert!(!flags.generation_is_current(32));
         flags.set_recovery_pending(true);
-        assert!(!flags.generation_is_current(8));
+        assert!(!flags.generation_is_current(16));
         flags.set_recovery_pending(false);
         flags.suspend(true);
-        assert!(!flags.generation_is_current(8));
+        assert!(!flags.generation_is_current(16));
         assert!(!flags.generation_is_current(flags.load() & !OVERLAY_FLAGS));
     }
 
     #[test]
     fn advancing_the_generation_keeps_the_ui_flags_and_retires_queued_actions() {
         // The last epoch before the counter wraps, so no generation handed out in tests repeats it.
-        let generation = ACTION_EPOCH_MASK << 3;
-        for saved_flags in 0..=7 {
+        let generation = ACTION_EPOCH_MASK << GENERATION_SHIFT;
+        for saved_flags in 0..=FLAG_BITS {
             let flags = HookFlags::with_value(generation | saved_flags);
             let (queued, _) = encode_action(InputAction::AltReleased, flags.load());
             assert_eq!(flags.action_is_current(queued), saved_flags & 1 == 0);
             flags.advance_generation();
-            assert_eq!(flags.load() & 7, saved_flags);
-            assert_ne!(flags.load() & !7, generation);
+            assert_eq!(flags.load() & FLAG_BITS, saved_flags);
+            assert_ne!(flags.load() & !FLAG_BITS, generation);
             assert!(!flags.action_is_current(queued));
         }
     }

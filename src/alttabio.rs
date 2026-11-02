@@ -1,16 +1,16 @@
 //! Testable application behavior for `AltTabio`.
 
-pub mod about_layout;
 pub mod activation;
 pub mod app_switcher;
 pub mod close_button;
 pub mod deferred_switch;
 pub mod dialog_layout;
+pub mod dialog_state;
 pub mod failure_run;
+pub mod filter_feedback;
 pub mod hook_delivery;
 pub mod hook_flags;
 pub mod input;
-pub mod modal_state;
 pub mod overlay_layout;
 pub mod overlay_pointer;
 pub mod overlay_window;
@@ -25,6 +25,7 @@ pub mod settings_form;
 pub mod switcher;
 pub mod task_list_hit;
 pub mod task_refresh;
+pub mod text_edit;
 pub mod theme;
 pub mod update;
 pub mod window_command;

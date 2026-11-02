@@ -1,8 +1,14 @@
 //! Keys as the input hook names them.
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent physical modifier keys can be held in any combination"
+)]
 pub struct Modifiers {
     pub alt: bool,
+    pub control: bool,
+    pub shift: bool,
     pub left_windows: bool,
     pub right_windows: bool,
 }

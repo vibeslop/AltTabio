@@ -1,6 +1,6 @@
 use crate::process_info::ProcessInfo;
+use crate::settings_dialog;
 use crate::task_icon::TaskIcons;
-use crate::{about_dialog, settings_dialog};
 use alttabio::settings::Settings;
 use alttabio::switcher::{SwitchTask, WindowCloaking, WindowEligibility, is_switchable_window};
 use std::ffi::c_void;
@@ -77,6 +77,15 @@ fn create_switch_task(
     index: usize,
     icons: &mut TaskIcons,
 ) -> Option<SwitchTask> {
+    // Most top-level windows are hidden helpers. Reject them before reading titles,
+    // classes, ownership and DWM attributes for the switcher's synchronous snapshot.
+    let is_visible = unsafe {
+        // SAFETY: HWND is borrowed from EnumWindows; a vanished window is not visible.
+        IsWindowVisible(hwnd).as_bool()
+    };
+    if !is_visible {
+        return None;
+    }
     let title = window_title(hwnd);
     let class_name = window_class_name(hwnd);
     let mut process_id = 0;
@@ -105,10 +114,7 @@ fn create_switch_task(
     let eligibility = WindowEligibility {
         title: &title,
         class_name: &class_name,
-        is_visible: unsafe {
-            // SAFETY: HWND is supplied by EnumWindows.
-            IsWindowVisible(hwnd).as_bool()
-        },
+        is_visible,
         is_current_process: excludes_current_process_window(
             process_id,
             current_process_id,
@@ -147,11 +153,7 @@ fn excludes_current_process_window(
     current_process_id: u32,
     class_name: &str,
 ) -> bool {
-    process_id == current_process_id
-        && !matches!(
-            class_name,
-            about_dialog::WINDOW_CLASS_NAME | settings_dialog::WINDOW_CLASS_NAME
-        )
+    process_id == current_process_id && class_name != settings_dialog::WINDOW_CLASS_NAME
 }
 
 fn hosted_app_executable(hwnd: HWND, class_name: &str) -> Option<PathBuf> {
@@ -373,11 +375,6 @@ mod tests {
     fn own_visible_dialogs_are_not_excluded_from_switching() {
         let current_process_id = 42;
 
-        assert!(!excludes_current_process_window(
-            current_process_id,
-            current_process_id,
-            about_dialog::WINDOW_CLASS_NAME,
-        ));
         assert!(!excludes_current_process_window(
             current_process_id,
             current_process_id,

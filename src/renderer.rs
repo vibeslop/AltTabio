@@ -1,6 +1,10 @@
 mod canvas;
 mod icons;
 
+#[cfg(test)]
+mod first_frame_tests;
+
+use crate::task_icon::TaskIcons;
 use alttabio::close_button::CloseButtonVisualState;
 use alttabio::failure_run::FailureRun;
 use alttabio::overlay_layout::{for_compact_list, layout_dpi, layout_scale};
@@ -8,13 +12,14 @@ use alttabio::settings::AppearanceSettings;
 use alttabio::switcher::Switcher;
 use alttabio::theme::{ResolvedTheme, Rgb8};
 use canvas::Canvas;
-use icons::{IconPassFailure, draw_icon_pass};
+use icons::{IconBitmaps, IconPassFailure};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_U, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_PRESENT_OPTIONS_NONE, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-    D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush,
+    D2D1_PRESENT_OPTIONS_IMMEDIATELY, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
+    ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -22,7 +27,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
-use windows::Win32::Graphics::Gdi::{COLOR_BACKGROUND, GetSysColor, HDC};
+use windows::Win32::Graphics::Gdi::{COLOR_BACKGROUND, GetSysColor};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::core::{Result, w};
@@ -36,7 +41,7 @@ pub struct Renderer {
     // DirectWrite takes UTF-16, so every title, app name and number is re-encoded on each paint;
     // one buffer reused for all of them keeps painting from allocating.
     utf16: Vec<u16>,
-    icon_client_area_failures: FailureRun,
+    icons: IconBitmaps,
     icon_draw_failures: FailureRun,
 }
 
@@ -156,7 +161,7 @@ impl Renderer {
             theme,
             resources: None,
             utf16: Vec::new(),
-            icon_client_area_failures: FailureRun::default(),
+            icons: IconBitmaps::new()?,
             icon_draw_failures: FailureRun::default(),
         })
     }
@@ -166,6 +171,16 @@ impl Renderer {
             self.theme = theme;
             self.resources = None;
         }
+    }
+
+    pub fn visible_row_count(&self, compact_list: bool) -> usize {
+        self.resources.as_ref().map_or(0, |resources| {
+            let size = unsafe {
+                // SAFETY: the render target is live and used only on its owning UI thread.
+                resources.target.GetSize()
+            };
+            for_compact_list(compact_list).visible_row_count(size.height)
+        })
     }
 
     pub fn resize(&mut self, hwnd: HWND, width: u32, height: u32) -> Result<()> {
@@ -204,13 +219,13 @@ impl Renderer {
         &mut self,
         hwnd: HWND,
         switcher: &Switcher,
+        task_icons: &TaskIcons,
         preview_frame: Option<RECT>,
         options: RenderOptions,
         close_button_state: CloseButtonVisualState,
     ) -> Result<()> {
-        if self.resources.is_none() {
-            self.resources = Some(self.create_resources(hwnd)?);
-        }
+        self.prepare(hwnd)?;
+        self.icons.for_snapshot(task_icons);
         let Some(resources) = &self.resources else {
             return Ok(());
         };
@@ -237,36 +252,36 @@ impl Renderer {
             switcher,
             preview_frame.map(|rect| PreviewFrame { rect, scale }),
             &mut self.utf16,
+            &mut self.icons,
         );
-        if draw_result.is_err() {
-            self.resources = None;
+        match draw_result {
+            Ok(failure) => {
+                self.record_icon_pass(failure);
+                Ok(())
+            }
+            Err(error) => {
+                self.resources = None;
+                Err(error)
+            }
         }
-        draw_result
     }
 
-    pub fn draw_icons(
-        &mut self,
-        hwnd: HWND,
-        hdc: HDC,
-        switcher: &Switcher,
-        options: RenderOptions,
-    ) {
-        // The overlay repaints on every selection change, so an icon that keeps failing would log
-        // on each paint. Logging the first paint of a run of failures is enough, once for each
-        // kind, so a client-area failure does not hide icon failures after it. A pass that stops
-        // at the client area never reaches the icons and leaves their run as it was.
-        match draw_icon_pass(hwnd, hdc, switcher, options) {
-            Ok(()) => {
-                self.icon_client_area_failures.succeed();
+    /// Initialize the drawing device while the overlay is hidden, before accepting input.
+    pub fn prepare(&mut self, hwnd: HWND) -> Result<()> {
+        if self.resources.is_none() {
+            self.icons.clear();
+            self.resources = Some(self.create_resources(hwnd)?);
+        }
+        Ok(())
+    }
+
+    fn record_icon_pass(&mut self, failure: Option<IconPassFailure>) {
+        // Repaints reuse cached failures; report the first failed pass in each run.
+        match failure {
+            None => {
                 self.icon_draw_failures.succeed();
             }
-            Err(failure @ IconPassFailure::ClientArea(_)) => {
-                if self.icon_client_area_failures.fail() {
-                    eprintln!("{failure}");
-                }
-            }
-            Err(failure @ IconPassFailure::Icons { .. }) => {
-                self.icon_client_area_failures.succeed();
+            Some(failure) => {
                 if self.icon_draw_failures.fail() {
                     eprintln!("{failure}");
                 }
@@ -297,7 +312,9 @@ impl Renderer {
         };
         let dpi = f32::from(metrics.dpi);
         let render_properties = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            // Icons now share this target with the UI, so acceleration can retain one full frame.
+            // Direct2D falls back to software when hardware rendering is unavailable.
+            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
             dpiX: dpi,
             dpiY: dpi,
             ..D2D1_RENDER_TARGET_PROPERTIES::default()
@@ -305,7 +322,8 @@ impl Renderer {
         let hwnd_properties = D2D1_HWND_RENDER_TARGET_PROPERTIES {
             hwnd,
             pixelSize: D2D_SIZE_U { width, height },
-            presentOptions: D2D1_PRESENT_OPTIONS_NONE,
+            // Event-driven paints submit the complete frame without waiting for a refresh here.
+            presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
         };
         let target = unsafe {
             // SAFETY: both property pointers remain valid for the call and `hwnd` remains owned by

@@ -1,9 +1,10 @@
 use super::App;
 use super::mouse::WM_MOUSE_LEAVE;
 use crate::app_messages::{
-    CLOSE_REFRESH_TIMER_ID, LISTED_REFRESH_RETRY_TIMER_ID, SHELL_DISMISS_TIMER_ID,
-    WM_FOREGROUND_CHECK, WM_HOOK_ACTION, WM_HOOK_HOTKEY_ACTION, WM_LISTED_WINDOW_REFRESH,
-    WM_SHOW_ABOUT, WM_SHOW_SETTINGS, WM_TRAY_CALLBACK,
+    CLOSE_REFRESH_TIMER_ID, FilterPointerAction, LISTED_REFRESH_RETRY_TIMER_ID,
+    SHELL_DISMISS_TIMER_ID, WM_CLEAR_FILTER, WM_FILTER_POINTER, WM_FOREGROUND_CHECK,
+    WM_HOOK_ACTION, WM_LISTED_WINDOW_REFRESH, WM_OUTSIDE_POINTER, WM_SHOW_ABOUT, WM_SHOW_SETTINGS,
+    WM_TRAY_CALLBACK,
 };
 use crate::hook::{HookThread, decode_action};
 use crate::shell_menu;
@@ -12,11 +13,12 @@ use crate::win32::{high_word, low_word};
 use alttabio::input::{InputAction, OverlayKeyEvent, decode_virtual_key, overlay_key_action};
 use alttabio::switcher::SwitcherEffect;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_CONTROL, VK_RMENU, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_CAPTURECHANGED, WM_CHAR, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER,
+    WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_CHAR, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN,
+    WM_THEMECHANGED, WM_TIMER,
 };
 
 impl App {
@@ -30,6 +32,20 @@ impl App {
             return Some(result);
         }
         match message {
+            WM_ACTIVATE if u32::from(low_word(wparam.0)) == WA_INACTIVE => {
+                if self.is_visible()
+                    && self.pending_shell.is_none()
+                    && !self.dialog_state().blocks_switcher()
+                    && self.overlay_focus.observe(false)
+                {
+                    self.hide_overlay();
+                }
+                Some(LRESULT(0))
+            }
+            WM_MOVE => {
+                self.sync_filter_geometry();
+                Some(LRESULT(0))
+            }
             WM_DPICHANGED => {
                 self.handle_dpi_changed(lparam);
                 Some(LRESULT(0))
@@ -70,7 +86,7 @@ impl App {
             }
             WM_MOUSEWHEEL => {
                 let delta = high_word(wparam.0).cast_signed();
-                self.handle_input_action(InputAction::MouseWheel(i32::from(delta.signum())));
+                self.handle_mouse_wheel(i32::from(delta));
                 Some(LRESULT(0))
             }
             WM_SIZE => {
@@ -80,6 +96,7 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
+                self.sync_filter_geometry();
                 match self.refresh_theme() {
                     Ok(true) => self.request_redraw(),
                     Ok(false) => {}
@@ -115,20 +132,15 @@ impl App {
             return Some(LRESULT(0));
         }
         match message {
-            WM_HOOK_ACTION | WM_HOOK_HOTKEY_ACTION => {
-                if !self.modal_state().any_open()
+            WM_HOOK_ACTION => {
+                if !self.dialog_state().blocks_switcher()
                     && self
                         .hooks
                         .as_ref()
                         .is_some_and(|hooks| hooks.action_is_current(wparam))
                     && let Some(action) = decode_action(wparam, lparam)
                 {
-                    if message == WM_HOOK_HOTKEY_ACTION && matches!(action, InputAction::Switch(_))
-                    {
-                        self.resume_shell_switch_with_hotkey(action);
-                    } else {
-                        self.handle_hook_input(action, wparam);
-                    }
+                    self.handle_hook_input(action, wparam);
                 }
                 Some(LRESULT(0))
             }
@@ -156,6 +168,23 @@ impl App {
                 self.handle_shell_dismissal();
                 Some(LRESULT(0))
             }
+            WM_CLEAR_FILTER => {
+                self.clear_filter();
+                Some(LRESULT(0))
+            }
+            WM_FILTER_POINTER => {
+                if let Some(action) = FilterPointerAction::from_code(lparam.0) {
+                    self.handle_filter_pointer(wparam.0, action);
+                }
+                Some(LRESULT(0))
+            }
+            WM_OUTSIDE_POINTER => {
+                self.handle_outside_pointer(
+                    u32::try_from(wparam.0).unwrap_or_default().cast_signed(),
+                    i32::try_from(lparam.0).unwrap_or_default(),
+                );
+                Some(LRESULT(0))
+            }
             _ => None,
         }
     }
@@ -163,7 +192,7 @@ impl App {
     fn handle_tray_message(&mut self, lparam: LPARAM) {
         let message = u32::try_from(lparam.0).unwrap_or_default();
         let action = match message {
-            WM_LBUTTONUP | WM_LBUTTONDBLCLK => TrayAction::Show,
+            WM_LBUTTONUP | WM_LBUTTONDBLCLK => TrayAction::OpenSwitcher,
             WM_RBUTTONUP => {
                 let _suspension = self.hooks.as_ref().map(HookThread::suspend_interception);
                 self.tray
@@ -174,12 +203,13 @@ impl App {
             _ => TrayAction::None,
         };
         match action {
-            TrayAction::Show => {
+            TrayAction::OpenSwitcher => {
                 self.stop_shell_dismissal();
                 self.show_overlay(None);
             }
             TrayAction::Settings => self.request_modal_dialog(WM_SHOW_SETTINGS, "Settings"),
             TrayAction::About => self.request_modal_dialog(WM_SHOW_ABOUT, "About"),
+            TrayAction::Update => self.updates.request(),
             TrayAction::Exit => self.request_close("the tray"),
             TrayAction::None => {}
         }
@@ -204,16 +234,22 @@ impl App {
     }
 
     pub(super) fn apply_input_action(&mut self, action: InputAction) {
-        self.apply_input_action_with_reset(action, true);
-    }
-
-    pub(super) fn apply_input_action_with_reset(&mut self, action: InputAction, reset_hook: bool) {
-        match self.session.handle_input(action) {
+        if let InputAction::EditSearch(
+            command @ (alttabio::text_edit::TextCommand::Copy
+            | alttabio::text_edit::TextCommand::Cut
+            | alttabio::text_edit::TextCommand::Paste),
+        ) = action
+        {
+            self.handle_clipboard_command(command);
+            return;
+        }
+        let effect = self.session.handle_input(action);
+        match effect {
             SwitcherEffect::None => {}
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
-            SwitcherEffect::Hide => self.hide_overlay_with_reset(reset_hook),
+            SwitcherEffect::Hide => self.hide_overlay(),
             SwitcherEffect::Redraw => self.request_redraw(),
-            SwitcherEffect::Activate(target) => self.activate_target(target, reset_hook),
+            SwitcherEffect::Activate(target) => self.activate_target(target),
             SwitcherEffect::Execute(request) => {
                 let outcome = self.execute_window_command(request);
                 self.task_refresh.apply_command_outcome(outcome);
@@ -231,7 +267,27 @@ impl App {
             repeated: key_was_previously_down(lparam),
             shift: key_is_down(VK_SHIFT.0),
         };
+        let control = key_is_down(VK_CONTROL.0);
+        if self.session.search_active()
+            && (virtual_key != u32::from(VK_BACK.0) || control)
+            && let Some(command) = alttabio::text_edit::TextCommand::for_key(
+                virtual_key,
+                control,
+                event.shift,
+                key_is_down(VK_RMENU.0),
+            )
+        {
+            self.handle_input_action(InputAction::EditSearch(command));
+            return;
+        }
         if let Some(action) = overlay_key_action(event) {
+            // Focused printable query input arrives through WM_CHAR, including its keyboard
+            // layout and Shift translation. Handling digits here too would insert them twice.
+            if self.session.filter_visible()
+                && matches!(action, InputAction::ActivateVisiblePosition(_))
+            {
+                return;
+            }
             self.handle_input_action(action);
         }
     }

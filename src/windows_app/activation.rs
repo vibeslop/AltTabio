@@ -8,9 +8,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 impl App {
-    pub(super) fn activate_target(&mut self, target: isize, reset_hook: bool) {
+    pub(super) fn activate_target(&mut self, target: isize) {
         let target = HWND(target as *mut c_void);
-        if !activate_and_hide(target, || self.hide_overlay_with_reset(reset_hook)) {
+        if !activate_and_hide(target, || self.hide_overlay()) {
             // The completed gesture has released ownership. Reopening here leaves an
             // overlay with no matching Alt release left to dismiss it.
             eprintln!("Could not activate the selected window");
@@ -58,8 +58,7 @@ fn activate_window(owner: HWND) -> bool {
     }
 
     // Separate queues make target activation asynchronous even if the target is hung.
-    // Ordinary switching still owns the foreground overlay here; Start/Search switching
-    // retains the permission supplied by the physical registered Tab hotkey.
+    // The overlay retains foreground ownership until the activation request is sent.
     let activated = request_foreground(target);
     activated
         || unsafe {

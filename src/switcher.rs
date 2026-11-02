@@ -91,16 +91,15 @@ pub struct Switcher {
     all_tasks: Vec<SwitchTask>,
     visible_indices: Vec<usize>,
     selected_visible_index: Option<usize>,
-    // A mouse hit pins the rendered range so selecting that hit cannot move it under the cursor.
+    // Pointer interaction owns the viewport independently of the selected task.
     pinned_visible_start: Option<usize>,
-    filter: String,
+    filter: crate::text_edit::QueryText,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SwitcherSessionSettings {
     pub typed_search: bool,
     pub release_alt_switches: bool,
-    pub release_right_button_switches: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,6 +148,7 @@ pub struct SwitcherSession {
     settings: SwitcherSessionSettings,
     visible: bool,
     context_menu_target: Option<WindowTarget>,
+    wheel_remainder: i32,
 }
 
 impl SwitcherSession {
@@ -160,11 +160,12 @@ impl SwitcherSession {
                 visible_indices: Vec::new(),
                 selected_visible_index: None,
                 pinned_visible_start: None,
-                filter: String::new(),
+                filter: crate::text_edit::QueryText::new(),
             },
             settings,
             visible: false,
             context_menu_target: None,
+            wheel_remainder: 0,
         }
     }
 
@@ -173,6 +174,7 @@ impl SwitcherSession {
         tasks: impl IntoIterator<Item = SwitchTask>,
         selection_delta: Option<i32>,
     ) {
+        self.wheel_remainder = 0;
         self.switcher.clear_filter();
         self.switcher.set_tasks(tasks);
         if let Some(delta) = selection_delta {
@@ -234,12 +236,62 @@ impl SwitcherSession {
     }
 
     pub fn hide(&mut self) {
+        self.wheel_remainder = 0;
         self.visible = false;
     }
 
     #[must_use]
     pub const fn search_active(&self) -> bool {
         self.visible && self.settings.typed_search
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.switcher.clear_filter();
+    }
+
+    #[must_use]
+    pub fn filter_visible(&self) -> bool {
+        self.search_active() && !self.switcher.filter().is_empty()
+    }
+
+    pub fn replace_filter_selection(&mut self, text: &str) {
+        self.switcher.filter.insert(text);
+        self.switcher.apply_filter();
+    }
+
+    pub fn select_filter_position(&mut self, position: usize, extend: bool) {
+        self.switcher.filter.select_at(position, extend);
+    }
+
+    /// Ordinary scrolling moves only the viewport, including past the selected task.
+    #[must_use]
+    pub fn handle_mouse_wheel(&mut self, delta: i32, visible_rows: usize) -> SwitcherEffect {
+        if !self.visible || self.context_menu_open() || delta == 0 || visible_rows == 0 {
+            return SwitcherEffect::None;
+        }
+        // A wheel detent is 120 units. Touchpads can deliver it as many small messages.
+        let total = self.wheel_remainder.saturating_add(delta);
+        let steps = total / 120;
+        self.wheel_remainder = total % 120;
+        if steps == 0 {
+            return SwitcherEffect::None;
+        }
+        let rows = usize::try_from(steps.unsigned_abs()).unwrap_or(usize::MAX);
+        let current = self.switcher.visible_range(visible_rows).start;
+        let max_start = self
+            .switcher
+            .visible_task_count()
+            .saturating_sub(visible_rows);
+        let start = if steps > 0 {
+            current.saturating_sub(rows)
+        } else {
+            current.saturating_add(rows).min(max_start)
+        };
+        if start == current {
+            return SwitcherEffect::None;
+        }
+        self.switcher.pinned_visible_start = Some(start);
+        SwitcherEffect::Redraw
     }
 
     #[must_use]
@@ -252,14 +304,14 @@ impl SwitcherSession {
                 InputAction::Switch(delta) => SwitcherEffect::Open {
                     selection_delta: Some(delta),
                 },
-                InputAction::RightButtonPressed => SwitcherEffect::Open {
-                    selection_delta: None,
-                },
                 _ => SwitcherEffect::None,
             };
         }
 
         match action {
+            InputAction::EditSearch(command) if self.settings.typed_search => {
+                self.edit_search(command)
+            }
             InputAction::Switch(delta) => {
                 self.switcher.select_next(delta);
                 SwitcherEffect::Redraw
@@ -282,7 +334,15 @@ impl SwitcherSession {
             }
             InputAction::CloseSelected => self.command(WindowCommand::Close),
             InputAction::WindowCommand(command) => self.command(command),
-            InputAction::ActivateVisiblePosition(position) => {
+            InputAction::NumberKey { text, .. } if self.filter_visible() => {
+                if let Some(character) = text {
+                    self.switcher.append_filter_character(character);
+                    return SwitcherEffect::Redraw;
+                }
+                SwitcherEffect::None
+            }
+            InputAction::NumberKey { position, .. }
+            | InputAction::ActivateVisiblePosition(position) => {
                 if self.switcher.select_visible_position(position) {
                     self.activate_selected()
                 } else {
@@ -293,16 +353,6 @@ impl SwitcherSession {
             InputAction::AltReleased if self.settings.release_alt_switches => {
                 self.activate_from_release()
             }
-            InputAction::RightButtonReleased if self.settings.release_right_button_switches => {
-                self.activate_from_release()
-            }
-            InputAction::RightButtonPressed => SwitcherEffect::Open {
-                selection_delta: None,
-            },
-            InputAction::MouseWheel(delta) => {
-                self.switcher.select_next(if delta > 0 { -1 } else { 1 });
-                SwitcherEffect::Redraw
-            }
             InputAction::AppendSearchCharacter(character) if self.settings.typed_search => {
                 self.switcher.append_filter_character(character);
                 SwitcherEffect::Redraw
@@ -312,12 +362,37 @@ impl SwitcherSession {
                 SwitcherEffect::Redraw
             }
             InputAction::AltReleased
-            | InputAction::RightButtonReleased
             | InputAction::AppendSearchCharacter(_)
-            | InputAction::BackspaceSearch => SwitcherEffect::None,
+            | InputAction::BackspaceSearch
+            | InputAction::EditSearch(_) => SwitcherEffect::None,
         }
     }
 
+    fn edit_search(&mut self, command: crate::text_edit::TextCommand) -> SwitcherEffect {
+        use crate::text_edit::TextCommand as C;
+        if self.switcher.filter().is_empty() {
+            match command {
+                C::Left | C::Right => {
+                    self.switcher
+                        .select_bounded(if command == C::Left { -1 } else { 1 });
+                    return SwitcherEffect::Redraw;
+                }
+                C::Start | C::End => {
+                    if command == C::Start {
+                        self.switcher.select_first();
+                    } else {
+                        self.switcher.select_last();
+                    }
+                    return SwitcherEffect::Redraw;
+                }
+                _ => {}
+            }
+        }
+        if self.switcher.filter.command(command) {
+            self.switcher.apply_filter();
+        }
+        SwitcherEffect::Redraw
+    }
     fn activate_from_release(&mut self) -> SwitcherEffect {
         if self.context_menu_open() {
             SwitcherEffect::None
@@ -365,24 +440,29 @@ impl Switcher {
         self.rebuild_visible_indices();
     }
 
+    #[cfg(test)]
     fn set_filter(&mut self, filter: &str) {
-        if self.filter != filter {
-            filter.clone_into(&mut self.filter);
+        if self.filter.text() != filter {
+            self.filter.reset(filter);
             self.apply_filter();
         }
     }
 
     fn clear_filter(&mut self) {
-        self.set_filter("");
+        self.filter.reset("");
+        self.apply_filter();
     }
 
     pub(crate) fn append_filter_character(&mut self, value: char) {
-        self.filter.push(value);
+        self.filter.insert(value.encode_utf8(&mut [0; 4]));
         self.apply_filter();
     }
 
     pub(crate) fn backspace_filter(&mut self) {
-        if self.filter.pop().is_some() {
+        if self
+            .filter
+            .command(crate::text_edit::TextCommand::Backspace)
+        {
             self.apply_filter();
         }
     }
@@ -407,8 +487,18 @@ impl Switcher {
     }
 
     #[must_use]
-    pub(crate) fn visible_task_count(&self) -> usize {
+    pub fn visible_task_count(&self) -> usize {
         self.visible_indices.len()
+    }
+
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        self.filter.text()
+    }
+
+    #[must_use]
+    pub const fn filter_editor(&self) -> &crate::text_edit::QueryText {
+        &self.filter
     }
 
     #[must_use]
@@ -470,9 +560,7 @@ impl Switcher {
         let centered_start = selected.saturating_sub(visible_rows / 2).min(max_start);
         let start = self
             .pinned_visible_start
-            .map(|start| start.min(max_start))
-            .filter(|start| selected >= *start && selected < start.saturating_add(visible_rows))
-            .unwrap_or(centered_start);
+            .map_or(centered_start, |start| start.min(max_start));
         start..start.saturating_add(visible_rows).min(count)
     }
 
@@ -535,7 +623,7 @@ impl Switcher {
     }
 
     fn rebuild_visible_indices(&mut self) {
-        let normalized = self.filter.trim().to_lowercase();
+        let normalized = self.filter.text().trim().to_lowercase();
         self.visible_indices.clear();
         for (index, task) in self.all_tasks.iter().enumerate() {
             if normalized.is_empty()
@@ -572,7 +660,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         let identity = ProcessIdentity::new(100, 500);
         session.open(
@@ -625,7 +712,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
 
         assert_eq!(
@@ -655,7 +741,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
 
         assert_eq!(
@@ -699,7 +784,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open([SwitchTask::new(1, 10, "Last window", "app")], None);
         assert!(session.is_visible());
@@ -716,7 +800,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -755,7 +838,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -788,7 +870,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -820,7 +901,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -848,7 +928,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -885,7 +964,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [
@@ -935,7 +1013,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(tasks(), None);
         assert_eq!(
@@ -955,14 +1032,9 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: false,
         });
         session.open(tasks(), None);
 
-        assert_eq!(
-            session.handle_input(InputAction::RightButtonReleased),
-            SwitcherEffect::None
-        );
         assert!(session.open_context_menu());
         assert_eq!(
             session.handle_input(InputAction::AltReleased),
@@ -984,7 +1056,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(
             [SwitchTask::new(1, 20, "Selected", "editor").with_process_identity(identity)],
@@ -1006,7 +1077,6 @@ mod tests {
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
-            release_right_button_switches: true,
         });
         session.open(tasks(), None);
         assert_eq!(
@@ -1137,6 +1207,151 @@ mod tests {
     }
 
     #[test]
+    fn high_resolution_wheel_deltas_accumulate_without_skipping_rows() {
+        let mut session = long_list_session();
+        for _ in 0..14 {
+            assert_eq!(session.handle_mouse_wheel(-8, 5), SwitcherEffect::None);
+        }
+        assert_eq!(session.switcher().visible_range(5), 0..5);
+        assert_eq!(session.handle_mouse_wheel(-8, 5), SwitcherEffect::Redraw);
+        assert_eq!(session.switcher().visible_range(5), 1..6);
+        assert_eq!(session.handle_mouse_wheel(-240, 5), SwitcherEffect::Redraw);
+        assert_eq!(session.switcher().visible_range(5), 3..8);
+        assert_eq!(session.handle_mouse_wheel(60, 5), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-60, 5), SwitcherEffect::None);
+        assert_eq!(session.switcher().visible_range(5), 3..8);
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+    }
+
+    #[test]
+    fn scrolling_preserves_the_selected_window_and_alt_release_target() {
+        let mut session = long_list_session();
+        assert!(session.switcher_mut().select_visible_position(2));
+
+        for _ in 0..15 {
+            assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::Redraw);
+        }
+
+        assert_eq!(session.switcher().selected_visible_index(), Some(1));
+        assert_eq!(session.switcher().visible_range(5), 15..20);
+        assert_eq!(
+            session.handle_input(InputAction::AltReleased),
+            SwitcherEffect::Activate(2)
+        );
+    }
+
+    #[test]
+    fn scrolling_moves_the_hovered_list_without_selecting_a_different_task() {
+        let mut session = long_list_session();
+        assert!(session.switcher_mut().select_visible_position(8));
+        session.switcher_mut().pin_visible_range(5);
+        assert!(session.switcher_mut().select_visible_position(6));
+        assert_eq!(session.switcher().visible_range(5), 5..10);
+
+        assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::Redraw);
+
+        assert_eq!(session.switcher().selected_visible_index(), Some(5));
+        assert_eq!(session.switcher().visible_range(5), 6..11);
+    }
+
+    #[test]
+    fn scrolling_stops_at_each_end_without_changing_selection() {
+        let mut session = long_list_session();
+        let rows = 5;
+
+        assert_eq!(session.handle_mouse_wheel(120, rows), SwitcherEffect::None);
+        for start in 1..=15 {
+            assert_eq!(
+                session.handle_mouse_wheel(-120, rows),
+                SwitcherEffect::Redraw
+            );
+            assert_eq!(session.switcher().selected_visible_index(), Some(0));
+            assert_eq!(session.switcher().visible_range(rows), start..start + rows);
+        }
+        assert_eq!(session.handle_mouse_wheel(-120, rows), SwitcherEffect::None);
+        for start in (0..15).rev() {
+            assert_eq!(
+                session.handle_mouse_wheel(120, rows),
+                SwitcherEffect::Redraw
+            );
+            assert_eq!(session.switcher().selected_visible_index(), Some(0));
+            assert_eq!(session.switcher().visible_range(rows), start..start + rows);
+        }
+        assert_eq!(session.handle_mouse_wheel(120, rows), SwitcherEffect::None);
+    }
+
+    #[test]
+    fn keyboard_navigation_restores_the_selected_window_to_view_after_scrolling() {
+        let mut session = long_list_session();
+        for _ in 0..10 {
+            assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::Redraw);
+        }
+        assert_eq!(session.switcher().visible_range(5), 10..15);
+
+        assert_eq!(
+            session.handle_input(InputAction::Navigate(1)),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().selected_visible_index(), Some(1));
+        assert_eq!(session.switcher().visible_range(5), 0..5);
+    }
+
+    #[test]
+    fn clicking_a_scrolled_row_activates_that_window_with_selection_offscreen() {
+        use crate::task_list_hit::{TaskListHit, hit_test_pixels};
+
+        let mut session = long_list_session();
+        for _ in 0..5 {
+            assert_eq!(session.handle_mouse_wheel(-120, 2), SwitcherEffect::Redraw);
+        }
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+        assert_eq!(session.switcher().visible_range(2), 5..7);
+        let hit = hit_test_pixels(session.switcher_mut(), (900, 168), (100, 50), 96, false);
+        assert_eq!(hit, Some(TaskListHit::Task(6)));
+        assert_eq!(
+            session.handle_input(InputAction::ActivateVisiblePosition(6)),
+            SwitcherEffect::Activate(6)
+        );
+    }
+
+    #[test]
+    fn mouse_wheel_ignores_zero_delta_and_cannot_navigate_a_menu_or_hidden_overlay() {
+        let mut session = long_list_session();
+        assert_eq!(session.handle_mouse_wheel(0, 5), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, 0), SwitcherEffect::None);
+        assert_eq!(session.handle_mouse_wheel(-120, 20), SwitcherEffect::None);
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+
+        assert!(session.open_context_menu());
+        assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::None);
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+        assert_eq!(session.finish_context_menu(None), SwitcherEffect::None);
+
+        session.hide();
+        assert_eq!(session.handle_mouse_wheel(-120, 5), SwitcherEffect::None);
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+    }
+
+    fn long_list_session() -> SwitcherSession {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        session.open(
+            (1..=20).map(|number| {
+                SwitchTask::new(
+                    number,
+                    isize::try_from(number).unwrap_or_default(),
+                    "Task",
+                    "process",
+                )
+            }),
+            None,
+        );
+        session
+    }
+
+    #[test]
     fn steps_of_any_size_wrap_or_clamp_into_the_list() {
         let mut switcher = Switcher::default();
         switcher.set_tasks([
@@ -1247,6 +1462,69 @@ mod tests {
                 .map(|task| task.window_handle)
                 .collect::<Vec<_>>(),
             vec![10, 20]
+        );
+    }
+
+    #[test]
+    fn clearing_the_displayed_query_restores_the_session_results() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        session.open(
+            [
+                SwitchTask::new(1, 10, "Editor", "zed"),
+                SwitchTask::new(2, 20, "Documentation", "firefox"),
+            ],
+            None,
+        );
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('f')),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().filter(), "f");
+        assert_eq!(session.switcher().visible_task_count(), 1);
+        session.clear_filter();
+        assert_eq!(session.switcher().filter(), "");
+        assert_eq!(session.switcher().visible_task_count(), 2);
+        assert!(session.is_visible());
+    }
+
+    #[test]
+    fn digits_edit_active_queries_but_pointer_activation_still_switches() {
+        let settings = SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        };
+        let tasks = [
+            SwitchTask::new(1, 10, "Alpha1", "editor"),
+            SwitchTask::new(2, 20, "Beta", "browser"),
+        ];
+        let mut session = SwitcherSession::new(settings);
+        session.open(tasks.clone(), None);
+        assert_eq!(
+            session.handle_input(InputAction::NumberKey {
+                position: 2,
+                text: Some('2')
+            }),
+            SwitcherEffect::Activate(20)
+        );
+        session.open(tasks, None);
+        assert_eq!(
+            session.handle_input(InputAction::AppendSearchCharacter('a')),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(
+            session.handle_input(InputAction::NumberKey {
+                position: 1,
+                text: Some('1')
+            }),
+            SwitcherEffect::Redraw
+        );
+        assert_eq!(session.switcher().filter(), "a1");
+        assert_eq!(
+            session.handle_input(InputAction::ActivateVisiblePosition(1)),
+            SwitcherEffect::Activate(10)
         );
     }
 

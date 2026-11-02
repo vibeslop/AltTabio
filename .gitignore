@@ -1,6 +1,9 @@
 .*
 !.gitignore
 !.github/
+!.cargo/
+.cargo/*
+!.cargo/config.toml
 !.nojekyll
 !docs/.nojekyll
 target/

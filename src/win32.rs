@@ -2,8 +2,11 @@
 //! window user data, wide strings, and the COM apartment.
 
 use alttabio::dialog_layout::{Point, Rect};
+use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
 use windows::Win32::Foundation::{
     ERROR_SUCCESS, HINSTANCE, HWND, LPARAM, POINT, RECT, SetLastError,
 };
@@ -13,8 +16,32 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, GetCursorPos, SetWindowLongPtrW};
 use windows::core::{Error, Result};
+
+pub(crate) fn system_directory() -> std::result::Result<PathBuf, String> {
+    // Reserve the maximum Windows path length, including the terminating null.
+    let mut buffer = vec![0_u16; 32768];
+    let length = unsafe {
+        // SAFETY: buffer is writable for its full length and the API retains no pointers.
+        GetSystemDirectoryW(Some(&mut buffer))
+    } as usize;
+    if length == 0 {
+        return Err(format!(
+            "Could not locate the Windows system directory: {}",
+            windows::core::Error::from_thread()
+        ));
+    }
+    if length >= buffer.len() {
+        return Err("The Windows system directory path exceeds the supported length".to_owned());
+    }
+    let path = PathBuf::from(OsString::from_wide(&buffer[..length]));
+    if !path.is_absolute() {
+        return Err("Windows returned a non-absolute system directory path".to_owned());
+    }
+    Ok(path)
+}
 
 pub(crate) fn module_instance() -> Result<HINSTANCE> {
     let module = unsafe {

@@ -6,20 +6,21 @@ mod keyboard_state;
 mod recovery;
 mod replay;
 
-use crate::win32::{high_word, module_instance};
+use crate::app_messages::WM_OUTSIDE_POINTER;
+use crate::win32::module_instance;
 use alttabio::hook_flags::{
-    HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE, OVERLAY_FLAGS,
-    SEARCH_ACTIVE,
+    FILTER_VISIBLE, HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE,
+    OVERLAY_FLAGS, SEARCH_ACTIVE,
 };
 use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
-    MouseEvent, decode_virtual_key,
+    decode_virtual_key,
 };
 use alttabio::passthrough::PassthroughPolicy;
-use delivery::{dispatch_registered_switch, post_actions, route_registered_switch};
+use delivery::post_actions;
 use keyboard_state::{KeyboardState, translate_search_character};
 use recovery::{KeyboardRecoveryWatcher, publish_recovery_flags, recover_keyboard_state};
-use replay::{is_own_replayed_input, replay_key_events, replay_mouse_event};
+use replay::{is_own_replayed_input, replay_key_events};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{
@@ -29,17 +30,18 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_RWIN, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW,
+    KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WH_MOUSE_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::Error;
 
-pub use replay::send_shell_escape;
+pub use replay::{send_activation_alt, send_shell_escape};
 
 // Thread messages for the hook thread's own queue, kept together so a test can check that they
 // are distinct. The app window never receives them, so they may reuse numbers from `app_messages`.
@@ -49,11 +51,8 @@ const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
 const HOOK_ERROR_POST_ACTION: u8 = 2;
-const HOOK_ERROR_REGISTERED_SWITCH: u8 = 4;
 
 struct HookContext {
-    registered_switch: Option<crate::switch_hotkey::PendingSwitch>,
-    registered_tab_down: bool,
     target: HWND,
     state: HookState,
     settings: HookSettings,
@@ -74,7 +73,6 @@ impl HookContext {
         let recovering = self.flags.recovery_pending();
         let suspended = flags & INTERCEPTION_SUSPENDED != 0 || recovering;
         if generation != self.interception_generation || recovering != self.recovering {
-            self.registered_switch = None;
             self.state.set_interception_suspended(suspended);
             self.interception_generation = generation;
             self.recovering = recovering;
@@ -138,8 +136,6 @@ impl HookThread {
                 let target = HWND(target_value as *mut core::ffi::c_void);
                 if let Err(error) = run_hook_thread(
                     HookContext {
-                        registered_switch: None,
-                        registered_tab_down: false,
                         target,
                         target_thread_id,
                         settings,
@@ -178,8 +174,8 @@ impl HookThread {
         }
     }
 
-    pub fn set_search_active(&self, active: bool) {
-        self.flags.set(SEARCH_ACTIVE, active);
+    pub fn set_search_state(&self, active: bool, filtered: bool) {
+        self.flags.set_search_state(active, filtered);
     }
 
     pub fn set_overlay_active(&self, active: bool) {
@@ -309,11 +305,6 @@ fn run_hook_thread(
         if result.0 == 0 {
             break Ok(());
         }
-        dispatch_registered_switch(None);
-        if message.message == WM_HOTKEY && crate::switch_hotkey::owns_id(message.wParam.0) {
-            dispatch_registered_switch(Some(message.wParam.0));
-            continue;
-        }
         if recovery.handles(&message) {
             recover_keyboard_state(message.time);
             continue;
@@ -413,7 +404,8 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     }
 
     std::panic::catch_unwind(|| {
-        finish_callback(code, wparam, lparam, process_mouse_message(wparam, lparam))
+        process_mouse_message(wparam, lparam);
+        call_next(code, wparam, lparam)
     })
     .unwrap_or_else(|_| call_next(code, wparam, lparam))
 }
@@ -435,6 +427,8 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     let key = decode_virtual_key(data.vkCode);
     let modifiers = Modifiers {
         alt: data.flags.contains(LLKHF_ALTDOWN),
+        control: false,
+        shift: false,
         left_windows: key_pressed(VK_LWIN.0),
         right_windows: key_pressed(VK_RWIN.0),
     };
@@ -443,6 +437,11 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         context
             .keyboard_state
             .observe_at(data.vkCode, transition, data.time);
+        let modifiers = Modifiers {
+            control: context.keyboard_state.pressed(VK_CONTROL),
+            shift: context.keyboard_state.pressed(VK_SHIFT),
+            ..modifiers
+        };
         let flags = context.sync_interception();
         let search_active = flags & SEARCH_ACTIVE != 0;
         context
@@ -453,6 +452,7 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         )
         .apply(context.settings);
         settings.search_active = search_active;
+        settings.filter_visible = flags & FILTER_VISIBLE != 0;
         let text = if search_active && transition == KeyTransition::Pressed {
             translate_search_character(data, context.target_thread_id, &context.keyboard_state)
         } else {
@@ -473,44 +473,36 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     if !replay_key_events(replayed_key_events, &mut outcome) {
         record_callback_error(HOOK_ERROR_REPLAY_INPUT);
     }
-    outcome =
-        process_with_context(|context| route_registered_switch(context, outcome, data, transition))
-            .unwrap_or(outcome);
     Some(outcome)
 }
 
-fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> {
-    let data = unsafe {
-        // SAFETY: for a nonnegative low-level mouse hook code, Windows guarantees lParam points to
-        // an MSLLHOOKSTRUCT for the callback duration.
-        (lparam.0 as *const MSLLHOOKSTRUCT).as_ref()
-    }?;
-    if is_own_replayed_input(data.dwExtraInfo) {
-        return None;
+// Mouse input is always forwarded. Only outside left-clicks need an overlay notification.
+fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) {
+    if wparam.0 != WM_LBUTTONDOWN as usize {
+        return;
     }
-    let event = match u32::try_from(wparam.0).ok()? {
-        WM_RBUTTONDOWN => MouseEvent::RightButtonPressed,
-        WM_RBUTTONUP => MouseEvent::RightButtonReleased,
-        WM_MOUSEWHEEL => MouseEvent::Wheel(high_word(data.mouseData as usize).cast_signed()),
-        _ => return None,
+    // SAFETY: the hook passes a live MSLLHOOKSTRUCT for the callback duration.
+    let Some(data) = (unsafe { (lparam.0 as *const MSLLHOOKSTRUCT).as_ref() }) else {
+        return;
     };
-    let (mut outcome, replayed_mouse_event) = process_with_context(|context| {
-        let flags = context.sync_interception();
-        context
-            .state
-            .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
-        let outcome = context.state.process_mouse(event, context.settings);
-        let replayed_mouse_event = context.state.take_replayed_mouse_event();
-        (outcome, replayed_mouse_event)
-    })?;
-    if !replay_mouse_event(replayed_mouse_event, &mut outcome) {
-        record_callback_error(HOOK_ERROR_REPLAY_INPUT);
-        let _abandoned =
-            process_with_context(|context| context.state.abandon_right_button_gesture());
-        reset_context();
-        outcome = HookOutcome::default();
-    }
-    Some(outcome)
+    let _posted = process_with_context(|context| {
+        if context.sync_interception() & OVERLAY_ACTIVE != 0 {
+            // SAFETY: the hook owner retains the target HWND. Only scalar screen coordinates
+            // cross this callback; hit testing runs on the application thread.
+            if unsafe {
+                PostMessageW(
+                    Some(context.target),
+                    WM_OUTSIDE_POINTER,
+                    WPARAM(usize::try_from(data.pt.x.cast_unsigned()).unwrap_or_default()),
+                    LPARAM(isize::try_from(data.pt.y).unwrap_or_default()),
+                )
+            }
+            .is_err()
+            {
+                context.record_error(HOOK_ERROR_POST_ACTION);
+            }
+        }
+    });
 }
 
 fn process_with_context<T>(process: impl FnOnce(&mut HookContext) -> T) -> Option<T> {
@@ -521,17 +513,6 @@ fn process_with_context<T>(process: impl FnOnce(&mut HookContext) -> T) -> Optio
         })
         .ok()
         .flatten()
-}
-
-fn finish_callback(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    outcome: Option<HookOutcome>,
-) -> LRESULT {
-    finish_callback_with(outcome, post_actions, reset_context, || {
-        call_next(code, wparam, lparam)
-    })
 }
 
 fn finish_callback_with(
@@ -556,7 +537,6 @@ fn finish_callback_with(
 
 fn reset_context() {
     let _outcome = process_with_context(|context| {
-        context.registered_switch = None;
         context.state.reset_gestures();
         HookOutcome::default()
     });
@@ -567,12 +547,6 @@ fn record_callback_error(error: u8) {
 }
 
 fn report_callback_errors() {
-    if let Some(error) = crate::switch_hotkey::take_registration_error() {
-        eprintln!("Could not register physical switch hotkey: {error}");
-    }
-    if let Some(error) = crate::switch_hotkey::take_cleanup_error() {
-        eprintln!("Could not unregister physical switch hotkey: {error}");
-    }
     let pending = process_with_context(|context| core::mem::take(&mut context.pending_errors))
         .unwrap_or_default();
     if pending & HOOK_ERROR_REPLAY_INPUT != 0 {
@@ -580,9 +554,6 @@ fn report_callback_errors() {
     }
     if pending & HOOK_ERROR_POST_ACTION != 0 {
         eprintln!("Could not post an input action from the input hook");
-    }
-    if pending & HOOK_ERROR_REGISTERED_SWITCH != 0 {
-        eprintln!("Could not route physical Tab through a registered switch hotkey");
     }
 }
 
@@ -603,8 +574,6 @@ fn key_pressed(virtual_key: u16) -> bool {
 #[cfg(test)]
 fn test_context() -> HookContext {
     HookContext {
-        registered_switch: None,
-        registered_tab_down: false,
         target: HWND::default(),
         state: HookState::default(),
         settings: HookSettings::default(),
@@ -625,6 +594,34 @@ mod tests {
     use alttabio::input::Key;
     use replay::REPLAYED_INPUT_MARKER;
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_LSHIFT, VK_SHIFT};
+
+    #[test]
+    fn right_button_and_wheel_input_never_changes_overlay_or_keyboard_ownership() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        };
+
+        for overlay in [false, true] {
+            let context = test_context();
+            let flags = Arc::clone(&context.flags);
+            flags.set(OVERLAY_FLAGS, overlay);
+            let before = flags.load();
+            CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+            for message in [WM_RBUTTONDOWN, WM_MOUSEWHEEL, WM_RBUTTONUP] {
+                let data = MSLLHOOKSTRUCT {
+                    mouseData: 120 << 16,
+                    ..Default::default()
+                };
+                process_mouse_message(WPARAM(message as usize), LPARAM((&raw const data) as isize));
+                assert_eq!(flags.load(), before);
+                assert_eq!(
+                    process_with_context(|context| context.pending_errors),
+                    Some(0)
+                );
+            }
+            CONTEXT.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
 
     #[test]
     fn swallowed_and_replayed_toggles_follow_actual_chain_delivery() {

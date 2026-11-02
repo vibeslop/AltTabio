@@ -84,7 +84,21 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Build
+        env:
+          ALTTABIO_RELEASE: "1"
         run: cargo build --release --locked --quiet
+
+      - name: Verify embedded Windows release version
+        env:
+          VERSION: ${{ needs.draft.outputs.version }}
+        run: |
+          $artifact = Get-Item -LiteralPath target\release\AltTabio.exe
+          foreach ($field in @('FileVersion', 'ProductVersion')) {
+            $actual = $artifact.VersionInfo.$field
+            if ($actual -cne $env:VERSION) {
+              throw "app.rc embeds $field=$actual, but the release tag requires $env:VERSION."
+            }
+          }
 
       - name: Package
         env:

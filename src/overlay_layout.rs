@@ -120,6 +120,30 @@ impl OverlayLayout {
         }
     }
 
+    /// Continuation chevrons occupy the existing padding, outside every row's hit target.
+    /// The first rectangle points up and the second points down, when that edge has hidden tasks.
+    #[must_use]
+    pub fn scroll_indicators(
+        self,
+        client_height: f32,
+        list_width: f32,
+        visible_range: std::ops::Range<usize>,
+        task_count: usize,
+    ) -> [Option<LogicalRect>; 2] {
+        let center_x = f32::midpoint(self.outer_padding, list_width);
+        let bounds = |center_y| LogicalRect {
+            left: center_x - 6.0,
+            top: center_y - 2.0,
+            right: center_x + 6.0,
+            bottom: center_y + 2.0,
+        };
+        [
+            (visible_range.start > 0).then(|| bounds(self.outer_padding / 2.0)),
+            (visible_range.end < task_count)
+                .then(|| bounds(client_height - self.outer_padding / 2.0)),
+        ]
+    }
+
     #[must_use]
     pub const fn icon_size(self, large_icons: bool) -> f32 {
         if large_icons {
@@ -350,6 +374,89 @@ mod tests {
 
         assert!((layout.list_top() - layout.outer_padding).abs() < f32::EPSILON);
         assert_eq!(layout.visible_row_count(600.0), 12);
+    }
+
+    #[test]
+    fn scroll_indicators_follow_navigation_and_filtered_results() {
+        use crate::switcher::{SwitchTask, Switcher};
+
+        for compact in [false, true] {
+            let layout = for_compact_list(compact);
+            let rows = layout.visible_row_count(600.0);
+            let mut switcher = Switcher::default();
+            switcher.set_tasks((1..=20).map(|number| {
+                SwitchTask::new(
+                    number,
+                    isize::try_from(number).unwrap_or_default(),
+                    &format!("Window {number}"),
+                    "app",
+                )
+            }));
+
+            for (position, expected) in
+                [(1, [false, true]), (11, [true, true]), (20, [true, false])]
+            {
+                assert!(switcher.select_visible_position(position));
+                let indicators = layout.scroll_indicators(
+                    600.0,
+                    300.0,
+                    switcher.visible_range(rows),
+                    switcher.visible_task_count(),
+                );
+                assert_eq!(indicators.map(|indicator| indicator.is_some()), expected);
+            }
+
+            for filter in ["Window 20", "no matches"] {
+                for character in filter.chars() {
+                    switcher.append_filter_character(character);
+                }
+                assert_eq!(
+                    layout.scroll_indicators(
+                        600.0,
+                        300.0,
+                        switcher.visible_range(rows),
+                        switcher.visible_task_count(),
+                    ),
+                    [None, None]
+                );
+                for _ in filter.chars() {
+                    switcher.backspace_filter();
+                }
+            }
+            assert_eq!(
+                layout.scroll_indicators(600.0, 300.0, 0..rows, rows),
+                [None, None]
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_indicators_stay_in_padding_at_common_display_scales() {
+        for compact in [false, true] {
+            let layout = for_compact_list(compact);
+            for dpi in [96, 120, 144, 168, 192] {
+                let scale = layout_scale(dpi);
+                let width = layout.list_width(1_260.0 / scale, scale);
+                let height = 900.0 / scale;
+                let rows = layout.visible_row_count(height);
+                let [Some(above), Some(below)] =
+                    layout.scroll_indicators(height, width, 1..1 + rows, rows + 2)
+                else {
+                    panic!("a viewport in the middle must indicate both directions");
+                };
+                assert!(above.top > 0.75);
+                assert!(above.bottom + 0.75 < layout.row_bounds(0, width).top);
+                assert!(below.top - 0.75 > layout.row_bounds(rows - 1, width).bottom);
+                assert!(below.bottom + 0.75 < height);
+                for bounds in [above, below] {
+                    let center_x = f32::midpoint(bounds.left, bounds.right);
+                    let center_y = f32::midpoint(bounds.top, bounds.bottom);
+                    let expected_x = f32::midpoint(layout.outer_padding, width);
+                    assert!((center_x - expected_x).abs() * scale < 0.001);
+                    assert_eq!(layout.visible_row_at(height, center_y), None);
+                }
+            }
+        }
     }
 
     #[test]

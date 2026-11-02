@@ -1,7 +1,8 @@
-//! Pure state machines used by the low-level keyboard and mouse hook adapter.
+//! Pure state machines used by the low-level keyboard hook adapter.
 
 mod key;
 
+use crate::text_edit::TextCommand;
 use crate::window_command::WindowCommand;
 use key::KeySet;
 pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
@@ -14,9 +15,9 @@ pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
 pub struct HookSettings {
     pub replace_alt_tab: bool,
     pub replace_win_tab: bool,
-    pub right_button_wheel_switching: bool,
     pub typed_search: bool,
     pub search_active: bool,
+    pub filter_visible: bool,
 }
 
 impl Default for HookSettings {
@@ -24,9 +25,9 @@ impl Default for HookSettings {
         Self {
             replace_alt_tab: true,
             replace_win_tab: true,
-            right_button_wheel_switching: true,
             typed_search: true,
             search_active: false,
+            filter_visible: false,
         }
     }
 }
@@ -61,19 +62,6 @@ impl ReplayedKeyEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MouseEvent {
-    RightButtonPressed,
-    RightButtonReleased,
-    Wheel(i16),
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReplayedMouseEvent {
-    RightButtonReleased,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Switch(i32),
     Navigate(i32),
@@ -84,12 +72,11 @@ pub enum InputAction {
     CloseSelected,
     WindowCommand(WindowCommand),
     ActivateVisiblePosition(usize),
+    NumberKey { position: usize, text: Option<char> },
     AltReleased,
-    RightButtonPressed,
-    RightButtonReleased,
-    MouseWheel(i32),
     AppendSearchCharacter(char),
     BackspaceSearch,
+    EditSearch(TextCommand),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,13 +144,6 @@ impl HookOutcome {
         }
     }
 
-    const fn two(suppress: bool, first: InputAction, second: InputAction) -> Self {
-        Self {
-            suppress,
-            actions: [Some(first), Some(second)],
-        }
-    }
-
     pub fn actions(&self) -> impl Iterator<Item = InputAction> + '_ {
         self.actions.iter().flatten().copied()
     }
@@ -178,11 +158,9 @@ pub struct HookState {
     pending_alt_keys: u8,
     pending_windows_keys: u8,
     replayed_key_events: [Option<ReplayedKeyEvent>; 3],
-    replayed_mouse_event: Option<ReplayedMouseEvent>,
     overlay_active: bool,
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
-    right_button: RightButtonState,
     interception: InterceptionState,
 }
 
@@ -193,17 +171,8 @@ struct InterceptionState {
     passthrough_keys: KeySet,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum RightButtonState {
-    #[default]
-    Released,
-    Pressed,
-    WheelGesture,
-    CancelledWheelGesture,
-}
-
 impl HookState {
-    /// Cancels gestures without forgetting suppressed presses or synthetic mouse releases.
+    /// Cancels gestures without forgetting suppressed key presses.
     /// The adapter calls this for every suspension generation, including a missed open/close.
     pub fn set_interception_suspended(&mut self, suspended: bool) {
         self.interception.suspended = suspended;
@@ -215,9 +184,6 @@ impl HookState {
             .passthrough_keys
             .insert_all(self.pressed_owned_keys);
         self.reset_gestures();
-        if self.right_button == RightButtonState::WheelGesture {
-            self.right_button = RightButtonState::CancelledWheelGesture;
-        }
     }
 
     pub fn set_overlay_active(&mut self, active: bool) {
@@ -258,27 +224,10 @@ impl HookState {
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
-        // The synthetic release already balanced the forwarded down. Keep owning the later
-        // physical release so a rejected or dismissed overlay cannot leak a duplicate button-up.
-        if !matches!(
-            self.right_button,
-            RightButtonState::WheelGesture | RightButtonState::CancelledWheelGesture
-        ) {
-            self.right_button = RightButtonState::Released;
-        }
-    }
-
-    pub fn abandon_right_button_gesture(&mut self) {
-        self.right_button = RightButtonState::Released;
-        self.replayed_mouse_event = None;
     }
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
         core::mem::take(&mut self.replayed_key_events)
-    }
-
-    pub fn take_replayed_mouse_event(&mut self) -> Option<ReplayedMouseEvent> {
-        self.replayed_mouse_event.take()
     }
 
     #[must_use]
@@ -357,6 +306,10 @@ impl HookState {
             return HookOutcome::suppressed();
         }
 
+        if let Some(outcome) = self.process_editing_key(event, settings) {
+            return outcome;
+        }
+
         if let Some(outcome) = self.process_command_key(event) {
             return outcome;
         }
@@ -373,7 +326,9 @@ impl HookState {
             return HookOutcome::suppressed();
         }
 
-        if let Some(outcome) = self.process_number_shortcut(event, key_was_down, alt_down) {
+        if let Some(outcome) =
+            self.process_number_shortcut(event, key_was_down, alt_down, settings.search_active)
+        {
             return outcome;
         }
 
@@ -464,6 +419,7 @@ impl HookState {
         event: KeyEvent,
         key_was_down: bool,
         alt_down: bool,
+        search_active: bool,
     ) -> Option<HookOutcome> {
         if event.transition != KeyTransition::Pressed {
             return None;
@@ -477,6 +433,18 @@ impl HookState {
         else {
             return None;
         };
+        let action = if search_active {
+            if let InputAction::ActivateVisiblePosition(position) = action {
+                InputAction::NumberKey {
+                    position,
+                    text: event.text.filter(|character| !character.is_control()),
+                }
+            } else {
+                action
+            }
+        } else {
+            action
+        };
         if self.alt_switch_gesture_active && alt_down {
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
@@ -488,52 +456,6 @@ impl HookState {
             return Some(HookOutcome::one(true, action));
         }
         None
-    }
-
-    #[must_use]
-    pub fn process_mouse(&mut self, event: MouseEvent, settings: HookSettings) -> HookOutcome {
-        if self.interception.suspended
-            || self.right_button == RightButtonState::CancelledWheelGesture
-        {
-            let suppress = event == MouseEvent::RightButtonReleased
-                && self.right_button == RightButtonState::CancelledWheelGesture;
-            if event == MouseEvent::RightButtonReleased {
-                self.right_button = RightButtonState::Released;
-            }
-            return HookOutcome {
-                suppress,
-                ..HookOutcome::default()
-            };
-        }
-        match event {
-            MouseEvent::RightButtonPressed if settings.right_button_wheel_switching => {
-                self.right_button = RightButtonState::Pressed;
-                HookOutcome::default()
-            }
-            MouseEvent::RightButtonReleased if self.right_button != RightButtonState::Released => {
-                let suppress = self.right_button == RightButtonState::WheelGesture;
-                self.right_button = RightButtonState::Released;
-                if suppress {
-                    HookOutcome::one(true, InputAction::RightButtonReleased)
-                } else {
-                    HookOutcome::default()
-                }
-            }
-            MouseEvent::Wheel(delta)
-                if self.right_button != RightButtonState::Released
-                    && settings.right_button_wheel_switching =>
-            {
-                let wheel = InputAction::MouseWheel(i32::from(delta.signum()));
-                if self.right_button == RightButtonState::WheelGesture {
-                    HookOutcome::one(true, wheel)
-                } else {
-                    self.right_button = RightButtonState::WheelGesture;
-                    self.replayed_mouse_event = Some(ReplayedMouseEvent::RightButtonReleased);
-                    HookOutcome::two(true, InputAction::RightButtonPressed, wheel)
-                }
-            }
-            _ => HookOutcome::default(),
-        }
     }
 
     fn process_windows_key_transition(
@@ -809,6 +731,54 @@ impl HookState {
         None
     }
 
+    fn process_editing_key(
+        &mut self,
+        event: KeyEvent,
+        settings: HookSettings,
+    ) -> Option<HookOutcome> {
+        if !settings.search_active
+            || event.transition != KeyTransition::Pressed
+            || event.modifiers.left_windows
+            || event.modifiers.right_windows
+        {
+            return None;
+        }
+        let command = TextCommand::for_key(
+            u32::from(event.key.virtual_key()),
+            event.modifiers.control,
+            event.modifiers.shift,
+            self.owned_key_is_down(Key::RightAlt),
+        )?;
+        // An empty query has no caret or selection to move. Keep modified navigation on the
+        // switcher route too, including its paired release and final Alt-release activation.
+        if !settings.filter_visible
+            && self.switch_gesture_active()
+            && matches!(
+                event.key,
+                Key::LeftArrow | Key::RightArrow | Key::Home | Key::End
+            )
+        {
+            return None;
+        }
+        // Plain navigation also moves through windows when the query is empty. Preserve the
+        // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
+        if !matches!(
+            command,
+            TextCommand::Left | TextCommand::Right | TextCommand::Start | TextCommand::End
+        ) || event.modifiers.control
+            || event.modifiers.shift
+        {
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+        }
+        self.suppress_owned_key_release(event.key);
+        let action = if command == TextCommand::Backspace {
+            InputAction::BackspaceSearch
+        } else {
+            InputAction::EditSearch(command)
+        };
+        Some(HookOutcome::one(true, action))
+    }
     fn process_search_key(&mut self, event: KeyEvent, search_active: bool) -> Option<HookOutcome> {
         // Typing a key whose release cannot be owned would leak that release to the foreground.
         if !KeySet::can_hold(event.key) || event.transition == KeyTransition::Released {
@@ -920,6 +890,98 @@ fn windows_keys(mask: u8) -> impl Iterator<Item = Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_keys_in_a_filtered_gesture_keep_translated_layout_text() {
+        use crate::switcher::{SwitchTask, SwitcherSession, SwitcherSessionSettings};
+        for character in ['&', '!', '1'] {
+            let settings = HookSettings {
+                search_active: true,
+                ..HookSettings::default()
+            };
+            let mut hook = HookState::default();
+            hook.set_overlay_active(true);
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            session.open([SwitchTask::new(1, 1, "a & ! 1", "editor")], None);
+            let _effect = session.handle_input(InputAction::AppendSearchCharacter('a'));
+            for event in [
+                KeyEvent::pressed(Key::LeftAlt, ALT),
+                KeyEvent::pressed(Key::Tab, ALT),
+                KeyEvent::pressed(Key::Digit(1), ALT).with_text(character),
+            ] {
+                for action in hook.process_key(event, settings).actions() {
+                    let _effect = session.handle_input(action);
+                }
+            }
+            assert_eq!(session.switcher().filter(), format!("a{character}"));
+        }
+    }
+
+    #[test]
+    fn altgr_text_is_not_a_control_editing_shortcut() {
+        let settings = HookSettings {
+            search_active: true,
+            ..HookSettings::default()
+        };
+        let modifiers = Modifiers {
+            alt: true,
+            control: true,
+            ..Modifiers::default()
+        };
+        let mut state = HookState::default();
+        state.rebase_modifier(Key::RightAlt, true);
+        let outcome = state.process_key(
+            KeyEvent::pressed(Key::Other(u16::from(b'A')), modifiers).with_text('ą'),
+            settings,
+        );
+        assert!(outcome.suppress);
+        assert_eq!(
+            outcome.actions().collect::<Vec<_>>(),
+            [InputAction::AppendSearchCharacter('ą')]
+        );
+    }
+
+    #[test]
+    fn editing_shortcuts_are_commands_and_own_their_key_releases() {
+        for (key, command) in [
+            (b'A', TextCommand::SelectAll),
+            (b'C', TextCommand::Copy),
+            (b'X', TextCommand::Cut),
+            (b'V', TextCommand::Paste),
+            (b'Z', TextCommand::Undo),
+            (b'Y', TextCommand::Redo),
+        ] {
+            let mut state = HookState::default();
+            let settings = HookSettings {
+                search_active: true,
+                ..HookSettings::default()
+            };
+            let modifiers = Modifiers {
+                control: true,
+                ..Modifiers::default()
+            };
+            let key = Key::Other(u16::from(key));
+            let outcome = state.process_key(KeyEvent::pressed(key, modifiers), settings);
+            assert!(outcome.suppress);
+            assert_eq!(
+                outcome.actions().collect::<Vec<_>>(),
+                vec![InputAction::EditSearch(command)]
+            );
+            assert!(
+                state
+                    .process_key(KeyEvent::released(key, modifiers), settings)
+                    .suppress
+            );
+            assert!(
+                !HookState::default()
+                    .process_key(KeyEvent::pressed(key, modifiers), HookSettings::default())
+                    .suppress
+            );
+        }
+    }
 
     #[test]
     fn owned_alt_tab_cycles_without_windows_alt_flag() {
@@ -1172,13 +1234,6 @@ mod tests {
                 HookOutcome::default()
             );
         }
-        for event in [
-            MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(120),
-            MouseEvent::RightButtonReleased,
-        ] {
-            assert_eq!(state.process_mouse(event, settings), HookOutcome::default());
-        }
         assert!(!state.switch_gesture_active());
     }
 
@@ -1316,39 +1371,6 @@ mod tests {
     }
 
     #[test]
-    fn suspension_keeps_synthetic_right_button_up_owned_even_after_resume() {
-        for resume_before_release in [false, true] {
-            let mut state = HookState::default();
-            let settings = HookSettings::default();
-            let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-            assert!(
-                state
-                    .process_mouse(MouseEvent::Wheel(120), settings)
-                    .suppress
-            );
-            assert_eq!(
-                state.take_replayed_mouse_event(),
-                Some(ReplayedMouseEvent::RightButtonReleased)
-            );
-            state.set_interception_suspended(true);
-            if resume_before_release {
-                state.set_interception_suspended(false);
-            }
-            assert_eq!(
-                state.process_mouse(MouseEvent::Wheel(120), settings),
-                HookOutcome::default()
-            );
-            let release = state.process_mouse(MouseEvent::RightButtonReleased, settings);
-            assert!(release.suppress);
-            assert!(release.actions().next().is_none());
-            assert_eq!(
-                state.process_mouse(MouseEvent::RightButtonReleased, settings),
-                HookOutcome::default()
-            );
-        }
-    }
-
-    #[test]
     fn pending_modifiers_are_replayed_before_print_screen() {
         for modifier in [
             Key::LeftAlt,
@@ -1388,110 +1410,11 @@ mod tests {
 
     const ALT: Modifiers = Modifiers {
         alt: true,
+        control: false,
+        shift: false,
         left_windows: false,
         right_windows: false,
     };
-
-    #[test]
-    fn plain_right_click_passes_through() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonPressed, settings),
-            HookOutcome::default()
-        );
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome::default()
-        );
-    }
-
-    #[test]
-    fn right_button_wheel_starts_then_advances_switcher() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonPressed, settings),
-            HookOutcome::default()
-        );
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::Wheel(120), settings),
-            HookOutcome {
-                suppress: true,
-                actions: [
-                    Some(InputAction::RightButtonPressed),
-                    Some(InputAction::MouseWheel(1)),
-                ],
-            }
-        );
-        assert_eq!(
-            state.take_replayed_mouse_event(),
-            Some(ReplayedMouseEvent::RightButtonReleased)
-        );
-        assert_eq!(
-            state.process_mouse(MouseEvent::Wheel(-120), settings),
-            HookOutcome {
-                suppress: true,
-                actions: [Some(InputAction::MouseWheel(-1)), None],
-            }
-        );
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome {
-                suppress: true,
-                actions: [Some(InputAction::RightButtonReleased), None],
-            }
-        );
-    }
-
-    #[test]
-    fn rejected_open_reset_keeps_the_replayed_right_button_release_owned() {
-        let mut state = HookState::default();
-        let settings = HookSettings::default();
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonPressed, settings),
-            HookOutcome::default()
-        );
-        assert!(
-            state
-                .process_mouse(MouseEvent::Wheel(120), settings)
-                .suppress
-        );
-        assert_eq!(
-            state.take_replayed_mouse_event(),
-            Some(ReplayedMouseEvent::RightButtonReleased)
-        );
-
-        state.reset_gestures();
-
-        assert_eq!(
-            state.process_mouse(MouseEvent::RightButtonReleased, settings),
-            HookOutcome {
-                suppress: true,
-                actions: [Some(InputAction::RightButtonReleased), None],
-            }
-        );
-    }
-
-    #[test]
-    fn disabled_right_button_wheel_switching_never_arms_release_activation() {
-        let mut state = HookState::default();
-        let settings = HookSettings {
-            right_button_wheel_switching: false,
-            ..HookSettings::default()
-        };
-
-        for event in [
-            MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(120),
-            MouseEvent::RightButtonReleased,
-        ] {
-            assert_eq!(state.process_mouse(event, settings), HookOutcome::default());
-        }
-    }
 
     #[test]
     fn plain_alt_release_passes_through_without_action() {
@@ -2247,7 +2170,13 @@ mod tests {
             state.process_key(KeyEvent::pressed(Key::NumpadDigit(9), ALT), settings),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::ActivateVisiblePosition(9)), None],
+                actions: [
+                    Some(InputAction::NumberKey {
+                        position: 9,
+                        text: None
+                    }),
+                    None
+                ],
             }
         );
         assert_eq!(
@@ -2576,6 +2505,122 @@ mod tests {
             state.process_key(KeyEvent::released(Key::Alt, Modifiers::default()), settings),
             HookOutcome::default()
         );
+    }
+
+    #[test]
+    fn empty_query_navigation_preserves_alt_release_activation() {
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+
+        for (control, shift) in [(false, false), (false, true), (true, false), (true, true)] {
+            let modifiers = Modifiers {
+                control,
+                shift,
+                ..Modifiers::default()
+            };
+            for (key, target) in [
+                (Key::LeftArrow, 10),
+                (Key::RightArrow, 30),
+                (Key::Home, 10),
+                (Key::End, 30),
+            ] {
+                let mut state = HookState::default();
+                let settings = HookSettings {
+                    search_active: true,
+                    ..HookSettings::default()
+                };
+                let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                    typed_search: true,
+                    release_alt_switches: true,
+                });
+                assert!(
+                    state
+                        .process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings)
+                        .suppress
+                );
+                let opening = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
+                assert_eq!(
+                    opening
+                        .actions()
+                        .next()
+                        .map(|action| session.handle_input(action)),
+                    Some(SwitcherEffect::Open {
+                        selection_delta: Some(1),
+                    })
+                );
+                session.open(
+                    [
+                        SwitchTask::new(1, 10, "Alpha", "editor"),
+                        SwitchTask::new(2, 20, "Beta", "browser"),
+                        SwitchTask::new(3, 30, "Gamma", "terminal"),
+                    ],
+                    Some(1),
+                );
+                let mut effects = Vec::new();
+                for event in [
+                    KeyEvent::released(Key::Tab, modifiers),
+                    KeyEvent::pressed(key, modifiers),
+                    KeyEvent::released(key, modifiers),
+                    KeyEvent::released(Key::LeftAlt, modifiers),
+                ] {
+                    let outcome = state.process_key(event, settings);
+                    assert!(outcome.suppress);
+                    effects.extend(outcome.actions().map(|action| session.handle_input(action)));
+                }
+                assert_eq!(effects.last(), Some(&SwitcherEffect::Activate(target)));
+                assert!(!session.is_visible());
+            }
+        }
+    }
+
+    #[test]
+    fn modified_navigation_edits_a_nonempty_query_and_pins_the_panel() {
+        let settings = HookSettings {
+            search_active: true,
+            filter_visible: true,
+            ..HookSettings::default()
+        };
+        for (control, shift) in [(false, true), (true, false), (true, true)] {
+            let modifiers = Modifiers {
+                control,
+                shift,
+                ..Modifiers::default()
+            };
+            for key in [Key::LeftArrow, Key::RightArrow, Key::Home, Key::End] {
+                let mut state = HookState::default();
+                for event in [
+                    KeyEvent::pressed(Key::LeftAlt, ALT),
+                    KeyEvent::pressed(Key::Tab, ALT),
+                ] {
+                    let _outcome = state.process_key(event, settings);
+                }
+                let command =
+                    TextCommand::for_key(u32::from(key.virtual_key()), control, shift, false)
+                        .unwrap_or_else(|| {
+                            panic!("navigation key has no editing command: {key:?}")
+                        });
+                assert_eq!(
+                    state.process_key(KeyEvent::pressed(key, modifiers), settings),
+                    HookOutcome::one(true, InputAction::EditSearch(command))
+                );
+                assert!(
+                    state
+                        .process_key(KeyEvent::released(key, modifiers), settings)
+                        .suppress
+                );
+                assert!(
+                    state
+                        .process_key(
+                            KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+                            settings
+                        )
+                        .actions()
+                        .next()
+                        .is_none()
+                );
+            }
+        }
     }
 
     #[test]

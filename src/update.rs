@@ -1,6 +1,6 @@
-//! Which release a macOS copy updates to, and what each step of an update leads to.
+//! Which release a copy updates to, and what each step of an update leads to.
 //!
-//! The macOS adapter does the network and file work; the decisions live here so they are tested
+//! The platform adapters do the network and file work; the decisions live here so they are tested
 //! on both platforms.
 
 use std::fmt;
@@ -61,7 +61,7 @@ pub struct Asset {
     pub url: String,
 }
 
-/// A newer release and the address of its macOS archive.
+/// A newer release and the address of its platform's archive.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Update {
     pub version: Version,
@@ -73,12 +73,22 @@ pub struct Update {
 /// always one a Mac can install.
 #[must_use]
 pub fn newest_update(current: Version, releases: &[Release]) -> Option<Update> {
+    newest_update_for(current, releases, "macos")
+}
+
+/// The newest published Windows x64 release newer than `current`.
+#[must_use]
+pub fn newest_windows_update(current: Version, releases: &[Release]) -> Option<Update> {
+    newest_update_for(current, releases, "windows-x64")
+}
+
+fn newest_update_for(current: Version, releases: &[Release], platform: &str) -> Option<Update> {
     releases
         .iter()
         .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|release| {
             let version = Version::parse(&release.tag)?;
-            let name = format!("AltTabio-{version}-macos.zip");
+            let name = format!("AltTabio-{version}-{platform}.zip");
             let asset = release.assets.iter().find(|asset| asset.name == name)?;
             Some(Update {
                 version,
@@ -327,6 +337,30 @@ mod tests {
             newest_update(version("1.1.5"), &releases),
             Some(update("1.2.0"))
         );
+    }
+
+    #[test]
+    fn windows_uses_its_own_archive_and_skips_unpublished_or_older_releases() {
+        let mut draft = release("v2.0.0", &["AltTabio-2.0.0-windows-x64.zip"]);
+        draft.draft = true;
+        let mut prerelease = draft.clone();
+        prerelease.draft = false;
+        prerelease.prerelease = true;
+        let releases = [
+            draft,
+            prerelease,
+            release("v1.10.0", &["AltTabio-1.10.0-windows-x64.zip"]),
+            release("v1.11.0", &["AltTabio-1.11.0-macos.zip"]),
+            release("v1.9.0", &["AltTabio-1.9.0-windows-x64.zip"]),
+        ];
+        assert_eq!(
+            newest_windows_update(version("1.9.0"), &releases),
+            Some(Update {
+                version: version("1.10.0"),
+                url: "https://example.com/AltTabio-1.10.0-windows-x64.zip".to_owned(),
+            })
+        );
+        assert_eq!(newest_windows_update(version("1.10.0"), &releases), None);
     }
 
     #[test]

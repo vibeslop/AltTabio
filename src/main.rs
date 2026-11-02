@@ -4,13 +4,15 @@
 compile_error!("AltTabio requires panic=unwind to contain panics at native callback boundaries");
 
 #[cfg(windows)]
-mod about_dialog;
-#[cfg(windows)]
 mod app_icon;
 #[cfg(windows)]
 mod app_messages;
 #[cfg(windows)]
+mod clipboard;
+#[cfg(windows)]
 mod dialog_host;
+#[cfg(windows)]
+mod filter_popup;
 #[cfg(windows)]
 mod hook;
 #[cfg(target_os = "macos")]
@@ -35,8 +37,6 @@ mod single_instance;
 #[cfg(windows)]
 mod startup;
 #[cfg(windows)]
-mod switch_hotkey;
-#[cfg(windows)]
 mod task_icon;
 #[cfg(windows)]
 mod task_query;
@@ -48,6 +48,8 @@ mod win32;
 mod win_events;
 #[cfg(windows)]
 mod windows_app;
+#[cfg(windows)]
+mod windows_updater;
 
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();

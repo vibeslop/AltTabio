@@ -14,6 +14,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
 impl App {
     pub(super) fn handle_foreground_check(&mut self) {
         win_events::acknowledge_foreground_check();
+        let foreground = unsafe {
+            // SAFETY: this foreground query has no pointer preconditions or ownership transfer.
+            GetForegroundWindow()
+        };
+        if !foreground.is_invalid()
+            && self.overlay_focus.observe(foreground == self.hwnd)
+            && self.is_visible()
+            && self.pending_shell.is_none()
+            && !self.dialog_state().blocks_switcher()
+        {
+            self.hide_overlay();
+        }
         let policy = foreground_passthrough_policy(self.hwnd, &mut self.foreground_bounds_failures);
         if policy.bypasses_local_switching() && (self.is_visible() || self.pending_shell.is_some())
         {

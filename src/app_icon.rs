@@ -38,45 +38,56 @@ pub fn load_app(instance: HINSTANCE, icon: IconColor) -> Result<HICON> {
     load(instance, app_resource_id(icon))
 }
 
-/// A tray icon loaded at the notification area's size. It is not a shared resource, so this guard
-/// destroys it.
-pub struct TrayImage(HICON);
+/// An icon loaded at a requested pixel size, uniquely owned rather than shared by the module.
+pub struct OwnedIcon(HICON);
 
-impl TrayImage {
+impl OwnedIcon {
     pub const fn handle(&self) -> HICON {
         self.0
     }
 }
 
-impl Drop for TrayImage {
+impl Drop for OwnedIcon {
     fn drop(&mut self) {
         // SAFETY: this guard uniquely owns an icon LoadImageW created without LR_SHARED.
         if let Err(error) = unsafe { DestroyIcon(self.0) } {
-            eprintln!("Could not release the tray icon: {error}");
+            eprintln!("Could not release an owned icon: {error}");
         }
     }
 }
 
 /// `LoadIconW` would load the large icon size, which the notification area then shrinks; loading
 /// at the small icon size picks the image drawn for the tray at the system's scale.
-pub fn load_tray(instance: HINSTANCE, icon: IconColor) -> Result<TrayImage> {
+pub fn load_tray(instance: HINSTANCE, icon: IconColor) -> Result<OwnedIcon> {
     let size = unsafe {
         // SAFETY: GetSystemMetrics reads a system value and has no pointer preconditions.
         GetSystemMetrics(SM_CXSMICON)
     };
+    load_sized(instance, tray_resource_id(icon), size)
+}
+
+pub fn load_app_sized(instance: HINSTANCE, icon: IconColor, size: i32) -> Result<OwnedIcon> {
+    load_sized(instance, app_resource_id(icon), size)
+}
+
+pub fn load_github(instance: HINSTANCE, dark: bool, size: i32) -> Result<OwnedIcon> {
+    load_sized(instance, if dark { 202 } else { 201 }, size)
+}
+
+fn load_sized(instance: HINSTANCE, resource_id: usize, size: i32) -> Result<OwnedIcon> {
     let image = unsafe {
         // SAFETY: app.rc embeds every mapped integer resource, and without LR_SHARED the returned
-        // icon belongs to the caller, which hands it to TrayImage.
+        // icon belongs to the caller, which hands it to OwnedIcon.
         LoadImageW(
             Some(instance),
-            PCWSTR(tray_resource_id(icon) as *const u16),
+            PCWSTR(resource_id as *const u16),
             IMAGE_ICON,
             size,
             size,
             LR_DEFAULTCOLOR,
         )
     }?;
-    Ok(TrayImage(HICON(image.0)))
+    Ok(OwnedIcon(HICON(image.0)))
 }
 
 pub fn apply_to_window(hwnd: HWND, instance: HINSTANCE, icon: IconColor) -> Result<()> {

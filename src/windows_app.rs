@@ -4,15 +4,18 @@ mod commands;
 mod dialogs;
 mod dispatch;
 mod display;
+mod filter;
 mod hooks;
 mod mouse;
 mod overlay;
 mod passthrough;
 mod refresh;
 mod shell_dismissal;
+mod update;
 mod wndproc;
 
 use crate::app_messages::WM_DESTROY_APP;
+use crate::filter_popup::FilterPopup;
 use crate::hook::HookThread;
 use crate::native_theme::resolve_current_theme;
 use crate::preview::DwmPreview;
@@ -24,9 +27,10 @@ use crate::task_icon::TaskIcons;
 use crate::tray::TrayIcon;
 use crate::win_events::{self, WinEventWatcher};
 use crate::win32::{ComApartment, module_instance, wide};
+use alttabio::dialog_state::DialogState;
 use alttabio::failure_run::FailureRun;
-use alttabio::modal_state::ModalState;
 use alttabio::overlay_pointer::CloseButtonInteraction;
+use alttabio::overlay_window::OverlayFocus;
 use alttabio::settings::Settings;
 use alttabio::settings_change::{hook_settings, switcher_session_settings};
 use alttabio::switcher::SwitcherSession;
@@ -34,7 +38,7 @@ use alttabio::task_refresh::TaskListRefresh;
 use alttabio::theme::ResolvedTheme;
 use appearance::apply_window_appearance;
 use shell_dismissal::PendingShellDismissal;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::mem::size_of;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -139,7 +143,10 @@ pub fn run(
         }
     }
 
-    let loop_result = run_message_loop();
+    let loop_result = unsafe {
+        // SAFETY: host_pointer remains allocated until the loop ends and window user data is cleared.
+        run_message_loop(&*host_pointer, hwnd)
+    };
     let window_retains_app = unsafe {
         // SAFETY: hwnd is either the application window or an already-destroyed borrowed value;
         // nonzero user data means a live callback can still reach host_pointer.
@@ -170,6 +177,10 @@ pub fn show_fatal_error(message: &str) {
     show_error_box(None, message);
 }
 
+pub(crate) fn open_repository() -> std::result::Result<(), String> {
+    commands::open_repository()
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "independent Win32 lifecycle and input flags do not form one shared state machine"
@@ -180,16 +191,18 @@ struct App {
     session: SwitcherSession,
     task_icons: TaskIcons,
     renderer: Renderer,
+    filter_popup: Option<FilterPopup>,
+    filter_popup_failures: FailureRun,
     begin_paint_failures: FailureRun,
     foreground_bounds_failures: FailureRun,
+    overlay_focus: OverlayFocus,
     hit_test_failures: FailureRun,
     cursor_read_failures: FailureRun,
     resolved_theme: ResolvedTheme,
     preview: Option<DwmPreview>,
     hooks: Option<HookThread>,
     tray: Option<TrayIcon>,
-    mouse_origin: Option<POINT>,
-    mouse_selection_armed: bool,
+    mouse_position: Option<POINT>,
     mouse_leave_tracked: bool,
     close_button: CloseButtonInteraction,
     task_refresh: TaskListRefresh,
@@ -198,19 +211,23 @@ struct App {
     settings: Settings,
     settings_store: SettingsStore,
     settings_dialog_open: bool,
-    about_dialog_open: bool,
     win_event_watcher: Option<WinEventWatcher>,
     listed_refresh_retry_timer_armed: bool,
+    updates: update::Updates,
+    update_dialog_open: bool,
 }
 
 struct AppHost {
     state: RefCell<App>,
+    // Borrowed only while the Settings dialog's nested message loop is running.
+    settings_window: Cell<Option<HWND>>,
 }
 
 impl AppHost {
     fn new(state: App) -> Self {
         Self {
             state: RefCell::new(state),
+            settings_window: Cell::new(None),
         }
     }
 }
@@ -230,16 +247,18 @@ impl App {
             session,
             task_icons: TaskIcons::default(),
             renderer: Renderer::new(resolved_theme)?,
+            filter_popup: None,
+            filter_popup_failures: FailureRun::default(),
             begin_paint_failures: FailureRun::default(),
             foreground_bounds_failures: FailureRun::default(),
+            overlay_focus: OverlayFocus::default(),
             hit_test_failures: FailureRun::default(),
             cursor_read_failures: FailureRun::default(),
             resolved_theme,
             preview: None,
             hooks: None,
             tray: None,
-            mouse_origin: None,
-            mouse_selection_armed: false,
+            mouse_position: None,
             mouse_leave_tracked: false,
             close_button: CloseButtonInteraction::default(),
             task_refresh: TaskListRefresh::default(),
@@ -248,15 +267,23 @@ impl App {
             settings,
             settings_store,
             settings_dialog_open: false,
-            about_dialog_open: false,
             win_event_watcher: None,
             listed_refresh_retry_timer_armed: false,
+            updates: update::Updates::default(),
+            update_dialog_open: false,
         })
     }
 
     fn initialize(&mut self, hwnd: HWND, install_hooks: bool) -> std::result::Result<(), String> {
         self.hwnd = hwnd;
         self.recreate_preview();
+        if let Err(error) = display::position_on_cursor_monitor(hwnd) {
+            eprintln!("Could not position the hidden overlay: {error}");
+        }
+        if let Err(error) = self.renderer.prepare(hwnd) {
+            // Drawing retries device creation if the display was temporarily unavailable.
+            eprintln!("Could not prepare the overlay renderer: {error}");
+        }
         if install_hooks {
             let instance = module_instance().map_err(|error| {
                 format!("Could not resolve the executable module for the tray icon: {error}")
@@ -271,6 +298,10 @@ impl App {
                 .map_err(|error| format!("Could not create the tray icon: {error}"))?,
             );
             self.start_input_hooks(hook_settings(&self.settings))?;
+            self.start_update_timer();
+            if let Err(error) = crate::windows_updater::start_maintenance() {
+                eprintln!("{error}");
+            }
             win_events::publish_notify_hwnd(hwnd);
             match WinEventWatcher::install() {
                 Ok(watcher) => {
@@ -289,6 +320,8 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        self.hide_filter_feedback();
+        self.filter_popup = None;
         self.stop_shell_dismissal();
         self.stop_listed_refresh_retry_timer();
         win_events::clear_notify_hwnd();
@@ -319,16 +352,16 @@ impl App {
         self.session.is_visible()
     }
 
-    const fn modal_state(&self) -> ModalState {
-        ModalState {
+    const fn dialog_state(&self) -> DialogState {
+        DialogState {
             settings_dialog: self.settings_dialog_open,
-            about_dialog: self.about_dialog_open,
+            blocking_dialog: self.update_dialog_open,
             context_menu: self.session.context_menu_open(),
         }
     }
 }
 
-fn show_error_for_window(owner: HWND, message: &str) {
+pub(crate) fn show_error_for_window(owner: HWND, message: &str) {
     show_error_box(Some(owner), message);
 }
 
@@ -376,7 +409,7 @@ fn register_window_class(instance: HINSTANCE) -> Result<()> {
     }
 }
 
-fn run_message_loop() -> Result<()> {
+fn run_message_loop(host: &AppHost, hwnd: HWND) -> Result<()> {
     let mut message = MSG::default();
     loop {
         let result = unsafe {
@@ -388,6 +421,12 @@ fn run_message_loop() -> Result<()> {
         }
         if result.0 == 0 {
             return Ok(());
+        }
+        if update::is_update_timer(&message, hwnd) {
+            if host.update_tick() {
+                return Ok(());
+            }
+            continue;
         }
         unsafe {
             // SAFETY: GetMessageW initialized `message` for this UI thread.

@@ -1,12 +1,15 @@
+use crate::win32::system_directory;
 use alttabio::settings_change::AutostartState;
 use std::ffi::OsString;
 use std::io::Write;
 use std::mem::size_of;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HANDLE, HLOCAL, LocalFree,
+};
 use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows::Win32::Security::{
     ACL, AccessCheck, DACL_SECURITY_INFORMATION, DuplicateToken, GENERIC_MAPPING,
@@ -18,46 +21,76 @@ use windows::Win32::Storage::FileSystem::{
     DELETE, FILE_ADD_FILE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
 };
-use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::TaskScheduler::{ITaskFolder, ITaskService, TaskScheduler};
 use windows::Win32::System::Threading::{
-    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    CREATE_NO_WINDOW, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
-use windows::core::{BOOL, PCWSTR};
-
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use windows::core::{BOOL, BSTR, HRESULT, PCWSTR};
 
 mod migration;
 pub(crate) use migration::repair_legacy_task_timeout;
 
+/// Reads only this installation's task. The caller must initialize COM on this thread.
 pub fn status() -> Result<AutostartState, String> {
-    let task_query = run(&["/Query", "/TN", "AltTabio", "/XML"])?;
-    if task_query.status.success() {
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
-        let xml = String::from_utf8(task_query.stdout)
-            .map_err(|error| format!("Autostart task XML is not valid UTF-8: {error}"))?;
-        return Ok(AutostartState {
-            enabled: task_targets_executable(&xml, &executable)?,
-            task_exists: true,
-        });
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Could not locate the AltTabio executable: {error}"))?;
+    let service = connect_scheduler().map_err(|error| error.to_string())?;
+    let folder = unsafe {
+        // SAFETY: the caller initialized COM on this thread; the service copies the root path.
+        service.GetFolder(&BSTR::from(r"\"))
     }
+    .map_err(|error| format!("Autostart status query failed: {error}"))?;
+    task_status(&folder, &BSTR::from("AltTabio"), &executable)
+}
 
-    // schtasks uses the same nonzero status for a missing task and operational failures. A general
-    // query distinguishes an absent named task from an unavailable or inaccessible scheduler
-    // without parsing localized error text.
-    let scheduler_query = run(&["/Query", "/FO", "CSV", "/NH"])?;
-    if scheduler_query.status.success() {
-        Ok(AutostartState {
-            enabled: false,
-            task_exists: false,
-        })
-    } else {
-        Err(format!(
-            "Autostart status query failed: {}",
-            output_details(&task_query)
-        ))
+fn connect_scheduler() -> windows::core::Result<ITaskService> {
+    unsafe {
+        // SAFETY: the caller initialized COM on this thread. Empty variants have no borrowed
+        // pointers, and the returned interface owns its reference on the calling thread.
+        let service: ITaskService = CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
+        let empty = VARIANT::default();
+        service.Connect(&empty, &empty, &empty, &empty)?;
+        Ok(service)
     }
+}
+
+fn task_is_missing(error: &windows::core::Error) -> bool {
+    [ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND]
+        .iter()
+        .any(|code| error.code() == HRESULT::from_win32(code.0))
+}
+
+fn task_status(
+    folder: &ITaskFolder,
+    name: &BSTR,
+    executable: &Path,
+) -> Result<AutostartState, String> {
+    let task = unsafe {
+        // SAFETY: COM is initialized and the live folder copies the owned task name.
+        folder.GetTask(name)
+    };
+    let task = match task {
+        Ok(task) => task,
+        Err(error) if task_is_missing(&error) => {
+            return Ok(AutostartState {
+                enabled: false,
+                task_exists: false,
+            });
+        }
+        Err(error) => return Err(format!("Autostart status query failed: {error}")),
+    };
+    let xml = unsafe {
+        // SAFETY: the task interface is live on its COM thread; the result owns its string.
+        task.Xml()
+    }
+    .map_err(|error| format!("Autostart task XML could not be read: {error}"))?;
+    Ok(AutostartState {
+        enabled: task_targets_executable(&xml.to_string(), executable)?,
+        task_exists: true,
+    })
 }
 
 pub fn set_enabled(enabled: bool) -> Result<(), String> {
@@ -84,8 +117,12 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
 }
 
 fn validate_autostart_target(executable: &Path) -> Result<(), String> {
+    validate_autostart_target_with(executable, executable_is_replaceable_by_shell)
+}
+
+pub(crate) fn executable_is_replaceable_by_shell(executable: &Path) -> Result<bool, String> {
     let token = shell_impersonation_token()?;
-    validate_autostart_target_with(executable, |path| executable_is_replaceable(path, token.0))
+    executable_is_replaceable(executable, token.0)
 }
 
 fn validate_autostart_target_with(
@@ -412,31 +449,8 @@ fn scheduler_command(arguments: impl IntoIterator<Item = OsString>) -> Result<Co
     use std::os::windows::process::CommandExt;
 
     let mut command = Command::new(system_directory()?.join("schtasks.exe"));
-    command.args(arguments).creation_flags(CREATE_NO_WINDOW);
+    command.args(arguments).creation_flags(CREATE_NO_WINDOW.0);
     Ok(command)
-}
-
-fn system_directory() -> Result<PathBuf, String> {
-    // Reserve the maximum Windows path length, including the terminating null.
-    let mut buffer = vec![0_u16; 32768];
-    let length = unsafe {
-        // SAFETY: buffer is writable for its full length and the API retains no pointers.
-        GetSystemDirectoryW(Some(&mut buffer))
-    } as usize;
-    if length == 0 {
-        return Err(format!(
-            "Could not locate the Windows system directory: {}",
-            windows::core::Error::from_thread()
-        ));
-    }
-    if length >= buffer.len() {
-        return Err("The Windows system directory path exceeds the supported length".to_owned());
-    }
-    let path = PathBuf::from(OsString::from_wide(&buffer[..length]));
-    if !path.is_absolute() {
-        return Err("Windows returned a non-absolute system directory path".to_owned());
-    }
-    Ok(path)
 }
 
 fn output_details(output: &Output) -> String {
@@ -543,16 +557,46 @@ mod tests {
                 }
             }
         }
+        let _apartment =
+            crate::win32::ComApartment::initialize().map_err(|error| error.to_string())?;
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let task_file = AutostartTaskFile::create(&executable)?;
         let task_name = format!("AltTabio-Autostart-Regression-{}", std::process::id());
+        let service = connect_scheduler().map_err(|error| error.to_string())?;
+        let folder = unsafe {
+            // SAFETY: this test initialized COM and the service copies the root path.
+            service.GetFolder(&BSTR::from(r"\"))
+        }
+        .map_err(|error| error.to_string())?;
+        let name = BSTR::from(&task_name);
+        assert_eq!(
+            task_status(&folder, &name, &executable)?,
+            AutostartState {
+                enabled: false,
+                task_exists: false
+            },
+        );
         let mut arguments = create_arguments(&task_file.path);
         arguments[2] = task_name.clone().into();
         let output = run_owned(arguments)?;
         if !output.status.success() {
             return Err(output_details(&output));
         }
-        let _task = RegisteredTask(task_name.clone());
+        let task_guard = RegisteredTask(task_name.clone());
+        assert_eq!(
+            task_status(&folder, &name, &executable)?,
+            AutostartState {
+                enabled: true,
+                task_exists: true
+            },
+        );
+        assert_eq!(
+            task_status(&folder, &name, Path::new(r"C:\Other\AltTabio.exe"))?,
+            AutostartState {
+                enabled: false,
+                task_exists: true
+            },
+        );
         let output = run(&["/Query", "/TN", &task_name, "/XML"])?;
         if !output.status.success() {
             return Err(output_details(&output));
@@ -573,7 +617,44 @@ mod tests {
         assert!(
             element_contents(&xml, "LogonTrigger").is_some() || xml.contains("<LogonTrigger />")
         );
+        unsafe {
+            // SAFETY: only the temporary task owned by this test's cleanup guard is disabled.
+            folder
+                .GetTask(&name)
+                .and_then(|task| task.SetEnabled(false.into()))
+        }
+        .map_err(|error| error.to_string())?;
+        assert_eq!(
+            task_status(&folder, &name, &executable)?,
+            AutostartState {
+                enabled: false,
+                task_exists: true
+            },
+        );
+        drop(task_guard);
+        assert_eq!(
+            task_status(&folder, &name, &executable)?,
+            AutostartState {
+                enabled: false,
+                task_exists: false
+            },
+        );
         Ok(())
+    }
+
+    #[test]
+    fn scheduler_failures_are_not_mistaken_for_missing_tasks() {
+        use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL};
+        use windows::core::Error;
+
+        for code in [ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND] {
+            assert!(task_is_missing(&Error::from_hresult(HRESULT::from_win32(
+                code.0
+            ))));
+        }
+        for code in [E_ACCESSDENIED, E_FAIL] {
+            assert!(!task_is_missing(&Error::from_hresult(code)));
+        }
     }
 
     #[test]

@@ -75,6 +75,7 @@ impl App {
     }
 
     pub(super) fn resize_content(&mut self, width: u32, height: u32) {
+        self.sync_filter_geometry();
         if let Err(error) = self.renderer.resize(self.hwnd, width, height) {
             eprintln!("Could not resize the Direct2D target: {error}");
         }

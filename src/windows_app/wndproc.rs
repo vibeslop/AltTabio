@@ -20,36 +20,7 @@ pub(super) unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     let handled = catch_unwind(AssertUnwindSafe(|| {
         if message == WM_NCCREATE {
-            let create = unsafe {
-                // SAFETY: WM_NCCREATE guarantees lParam points to CREATESTRUCTW for this callback.
-                (lparam.0 as *const CREATESTRUCTW).as_ref()
-            }?;
-            let host = create.lpCreateParams.cast::<AppHost>();
-            if host.is_null() {
-                return Some(LRESULT(0));
-            }
-            let host_ref = unsafe {
-                // SAFETY: host is the Box allocation passed to CreateWindowExW and remains live.
-                &*host
-            };
-            let Ok(mut app) = host_ref.state.try_borrow_mut() else {
-                return Some(LRESULT(0));
-            };
-            app.hwnd = hwnd;
-            drop(app);
-            let attached = unsafe {
-                // SAFETY: hwnd is the window being created with this procedure, which reads its
-                // user data as an AppHost pointer, and `run` keeps host allocated until
-                // WM_NCDESTROY below has cleared it.
-                set_window_user_data(hwnd, host as isize)
-            };
-            if let Err(error) = attached {
-                // Failing creation lets `run` free the host instead of running a window that
-                // can never reach it.
-                eprintln!("Could not attach AltTabio to its window: {error}");
-                return Some(LRESULT(0));
-            }
-            return Some(LRESULT(1));
+            return attach_host(hwnd, lparam);
         }
         if message == WM_NCCALCSIZE {
             return Some(LRESULT(0));
@@ -58,7 +29,7 @@ pub(super) unsafe extern "system" fn window_proc(
             return Some(LRESULT(1));
         }
         let host = unsafe {
-            // SAFETY: user data is either zero or the live AppHost pointer installed above.
+            // SAFETY: user data is either zero or the live AppHost pointer set by attach_host.
             (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut AppHost).as_ref()
         }?;
         if message == WM_DESTROY_APP {
@@ -123,6 +94,40 @@ pub(super) unsafe extern "system" fn window_proc(
     .ok()
     .flatten();
     handled.unwrap_or_else(|| default_window_proc(hwnd, message, wparam, lparam))
+}
+
+/// Attaches application state during `WM_NCCREATE`, refusing creation if attachment fails.
+fn attach_host(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
+    let create = unsafe {
+        // SAFETY: WM_NCCREATE guarantees lParam points to CREATESTRUCTW for this callback.
+        (lparam.0 as *const CREATESTRUCTW).as_ref()
+    }?;
+    let host = create.lpCreateParams.cast::<AppHost>();
+    if host.is_null() {
+        return Some(LRESULT(0));
+    }
+    let host_ref = unsafe {
+        // SAFETY: host is the Box allocation passed to CreateWindowExW and remains live.
+        &*host
+    };
+    let Ok(mut app) = host_ref.state.try_borrow_mut() else {
+        return Some(LRESULT(0));
+    };
+    app.hwnd = hwnd;
+    drop(app);
+    let attached = unsafe {
+        // SAFETY: hwnd is the window being created with window_proc, which reads its
+        // user data as an AppHost pointer, and `run` keeps host allocated until
+        // WM_NCDESTROY has cleared it.
+        set_window_user_data(hwnd, host as isize)
+    };
+    if let Err(error) = attached {
+        // Failing creation lets `run` free the host instead of running a window that
+        // can never reach it.
+        eprintln!("Could not attach AltTabio to its window: {error}");
+        return Some(LRESULT(0));
+    }
+    Some(LRESULT(1))
 }
 
 const fn is_modal_dialog_message(message: u32) -> bool {

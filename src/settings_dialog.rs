@@ -1,57 +1,97 @@
+mod control_host;
 mod controls;
+mod drawing;
+#[cfg(test)]
+mod dropdown_tests;
+mod navigation;
+#[cfg(test)]
+#[path = "settings_dialog/tests.rs"]
+mod page_tests;
 mod paint;
+mod paint_state;
+mod selectors;
+#[cfg(test)]
+mod test_support;
 mod theme;
 
-use crate::dialog_host::{
-    self, DialogFrame, DialogHost, DialogWindow, Keyboard, ModalDialog, OwnerGuard,
-};
-use crate::native_drawing::{OwnedBrush, OwnedFont, system_color};
+use crate::dialog_host::{self, DialogFrame, DialogWindow, ModalDialog};
+use crate::native_drawing::{OwnedBrush, OwnedFont};
 use crate::win32::{self, high_word, low_word};
 use crate::{
     app_icon,
     native_theme::{DarkModeApi, resolve_current_theme},
 };
-use alttabio::dialog_layout::known_dpi;
+use alttabio::dialog_layout::{Size, known_dpi};
 use alttabio::failure_run::SharedFailureRun;
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
-    Choices, Control, DialogButton, ICON_CHOICES, Selector, SettingOption, SettingsLayout,
-    THEME_CHOICES,
+    Category, Choices, Control, DialogButton, ICON_CHOICES, MIN_CLIENT_HEIGHT, MIN_CLIENT_WIDTH,
+    Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
 };
 use alttabio::theme::ResolvedTheme;
 use controls::{DialogControls, is_checked, selected_index};
+use std::cell::Cell;
 use std::ffi::c_void;
+use std::rc::Rc;
 use theme::ThemePalette;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, COLOR_WINDOWTEXT, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, InvalidateRect,
+    COLOR_WINDOW, FW_BOLD, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT, InvalidateRect, RDW_ALLCHILDREN,
+    RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BN_CLICKED, CBN_SELCHANGE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLORDLG, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_ERASEBKGND,
-    WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_OVERLAPPED,
-    WS_SYSMENU,
+    BN_CLICKED, CB_GETDROPPEDSTATE, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDCANCEL, CBN_SELENDOK,
+    MINMAXINFO, MSG, PostMessageW, SC_MAXIMIZE, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_SIZE,
+    WM_SYSCOMMAND, WM_VSCROLL, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_COMPOSITED,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 use windows::core::Result;
 
 pub(crate) const WINDOW_CLASS_NAME: &str = "AltTabioRustSettings";
+const WM_SETTINGS_FOCUS: u32 = WM_APP + 21;
+const WM_SETTINGS_NAVIGATE: u32 = WM_APP + 22;
+const WM_SETTINGS_SELECTOR_PREVIEW: u32 = WM_APP + 23;
+const WM_SETTINGS_OPEN_REPOSITORY: u32 = WM_APP + 24;
 const FRAME: DialogFrame = DialogFrame {
     name: "settings",
     class: WINDOW_CLASS_NAME,
     title: "AltTabio Settings",
-    style: WINDOW_STYLE(WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0),
-    ex_style: WINDOW_EX_STYLE(WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0),
+    style: WINDOW_STYLE(
+        WS_OVERLAPPED.0
+            | WS_CAPTION.0
+            | WS_SYSMENU.0
+            | WS_THICKFRAME.0
+            | WS_MINIMIZEBOX.0
+            | WS_CLIPCHILDREN.0,
+    ),
+    // Buffer the entire native control tree so its separate paint messages cannot flash.
+    ex_style: WINDOW_EX_STYLE(
+        WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0 | WS_EX_COMPOSITED.0,
+    ),
 };
 
-pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
+pub fn show(
+    owner: HWND,
+    settings: &Settings,
+    category: Category,
+    on_open: impl FnOnce(HWND),
+    mut handle_app_message: impl FnMut(&MSG) -> bool,
+) -> Result<Option<Settings>> {
     let instance = win32::module_instance()?;
     register_class(instance)?;
     let dpi = owner_dpi(owner);
     let layout = SettingsLayout::for_dpi(dpi);
-    let window_size = FRAME.window_size(layout.client, dpi)?;
-    let window_origin = win32::work_area_near_window(owner)?.centered(window_size);
+    let work_area = win32::work_area_near_window(owner)?;
+    let desired_size = FRAME.window_size(layout.client, dpi)?;
+    let window_size = Size::new(
+        desired_size.width.min(work_area.width),
+        desired_size.height.min(work_area.height),
+    );
+    let window_origin = work_area.centered(window_size);
     let initial_dark = resolve_current_theme(settings.appearance.theme) == ResolvedTheme::Dark;
     let dark_mode_api = match DarkModeApi::load(initial_dark) {
         Ok(api) => Some(api),
@@ -60,54 +100,92 @@ pub fn show(owner: HWND, settings: &Settings) -> Result<Option<Settings>> {
             None
         }
     };
-    let _owner_guard = OwnerGuard::disable(owner);
     let dialog = ModalDialog::create(
         instance,
         window_origin,
         window_size,
-        settings_window_owner(owner),
+        // Native ownership would put Settings in the overlay's topmost Z-order band.
+        None,
         DialogState::new(settings.clone(), dpi, instance, dark_mode_api),
     )?;
     let window = dialog.window();
     let host = dialog.host()?;
-    // The mutable borrow makes any synchronous callback re-entry during setup fail closed.
-    host.state_mut()?.create_controls(window, instance, host)?;
+    // Mutating callbacks remain guarded during setup; painting reads its own snapshot.
+    host.state_mut()?.create_controls(window, instance)?;
+    host.state_mut()?.select_category(category)?;
     dialog.show_in_front();
     let ok_button = host
         .state_mut()?
         .controls
-        .get(Control::Button(DialogButton::Ok));
+        .get(Control::Navigation(category));
     if let Err(error) = dialog_host::focus(ok_button) {
-        eprintln!("Could not focus the settings OK button: {error}");
+        eprintln!("Could not focus the settings category: {error}");
     }
-    let Some(state) = dialog.run(Keyboard::DialogNavigation)? else {
+    // Finish the buffered first frame, including focus and every descendant, before
+    // entering the message loop. No state borrow may span this synchronous repaint.
+    unsafe {
+        // SAFETY: the dialog owns this live window and all of its child controls.
+        RedrawWindow(
+            Some(window),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        )
+    }
+    .ok()?;
+    on_open(window);
+    let Some(state) = dialog.run(|message| {
+        if handle_app_message(message) {
+            return true;
+        }
+        if message.hwnd != window || message.message != WM_SETTINGS_OPEN_REPOSITORY {
+            return false;
+        }
+        // Launch outside native callbacks and dialog-state borrows.
+        if let Err(error) = crate::windows_app::open_repository() {
+            crate::windows_app::show_error_for_window(window, &error);
+        }
+        true
+    })?
+    else {
         return Ok(None);
     };
     Ok(state.accepted.then_some(state.settings))
 }
 
-fn settings_window_owner(_modal_controller: HWND) -> Option<HWND> {
-    // Native ownership would promote Settings into the topmost overlay's Z-order band. OwnerGuard
-    // supplies the required modality without that relationship.
-    None
+/// Select a page in the existing Settings window without recreating its controls or edits.
+pub(crate) fn navigate(window: HWND, category: Category) -> Result<()> {
+    // SAFETY: the application owns this live Settings window; the request carries only an index.
+    unsafe {
+        PostMessageW(
+            Some(window),
+            WM_SETTINGS_NAVIGATE,
+            WPARAM(category as usize),
+            LPARAM(0),
+        )
+    }
 }
 
 struct DialogState {
     hwnd: HWND,
     controls: DialogControls,
-    fonts: Option<DialogFonts>,
-    background: Option<OwnedBrush>,
-    background_color: COLORREF,
-    text_color: COLORREF,
+    fonts: Option<Rc<DialogFonts>>,
+    previews: Option<Rc<selectors::Previews>>,
+    background: Option<Rc<OwnedBrush>>,
+    paint: paint_state::PaintCache,
     palette: ThemePalette,
     dark_mode_api: Option<DarkModeApi>,
     settings: Settings,
     instance: HINSTANCE,
     dpi: u32,
+    client: Size,
+    pages: SettingsPages,
+    hovered: Rc<Cell<HWND>>,
     accepted: bool,
-    /// Failures of `BeginPaint` across every custom-painted control. Painting runs from the
-    /// control subclass, which only borrows the state shared.
-    begin_paint_failures: SharedFailureRun,
+    pending_previews: u8,
+    dropdown_selection: [Option<usize>; 2],
+    /// Shared across snapshots so repeated paint failures are logged only once.
+    begin_paint_failures: Rc<SharedFailureRun>,
 }
 
 impl DialogWindow for DialogState {
@@ -139,45 +217,51 @@ impl DialogState {
             hwnd: HWND::default(),
             controls: DialogControls::default(),
             fonts: None,
+            previews: None,
             background: None,
-            background_color: system_color(COLOR_WINDOW),
-            text_color: system_color(COLOR_WINDOWTEXT),
+            paint: paint_state::PaintCache::default(),
             palette: ThemePalette::new(false),
             dark_mode_api,
             settings,
             instance,
             dpi,
+            client: SettingsLayout::for_dpi(dpi).client,
+            pages: SettingsPages::default(),
+            hovered: Rc::new(Cell::new(HWND::default())),
             accepted: false,
-            begin_paint_failures: SharedFailureRun::default(),
+            pending_previews: 0,
+            dropdown_selection: [None; 2],
+            begin_paint_failures: Rc::new(SharedFailureRun::default()),
         }
     }
 
-    fn create_controls(
-        &mut self,
-        parent: HWND,
-        instance: HINSTANCE,
-        host: &DialogHost<Self>,
-    ) -> Result<()> {
+    fn create_controls(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+        controls::remove_maximize_command(parent)?;
         let layout = SettingsLayout::for_dpi(self.dpi);
         let fonts = DialogFonts::create(self.dpi)?;
+        self.previews = Some(Rc::new(selectors::Previews::load(instance, self.dpi)?));
         self.controls =
             DialogControls::create(parent, instance, &layout, self.dpi, &fonts, &self.settings)?;
-        self.fonts = Some(fonts);
-        paint::install_custom_control_painting(&self.controls, host)?;
-        self.sync_right_button_release_enabled();
+        self.fonts = Some(Rc::new(fonts));
+        self.refresh_paint_state();
+        control_host::install_custom_control_painting(parent, &self.controls, &self.paint)?;
         self.apply_selected_icon();
         self.apply_selected_theme();
+        self.resize()?;
+        self.select_category(Category::General)?;
+        self.sync_save_enabled();
         Ok(())
     }
 
     fn update_dpi(&mut self, dpi: u32) -> Result<()> {
-        let layout = SettingsLayout::for_dpi(dpi);
         let fonts = DialogFonts::create(dpi)?;
-        self.controls.apply_layout(&layout, dpi)?;
+        let previews = selectors::Previews::load(self.instance, dpi)?;
         self.controls.apply_fonts(&fonts);
-        self.fonts = Some(fonts);
+        self.fonts = Some(Rc::new(fonts));
+        self.previews = Some(Rc::new(previews));
+        self.pages.rescale(self.dpi, dpi);
         self.dpi = dpi;
-        Ok(())
+        self.resize()
     }
 
     /// The value chosen in `selector`, or `current` while the list has no selection.
@@ -203,40 +287,16 @@ impl DialogState {
         self.selected(Selector::Icon, &ICON_CHOICES, self.settings.appearance.icon)
     }
 
-    fn selected_name(&self, selector: Selector) -> &'static str {
-        match selector {
-            Selector::Theme => self.selected_theme().as_ini_value(),
-            Selector::Icon => self.selected_icon().as_ini_value(),
-        }
-    }
-
-    fn sync_right_button_release_enabled(&self) {
-        let enabled = is_checked(
-            self.controls
-                .checkbox(SettingOption::RightButtonWheelSwitching),
-        );
-        unsafe {
-            // SAFETY: both option handles are live controls owned by this dialog. The result
-            // reports the previous state, not a failure.
-            let _was_disabled = EnableWindow(
-                self.controls
-                    .checkbox(SettingOption::ReleaseRightButtonSwitches),
-                enabled,
-            );
-        }
-    }
-
     fn apply_selected_theme(&mut self) {
         let theme = self.selected_theme();
         let dark = resolve_current_theme(theme) == ResolvedTheme::Dark;
         let palette = ThemePalette::new(dark);
         match OwnedBrush::new(palette.background) {
-            Ok(brush) => self.background = Some(brush),
+            Ok(brush) => self.background = Some(Rc::new(brush)),
             Err(error) => eprintln!("Could not create the settings background brush: {error}"),
         }
-        self.background_color = palette.background;
-        self.text_color = palette.text;
         self.palette = palette;
+        self.refresh_paint_state();
         if let Some(api) = self.dark_mode_api.as_ref() {
             api.set_effective_theme(dark);
         }
@@ -246,16 +306,28 @@ impl DialogState {
             dark,
             self.dark_mode_api.as_ref(),
         );
+        self.redraw();
+    }
+
+    fn redraw(&self) {
+        self.refresh_paint_state();
+        for (_, child) in self.controls.iter() {
+            // SAFETY: the child HWND is borrowed from this live dialog.
+            if !unsafe { InvalidateRect(Some(child), None, false) }.as_bool() {
+                eprintln!("Could not redraw a settings child control");
+            }
+        }
         let invalidated = unsafe {
             // SAFETY: hwnd is live and None invalidates its complete client area synchronously.
             InvalidateRect(Some(self.hwnd), None, true)
         };
         if !invalidated.as_bool() {
-            eprintln!("Could not redraw settings after changing its theme");
+            eprintln!("Could not redraw settings");
         }
     }
 
     fn apply_selected_icon(&self) {
+        self.refresh_paint_state();
         if let Err(error) =
             app_icon::apply_to_window(self.hwnd, self.instance, self.selected_icon())
         {
@@ -263,41 +335,110 @@ impl DialogState {
         }
     }
 
-    fn accept(&mut self) {
+    fn current_settings(&self) -> Settings {
+        let mut settings = self.settings.clone();
         for option in SettingOption::ALL {
-            option.write(
-                &mut self.settings,
-                is_checked(self.controls.checkbox(option)),
+            option.write(&mut settings, is_checked(self.controls.checkbox(option)));
+        }
+        settings.appearance.icon = self.selected_icon();
+        settings.appearance.theme = self.selected_theme();
+        settings
+    }
+
+    fn sync_save_enabled(&self) {
+        // SAFETY: the Save button is owned by this dialog. EnableWindow returns the previous state.
+        unsafe {
+            let _previous = EnableWindow(
+                self.controls.get(Control::Button(DialogButton::Ok)),
+                self.current_settings() != self.settings,
             );
         }
-        self.settings.appearance.icon = self.selected_icon();
-        self.settings.appearance.theme = self.selected_theme();
+    }
+
+    fn accept(&mut self) {
+        self.settings = self.current_settings();
         self.accepted = true;
     }
 
     fn cancel(&mut self) {
         self.accepted = false;
     }
+
+    fn queue_selector_preview(&mut self, selector: Selector) {
+        let bit = selector_preview_bit(selector);
+        if self.pending_previews & bit != 0 {
+            return;
+        }
+        let id = Control::Selector(selector).id().unwrap_or_default();
+        // SAFETY: this bounded event carries only a control ID. The native combo must
+        // finish committing its selection before theme/icon changes can update it.
+        match unsafe {
+            PostMessageW(
+                Some(self.hwnd),
+                WM_SETTINGS_SELECTOR_PREVIEW,
+                WPARAM(id),
+                LPARAM(0),
+            )
+        } {
+            Ok(()) => self.pending_previews |= bit,
+            Err(error) => eprintln!("Could not queue the settings choice preview: {error}"),
+        }
+    }
+
+    fn apply_selector_preview(&mut self, selector: Selector) {
+        match selector {
+            Selector::Theme => self.apply_selected_theme(),
+            Selector::Icon => self.apply_selected_icon(),
+        }
+        self.sync_save_enabled();
+        self.redraw();
+        // Keep the bit set through native theme updates to coalesce their notifications.
+        self.pending_previews &= !selector_preview_bit(selector);
+    }
+}
+
+const fn selector_preview_bit(selector: Selector) -> u8 {
+    match selector {
+        Selector::Theme => 0b01,
+        Selector::Icon => 0b10,
+    }
 }
 
 struct DialogFonts {
     body: OwnedFont,
+    link: OwnedFont,
     heading: OwnedFont,
+    sidebar_title: OwnedFont,
+    strong: OwnedFont,
+    identity: OwnedFont,
+    help: OwnedFont,
+    section: OwnedFont,
+    button: OwnedFont,
 }
 
 impl DialogFonts {
     fn create(dpi: u32) -> Result<Self> {
         Ok(Self {
-            body: OwnedFont::new(dpi, 9, FW_NORMAL.0.cast_signed(), false)?,
-            heading: OwnedFont::new(dpi, 9, FW_SEMIBOLD.0.cast_signed(), false)?,
+            body: OwnedFont::pixels(dpi, 14, FW_NORMAL.0.cast_signed())?,
+            link: OwnedFont::underlined_pixels(dpi, 14, FW_NORMAL.0.cast_signed())?,
+            heading: OwnedFont::pixels(dpi, 22, FW_SEMIBOLD.0.cast_signed())?,
+            sidebar_title: OwnedFont::pixels(dpi, 21, FW_SEMIBOLD.0.cast_signed())?,
+            strong: OwnedFont::pixels(dpi, 14, FW_SEMIBOLD.0.cast_signed())?,
+            identity: OwnedFont::pixels(dpi, 16, FW_SEMIBOLD.0.cast_signed())?,
+            help: OwnedFont::pixels(dpi, 12, FW_NORMAL.0.cast_signed())?,
+            section: OwnedFont::pixels(dpi, 12, FW_BOLD.0.cast_signed())?,
+            button: OwnedFont::pixels(dpi, 13, FW_NORMAL.0.cast_signed())?,
         })
     }
 
     const fn of(&self, control: Control) -> HFONT {
-        if let Control::Group(_) = control {
-            self.heading.0
-        } else {
-            self.body.0
+        match control {
+            Control::SidebarTitle => self.sidebar_title.0,
+            Control::PageHeading => self.heading.0,
+            Control::PageIntro => self.help.0,
+            Control::Section(_) => self.section.0,
+            Control::Button(_) | Control::AboutCopyright | Control::AboutLicense => self.button.0,
+            _ => self.body.0,
         }
     }
 }
@@ -323,26 +464,62 @@ fn handle_settings_message(
     lparam: LPARAM,
 ) -> Option<LRESULT> {
     match message {
+        WM_SYSCOMMAND if wparam.0 & 0xfff0 == SC_MAXIMIZE as usize => Some(LRESULT(0)),
         WM_COMMAND => handle_command(hwnd, state, wparam),
+        WM_SIZE if state.fonts.is_some() && wparam.0 != 1 => {
+            report_layout(state.resize());
+            Some(LRESULT(0))
+        }
+        WM_SETTINGS_FOCUS => {
+            report_layout(state.reveal_control(HWND(wparam.0 as *mut c_void)));
+            Some(LRESULT(0))
+        }
+        WM_SETTINGS_NAVIGATE => {
+            if let Some(category) = Category::ALL.get(wparam.0) {
+                report_layout(state.focus_category(*category));
+            }
+            Some(LRESULT(0))
+        }
+        WM_SETTINGS_SELECTOR_PREVIEW => {
+            if let Some(Control::Selector(selector)) = Control::with_id(wparam.0) {
+                state.apply_selector_preview(selector);
+            }
+            Some(LRESULT(0))
+        }
+        WM_MOUSEWHEEL => {
+            report_layout(state.scroll_wheel(i32::from(high_word(wparam.0).cast_signed())));
+            Some(LRESULT(0))
+        }
+        WM_VSCROLL => {
+            report_layout(state.scroll_bar(low_word(wparam.0)));
+            Some(LRESULT(0))
+        }
+        WM_GETMINMAXINFO => {
+            // SAFETY: WM_GETMINMAXINFO supplies writable storage for the synchronous callback.
+            if let Some(info) = unsafe { (lparam.0 as *mut MINMAXINFO).as_mut() } {
+                match FRAME.window_size(
+                    Size::new(
+                        alttabio::dialog_layout::scale(MIN_CLIENT_WIDTH, state.dpi),
+                        alttabio::dialog_layout::scale(MIN_CLIENT_HEIGHT, state.dpi),
+                    ),
+                    state.dpi,
+                ) {
+                    Ok(size) => {
+                        info.ptMinTrackSize.x = size.width;
+                        info.ptMinTrackSize.y = size.height;
+                    }
+                    Err(error) => {
+                        eprintln!("Could not determine the minimum settings size: {error}");
+                    }
+                }
+            }
+            Some(LRESULT(0))
+        }
         WM_DPICHANGED => {
             dialog_host::handle_dpi_changed(hwnd, wparam, lparam, FRAME.name, |dpi| {
                 state.update_dpi(dpi)
             });
             Some(LRESULT(0))
-        }
-        WM_ERASEBKGND => state
-            .background
-            .as_ref()
-            .map(|brush| theme::paint_background(hwnd, HDC(wparam.0 as *mut c_void), brush.0)),
-        WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORLISTBOX => {
-            state.background.as_ref().map(|brush| {
-                theme::style_control_dc(
-                    HDC(wparam.0 as *mut c_void),
-                    state.background_color,
-                    state.text_color,
-                    brush.0,
-                )
-            })
         }
         WM_CLOSE => {
             state.cancel();
@@ -357,7 +534,27 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
     let control = Control::with_id(usize::from(low_word(wparam.0)))?;
     let notification = u32::from(high_word(wparam.0));
     match control {
+        Control::Navigation(category) if notification == BN_CLICKED => {
+            report_layout(state.select_category(category));
+        }
+        Control::AboutRepository if notification == BN_CLICKED => {
+            // SAFETY: the bounded action is handled outside the callback by this dialog's loop.
+            if let Err(error) = unsafe {
+                PostMessageW(
+                    Some(hwnd),
+                    WM_SETTINGS_OPEN_REPOSITORY,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+            } {
+                eprintln!("Could not request the AltTabio GitHub page: {error}");
+            }
+            return Some(LRESULT(0));
+        }
         Control::Button(DialogButton::Ok) => {
+            if state.current_settings() == state.settings {
+                return Some(LRESULT(0));
+            }
             state.accept();
             request_dialog_close(hwnd);
         }
@@ -365,20 +562,46 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
             state.cancel();
             request_dialog_close(hwnd);
         }
-        Control::Selector(Selector::Theme) if notification == CBN_SELCHANGE => {
-            state.apply_selected_theme();
+        Control::Selector(selector) if notification == CBN_DROPDOWN => {
+            state.dropdown_selection[selector as usize] =
+                selected_index(state.controls.get(Control::Selector(selector)));
+            state.refresh_paint_state();
+            return Some(LRESULT(0));
         }
-        Control::Selector(Selector::Icon) if notification == CBN_SELCHANGE => {
-            state.apply_selected_icon();
+        Control::Selector(selector) if notification == CBN_SELENDCANCEL => {
+            if let Some(index) = state.dropdown_selection[selector as usize].take()
+                && let Err(error) =
+                    controls::select_index(state.controls.get(Control::Selector(selector)), index)
+            {
+                eprintln!("Could not restore the canceled settings choice: {error}");
+            }
+            return Some(LRESULT(0));
         }
-        Control::Checkbox(SettingOption::RightButtonWheelSwitching)
-            if notification == BN_CLICKED =>
+        Control::Selector(selector)
+            if notification == CBN_SELCHANGE || notification == CBN_SELENDOK =>
         {
-            state.sync_right_button_release_enabled();
+            let combo = state.controls.get(Control::Selector(selector));
+            // SAFETY: this scalar query reads the live combo's popup state.
+            let open = unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0 != 0;
+            if notification == CBN_SELENDOK || !open {
+                state.dropdown_selection[selector as usize] = None;
+                state.queue_selector_preview(selector);
+            }
+            // Highlighting an open list must not re-theme or relayout its native windows.
+            return Some(LRESULT(0));
         }
+        Control::Checkbox(_) if notification == BN_CLICKED => {}
         _ => return None,
     }
+    state.sync_save_enabled();
+    state.redraw();
     Some(LRESULT(0))
+}
+
+fn report_layout(result: Result<()>) {
+    if let Err(error) = result {
+        eprintln!("Could not update settings layout: {error}");
+    }
 }
 
 fn request_dialog_close(hwnd: HWND) {
@@ -393,18 +616,34 @@ mod tests {
     use alttabio::dialog_layout::{BASE_DPI, Point, Size};
 
     #[test]
-    fn settings_window_is_not_owned_by_the_topmost_overlay() {
-        let mut owner_storage = 0_u8;
-        let owner = HWND(std::ptr::from_mut(&mut owner_storage).cast());
-
-        assert_eq!(settings_window_owner(owner), None);
-    }
-
-    #[test]
     fn settings_window_requests_app_window_alt_tab_presence() {
         let app_window = windows::Win32::UI::WindowsAndMessaging::WS_EX_APPWINDOW;
 
         assert_ne!(FRAME.ex_style.0 & app_window.0, 0);
+    }
+
+    #[test]
+    fn maximize_request_keeps_settings_at_its_current_size() -> Result<()> {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsZoomed};
+        let dialog = super::page_tests::dialog()?;
+        let mut before = RECT::default();
+        let mut after = RECT::default();
+        // SAFETY: the test owns this hidden dialog; the command and output rectangles are valid.
+        unsafe {
+            GetWindowRect(dialog.window(), &raw mut before)?;
+            SendMessageW(
+                dialog.window(),
+                WM_SYSCOMMAND,
+                Some(WPARAM(SC_MAXIMIZE as usize)),
+                None,
+            );
+            assert!(!IsZoomed(dialog.window()).as_bool());
+            GetWindowRect(dialog.window(), &raw mut after)?;
+        }
+        assert_eq!(before, after);
+        dialog.destroy()?;
+        Ok(())
     }
 
     #[test]

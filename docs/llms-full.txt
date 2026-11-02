@@ -20,7 +20,7 @@ AltTabio is a free, open-source Alt+Tab replacement for 64-bit Windows that list
 - Windows page: https://vibeslop.github.io/AltTabio/windows/
 - Mac page: https://vibeslop.github.io/AltTabio/mac/
 - Download: https://github.com/vibeslop/AltTabio/releases/latest
-- Current version: 1.2.1 (see GitHub Releases for the latest)
+- Current version: 1.3.0 (see GitHub Releases for the latest)
 
 ## Why it exists
 
@@ -30,11 +30,15 @@ The built-in Windows Alt+Tab UI is a strip of small thumbnails. With many window
 
 When the user holds Alt and taps Tab (or optionally Win+Tab), AltTabio shows an overlay:
 
-1. A numbered task list with icons and titles
+1. A task list with icons and titles, plus optional number labels for the first nine visible rows, hidden by default
 2. A live DWM preview of the selected window, either isolated or in its place on the full desktop
 3. Immediate filtering if the user types
 
-The user can also press 1-9 to jump, use arrows or the mouse, close or terminate a window, and dismiss with Escape.
+The user can also press 1-9 to jump when the query is empty, use arrows or the mouse, close or terminate a window, and dismiss with Escape. Once a query is entered, number keys type digits; Left, Right, Home, and End edit the query. The query stays visible in a capsule on the panel's top edge and supports mouse selection, clipboard shortcuts, undo, and redo. The mouse wheel scrolls the window list without changing the selection.
+
+## Windows updates
+
+Release builds check GitHub for updates about a minute after startup and then daily, with an hourly retry after a failed check. They download newer stable releases, verify the archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder, preserving `AltTabio.ini` and the startup task. Automatic updates can be turned off in Settings. The tray menu has Check for Updates to check immediately and offer installation, and Relaunch to Update when an update is ready. Ordinary Windows source builds do not check for or install published updates.
 
 ## On macOS
 
@@ -66,15 +70,17 @@ When the user holds Cmd and taps Tab, AltTabio shows a strip of running apps, mo
 - Settings file: `AltTabio.ini` beside the executable
 - Administrator privileges are required for global input hooks and some window commands
 - Autostart creates a highest-privilege scheduled task. The executable should live in a folder that non-elevated processes cannot replace (for example Program Files) before enabling autostart.
+- Windows updates require the same protected installation. The updater checks before downloading and again before relaunching, and refuses a target that non-elevated processes can replace.
 - On macOS: AppKit through the objc2 bindings, a CGEventTap for Cmd+Tab, Accessibility for window control, ScreenCaptureKit for previews; distributed as `AltTabio.app`, with settings in `~/Library/Application Support/AltTabio/AltTabio.ini`
 
 ## Privacy and security talking points
 
-- No internet connection on Windows; on macOS only a daily look at the GitHub release list for updates, which can be turned off
+- Release builds on Windows and macOS contact GitHub to check for and download updates. Automatic updates can be turned off in Settings; manual checks remain available
+- Update requests contain no window titles, query text, previews, or settings. No analytics on either platform
 - Public source code
 - Windows permission prompt is for the input hook and window management, not for data collection
 - macOS Accessibility and Screen Recording permissions are for taking over Cmd+Tab, controlling windows, and drawing previews, not for data collection
-- Uninstall is: exit tray icon, delete folder, disable autostart if enabled
+- Windows uninstall: turn off start with Windows if enabled, exit from the tray icon, then delete the folder
 
 ## Accurate alternative-software framing
 

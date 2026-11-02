@@ -1,0 +1,545 @@
+//! Update work is driven by the outer message loop, outside window callbacks and state borrows
+//! held across modal dialogs. Workers return owned results through a channel, never HWND data.
+
+use super::{App, AppHost};
+use crate::app_messages::UPDATE_TIMER_ID;
+use crate::hook::HookThread;
+use crate::win32::wide;
+use crate::windows_updater::{self, StagedUpdate};
+use alttabio::update::{Checked, Report, Step, Update, Updater};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::{
+    IDYES, MB_ICONINFORMATION, MB_OK, MB_YESNO, MSG, MessageBoxW, SetTimer, WM_TIMER,
+};
+use windows::core::{PCWSTR, w};
+
+const FIRST_CHECK: Duration = Duration::from_mins(1);
+const RETRY: Duration = Duration::from_hours(1);
+const INTERVAL: Duration = Duration::from_hours(24);
+
+pub(super) fn is_update_timer(message: &MSG, owner: HWND) -> bool {
+    message.hwnd == owner && message.message == WM_TIMER && message.wParam.0 == UPDATE_TIMER_ID
+}
+
+enum Completion {
+    Checked(Result<Checked, String>),
+    Staged(Result<StagedUpdate, String>),
+    Relaunched(StagedUpdate, Result<(), String>),
+}
+
+enum Action {
+    None,
+    Offer(Update),
+    Report(Report),
+    Quit,
+}
+
+#[derive(Default, PartialEq)]
+enum Request {
+    #[default]
+    None,
+    Pending,
+    Active,
+}
+
+#[derive(Default, PartialEq)]
+enum Restart {
+    #[default]
+    None,
+    Requested,
+    HelperReady,
+}
+
+pub(super) struct Updates {
+    policy: Updater,
+    worker: Option<Receiver<Completion>>,
+    staged: Option<StagedUpdate>,
+    check_at: Instant,
+    restart_at: Instant,
+    automatic: bool,
+    request: Request,
+    restart: Restart,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            policy: Updater::default(),
+            worker: None,
+            staged: None,
+            check_at: Instant::now() + FIRST_CHECK,
+            restart_at: Instant::now(),
+            automatic: false,
+            request: Request::None,
+            restart: Restart::None,
+        }
+    }
+}
+
+impl Updates {
+    pub(super) fn request(&mut self) {
+        self.request = Request::Pending;
+    }
+
+    fn tick(&mut self, automatic: bool, can_restart: bool) -> Action {
+        let now = Instant::now();
+        if automatic && !self.automatic {
+            self.check_at = now + FIRST_CHECK;
+        }
+        self.automatic = automatic;
+        let mut step = Step::None;
+        if self.request == Request::Pending {
+            self.request = Request::Active;
+            step = self.policy.requested();
+        }
+        if let Some(worker) = &self.worker {
+            match worker.try_recv() {
+                Ok(completion) => {
+                    self.worker = None;
+                    step = match completion {
+                        Completion::Checked(result) => {
+                            self.check_at = now + if result.is_err() { RETRY } else { INTERVAL };
+                            log_failure(&result);
+                            // Disabling automatic updates during a check cancels its install.
+                            // A check the user explicitly requested still reports and offers it.
+                            self.policy
+                                .checked(if !automatic && self.request == Request::None {
+                                    Ok(Checked::UpToDate)
+                                } else {
+                                    result
+                                })
+                        }
+                        Completion::Staged(result) => {
+                            log_failure(&result);
+                            if result.is_err() {
+                                self.check_at = now + INTERVAL;
+                            }
+                            let result = result.map(|staged| self.staged = Some(staged));
+                            self.policy.installed(result)
+                        }
+                        Completion::Relaunched(staged, result) => {
+                            self.staged = Some(staged);
+                            match result {
+                                Ok(()) => {
+                                    self.restart = Restart::HelperReady;
+                                    return self.restart_if_ready(
+                                        Action::None,
+                                        can_restart,
+                                        now,
+                                        windows_updater::user_is_away,
+                                    );
+                                }
+                                Err(error) => {
+                                    eprintln!("{error}");
+                                    self.restart = Restart::None;
+                                    self.restart_at = now + RETRY;
+                                    return if self.request == Request::Active {
+                                        self.request = Request::None;
+                                        Action::Report(Report::Failed(error))
+                                    } else {
+                                        Action::None
+                                    };
+                                }
+                            }
+                        }
+                    };
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.worker = None;
+                    let error = "The update worker stopped unexpectedly".to_owned();
+                    eprintln!("{error}");
+                    // A failed check or download is retryable; no worker can have changed the EXE.
+                    step = self.policy.checked(Err(error.clone()));
+                    if step == Step::None {
+                        step = self.policy.installed(Err(error));
+                    }
+                    self.check_at = now + RETRY;
+                    if self.policy.installed_version().is_some() && self.staged.is_none() {
+                        self.policy = Updater::default();
+                        self.restart = Restart::None;
+                    }
+                }
+            }
+        }
+        if self.worker.is_none() && step == Step::None && automatic && now >= self.check_at {
+            self.check_at = now + INTERVAL;
+            step = self.policy.check_due();
+        }
+        let action = self.apply(step);
+        self.restart_if_ready(action, can_restart, now, windows_updater::user_is_away)
+    }
+
+    fn restart_requested(&self, away: impl FnOnce() -> bool) -> bool {
+        self.restart == Restart::Requested
+            || self.request == Request::Active
+            || (self.automatic && away())
+    }
+
+    fn restart_if_ready(
+        &mut self,
+        action: Action,
+        can_restart: bool,
+        now: Instant,
+        away: impl FnOnce() -> bool,
+    ) -> Action {
+        if self.restart == Restart::HelperReady {
+            if !can_restart || now < self.restart_at || !self.restart_requested(away) {
+                return action;
+            }
+            let result = self
+                .staged
+                .as_ref()
+                .ok_or_else(|| "The staged update is missing".to_owned())
+                .and_then(windows_updater::approve_relaunch);
+            return match result {
+                Ok(()) => Action::Quit,
+                Err(error) => {
+                    self.restart_at = now + RETRY;
+                    eprintln!("{error}");
+                    if self.request == Request::Active {
+                        self.request = Request::None;
+                        Action::Report(Report::Failed(error))
+                    } else {
+                        Action::None
+                    }
+                }
+            };
+        }
+        if matches!(action, Action::None)
+            && can_restart
+            && self.worker.is_none()
+            && self.staged.is_some()
+            && now >= self.restart_at
+            && self.restart_requested(away)
+        {
+            let Some(mut staged) = self.staged.take() else {
+                return action;
+            };
+            match spawn(move || {
+                let result = windows_updater::relaunch(&mut staged);
+                Completion::Relaunched(staged, result)
+            }) {
+                Ok(worker) => self.worker = Some(worker),
+                Err(error) => {
+                    // A failed spawn drops the captured staged files; start a fresh check later.
+                    self.policy = Updater::default();
+                    self.restart = Restart::None;
+                    self.check_at = now + RETRY;
+                    eprintln!("{error}");
+                    if self.request == Request::Active {
+                        self.request = Request::None;
+                        return Action::Report(Report::Failed(error));
+                    }
+                }
+            }
+        }
+        action
+    }
+
+    fn apply(&mut self, step: Step) -> Action {
+        let checking = matches!(step, Step::Check);
+        let started = match step {
+            Step::None => return Action::None,
+            Step::Offer(update) => return Action::Offer(update),
+            Step::Report(report) => {
+                self.request = Request::None;
+                return Action::Report(report);
+            }
+            Step::Relaunch => {
+                if self.restart != Restart::HelperReady {
+                    self.restart = Restart::Requested;
+                }
+                self.restart_at = Instant::now();
+                return Action::None;
+            }
+            Step::Check => {
+                let manual = self.request == Request::Active;
+                spawn(move || Completion::Checked(windows_updater::check(manual)))
+            }
+            Step::Install(update) => {
+                spawn(move || Completion::Staged(windows_updater::stage(&update)))
+            }
+        };
+        match started {
+            Ok(worker) => {
+                self.worker = Some(worker);
+                Action::None
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                self.check_at = Instant::now() + RETRY;
+                let step = if checking {
+                    self.policy.checked(Err(error))
+                } else {
+                    self.policy.installed(Err(error))
+                };
+                self.apply(step)
+            }
+        }
+    }
+}
+
+fn log_failure<T>(result: &Result<T, String>) {
+    if let Err(error) = result {
+        eprintln!("{error}");
+    }
+}
+
+fn spawn(
+    work: impl FnOnce() -> Completion + Send + 'static,
+) -> Result<Receiver<Completion>, String> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("alttabio-update".to_owned())
+        .spawn(move || {
+            if sender.send(work()).is_err() {
+                eprintln!("AltTabio closed before its update work finished");
+            }
+        })
+        .map_err(|error| format!("Could not start the update worker: {error}"))?;
+    Ok(receiver)
+}
+
+impl AppHost {
+    /// True means a helper is ready and the outer loop can shut down normally.
+    pub(super) fn update_tick(&self) -> bool {
+        let action = {
+            let Ok(mut app) = self.state.try_borrow_mut() else {
+                return false;
+            };
+            // The update timer also wakes this outer-loop work once per second. A logon
+            // launch must recover even if TaskbarCreated arrived during initialization.
+            if let Some(tray) = &app.tray
+                && let Err(error) = tray.retry_registration()
+            {
+                eprintln!("Could not register the AltTabio tray icon yet: {error}");
+            }
+            let action = app.poll_updates();
+            let ready = app.updates.policy.installed_version().is_some();
+            if let Some(tray) = &app.tray
+                && let Err(error) = tray.set_update_installed(ready)
+            {
+                eprintln!("Could not update the tray command: {error}");
+            }
+            action
+        };
+        match action {
+            Action::None => false,
+            Action::Quit => true,
+            Action::Offer(update) => {
+                let install = self.update_dialog(
+                    &format!(
+                        "AltTabio {} is available. Install it and restart AltTabio?",
+                        update.version
+                    ),
+                    true,
+                );
+                if let Ok(mut app) = self.state.try_borrow_mut() {
+                    if !install {
+                        app.updates.request = Request::None;
+                    }
+                    let step = app.updates.policy.offer_answered(update, install);
+                    let action = app.updates.apply(step);
+                    drop(app);
+                    if let Action::Report(report) = action {
+                        self.report_update(report);
+                    }
+                }
+                false
+            }
+            Action::Report(report) => {
+                self.report_update(report);
+                false
+            }
+        }
+    }
+
+    fn report_update(&self, report: Report) {
+        let text = match report {
+            Report::UpToDate => "AltTabio is up to date.".to_owned(),
+            Report::Blocked(version, reason) => {
+                format!("AltTabio {version} is available. {reason}")
+            }
+            Report::Failed(error) => format!("Could not update AltTabio. {error}"),
+        };
+        self.update_dialog(&text, false);
+    }
+
+    fn update_dialog(&self, text: &str, offer: bool) -> bool {
+        let (hwnd, suspension) = {
+            let Ok(mut app) = self.state.try_borrow_mut() else {
+                return false;
+            };
+            app.hide_overlay();
+            app.update_dialog_open = true;
+            (
+                app.hwnd,
+                app.hooks.as_ref().map(HookThread::suspend_interception),
+            )
+        };
+        let text = wide(text);
+        let result = unsafe {
+            // SAFETY: hwnd is owned by this UI thread and text is terminated and lives through
+            // the modal call. No app-state borrow is held across its nested message loop.
+            MessageBoxW(
+                Some(hwnd),
+                PCWSTR(text.as_ptr()),
+                w!("AltTabio"),
+                MB_ICONINFORMATION | if offer { MB_YESNO } else { MB_OK },
+            )
+        };
+        if result.0 == 0 {
+            eprintln!(
+                "Could not show the update dialog: {}",
+                windows::core::Error::from_thread()
+            );
+        }
+        if let Ok(mut app) = self.state.try_borrow_mut() {
+            app.update_dialog_open = false;
+        }
+        drop(suspension);
+        result == IDYES
+    }
+}
+
+impl App {
+    fn poll_updates(&mut self) -> Action {
+        // Workers can finish in the background, but keep their results queued until presenting
+        // an offer or report cannot dismiss an active or still-opening switching gesture.
+        if self.dialog_state().blocks_switcher()
+            || self.is_visible()
+            || self.pending_shell.is_some()
+        {
+            return Action::None;
+        }
+        let automatic = self.settings.general.auto_update && windows_updater::is_release_build();
+        let can_restart = !self.dialog_state().any_open();
+        self.updates.tick(automatic, can_restart)
+    }
+
+    pub(super) fn start_update_timer(&mut self) {
+        let timer = unsafe {
+            // SAFETY: hwnd is live, the ID belongs to this app, and no timer callback is installed.
+            SetTimer(Some(self.hwnd), UPDATE_TIMER_ID, 1000, None)
+        };
+        if timer == 0 {
+            eprintln!(
+                "Could not start the update timer: {}",
+                windows::core::Error::from_thread()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings_io::SettingsStore;
+    use crate::win32::ComApartment;
+    use alttabio::settings::Settings;
+    use alttabio::switcher::SwitchTask;
+    use alttabio::update::Version;
+
+    #[test]
+    fn failed_staging_waits_a_day_before_another_automatic_download() {
+        let mut updates = Updates {
+            automatic: true,
+            ..Updates::default()
+        };
+        assert_eq!(updates.policy.check_due(), Step::Check);
+        let update = Update {
+            version: Version::parse("9.0.0").unwrap_or_else(|| panic!("test version")),
+            url: "fixture".to_owned(),
+        };
+        assert!(matches!(
+            updates.policy.checked(Ok(Checked::Available(update))),
+            Step::Install(_)
+        ));
+        let (sender, receiver) = mpsc::channel();
+        assert!(
+            sender
+                .send(Completion::Staged(Err("fixture failure".to_owned())))
+                .is_ok()
+        );
+        updates.worker = Some(receiver);
+        let before = Instant::now();
+        assert!(matches!(updates.tick(true, false), Action::None));
+        assert!(updates.check_at >= before + INTERVAL);
+    }
+
+    #[test]
+    fn automatic_helper_readiness_does_not_override_a_returned_user() {
+        let now = Instant::now();
+        let mut updates = Updates {
+            automatic: true,
+            restart: Restart::HelperReady,
+            restart_at: now,
+            ..Updates::default()
+        };
+        assert!(matches!(
+            updates.restart_if_ready(Action::None, true, now, || false),
+            Action::None
+        ));
+        assert_eq!(
+            updates.restart_at, now,
+            "a returned user must defer authorization, not attempt it"
+        );
+        updates.automatic = false;
+        assert!(
+            !updates.restart_requested(|| true),
+            "turning off automatic updates cancels an automatic restart"
+        );
+        updates.request = Request::Active;
+        assert!(updates.restart_requested(|| panic!("a manual restart does not need idle time")));
+        assert!(
+            matches!(
+                updates.restart_if_ready(Action::None, true, now, || false),
+                Action::Report(Report::Failed(_))
+            ),
+            "the manual restart reaches authorization even while the user is active"
+        );
+    }
+
+    #[test]
+    fn completed_manual_checks_wait_for_the_switcher_to_close() -> windows::core::Result<()> {
+        let _apartment = ComApartment::initialize()?;
+        let update = Update {
+            version: Version::parse("9.0.0").unwrap_or_else(|| panic!("test version")),
+            url: "fixture".to_owned(),
+        };
+        for checked in [Checked::UpToDate, Checked::Available(update)] {
+            let path = std::env::temp_dir()
+                .join(format!("AltTabio-update-dialog-{}.ini", std::process::id()));
+            let (store, settings) = SettingsStore::load_from(path, &Settings::default())
+                .unwrap_or_else(|error| panic!("{error}"));
+            let mut app = App::new(false, false, settings, store)?;
+            app.updates.request = Request::Active;
+            assert_eq!(app.updates.policy.requested(), Step::Check);
+            let (sender, receiver) = mpsc::channel();
+            let available = matches!(checked, Checked::Available(_));
+            assert!(sender.send(Completion::Checked(Ok(checked))).is_ok());
+            app.updates.worker = Some(receiver);
+            app.session
+                .open([SwitchTask::new(1, 1, "Fixture", "test")], None);
+            assert!(
+                matches!(app.poll_updates(), Action::None),
+                "an update result must not interrupt the switcher"
+            );
+            assert!(
+                app.updates.worker.is_some(),
+                "the completion must remain queued"
+            );
+            app.session.hide();
+            let action = app.poll_updates();
+            assert!(if available {
+                matches!(action, Action::Offer(_))
+            } else {
+                matches!(action, Action::Report(Report::UpToDate))
+            });
+        }
+        Ok(())
+    }
+}

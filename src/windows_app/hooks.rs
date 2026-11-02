@@ -27,11 +27,14 @@ impl App {
         let Some(hooks) = self.hooks.as_ref() else {
             return;
         };
-        let suspended = self.modal_state().any_open();
+        let suspended = self.dialog_state().blocks_switcher();
         if suspended {
             hooks.set_interception_suspended(true);
         }
-        hooks.set_search_active(!suspended && self.session.search_active());
+        hooks.set_search_state(
+            !suspended && self.session.search_active(),
+            self.session.filter_visible(),
+        );
         hooks.set_overlay_active(!suspended && self.session.is_visible());
         if !suspended {
             hooks.set_interception_suspended(false);
@@ -40,7 +43,10 @@ impl App {
 
     pub(super) fn set_hook_search_active(&self, overlay_visible: bool) {
         if let Some(hooks) = &self.hooks {
-            hooks.set_search_active(overlay_visible && self.settings.general.typed_search);
+            hooks.set_search_state(
+                overlay_visible && self.settings.general.typed_search,
+                self.session.filter_visible(),
+            );
         }
     }
 

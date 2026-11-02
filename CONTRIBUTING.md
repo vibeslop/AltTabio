@@ -4,18 +4,19 @@ The rules for code changes live in [AGENTS.md](AGENTS.md), including where code 
 
 ## Building
 
-AltTabio requires the Rust toolchain plus, on Windows, the MSVC build tools, or, on macOS, the Command Line Tools.
+AltTabio uses the Rust version pinned in `rust-toolchain.toml`, plus, on Windows, the MSVC build tools, or, on macOS, the Command Line Tools. Close AltTabio before compiling or testing; the running Windows app locks its executable.
 
 ### Windows
 
 ```powershell
-cargo check --all-targets --message-format short
-cargo clippy --all-targets --quiet --message-format short -- -D warnings
-cargo test -q
-cargo build --release
+cargo fmt -- --check
+cargo clippy --quiet --all-targets -- -D warnings
+cargo test --quiet
+cargo build --release --quiet
+powershell.exe -NoProfile -NonInteractive -File scripts/windows/test-updater.ps1
 ```
 
-The release executable is written to `target\release\AltTabio.exe`. `cargo run -- --preview` shows the overlay without installing global hooks.
+The release executable must be written to this checkout's `target\release\AltTabio.exe`; override `CARGO_TARGET_DIR` if it points elsewhere. `cargo run -- --preview` shows the overlay without installing global hooks.
 
 ### macOS
 
@@ -27,13 +28,29 @@ scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
 
+Before submitting a macOS change, run the same formatting, Clippy, and test commands above, then `scripts/mac/build-app.sh`. CI also builds and verifies a universal bundle for Apple silicon and Intel.
+
 macOS ties Accessibility and Screen Recording grants to the certificate an app is signed with, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once so your grants survive rebuilds, and choose **Always Allow** if a build asks whether codesign may use the key. When AltTabio is started from a terminal, macOS applies the terminal's grants to it. A build signed with anything but the release certificate never updates itself.
 
 `ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action. `--list` and `--activate <window id>` also work from a plain `cargo run`. Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there.
 
 ## Releasing
 
-Set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and push the tag `v<version>` once that commit is on `main`. The Release workflow builds the Windows and macOS archives, signs the macOS one with the [release certificate](#the-macos-release-certificate), and attaches both to a draft release. Write its notes, one section per platform, and publish it; the install script and the Mac updater only see published releases.
+Routine fixes and local builds do not need a version bump. When preparing a release, set the version in `Cargo.toml` and `app.rc`, let `cargo` update `Cargo.lock`, and update the version shown in `docs/product.md`, `docs/llms-full.txt`, and the three product pages under `docs`. The macOS bundle version comes from `Cargo.toml`.
+
+The version bump can be in the release PR, followed by more fixes under the same unreleased version. Once the PR is merged and the final commit on `main` passes CI, tag that commit `v<version>`. Do not tag the earlier version-bump commit. Use the next patch version for fixes released after a version has been published.
+
+The Release workflow builds the Windows and macOS archives, signs the macOS one with the [release certificate](#the-macos-release-certificate), and attaches both to a draft release. Write its notes, one section per platform, and publish it; the install script and both updaters only see published releases.
+
+Windows MSVC builds statically link the C runtime through `.cargo/config.toml`, so the executable does not require a separate Visual C++ Redistributable installation. Runtime fixes are delivered by rebuilding and releasing AltTabio.
+
+The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the updater. Ordinary source builds leave it unset so they never download over local work. Windows verifies the archive's GitHub asset digest, stages only `AltTabio.exe` in a protected folder beside the installation, and uses a helper to replace and restart it once the running copy exits. Run `powershell.exe -NoProfile -File scripts/windows/test-updater.ps1` to exercise verification failures, replacement, and rollback without downloading or launching a release.
+
+Before publishing a Windows release, manually check Alt+Tab, Shift+Alt+Tab, Win+Tab, opening the switcher over Start and Search, and typing and editing a filter with an AltGr layout. Also verify a real install, update, and relaunch in a disposable Windows VM, starting from the autostart task and using a throwaway release repository or tag. Script mocks and hidden-window tests do not replace these checks.
+
+Windows currently trusts GitHub release publishing and the asset digest; independent Windows signing-key work is postponed. The digest does not authenticate a publisher independently of GitHub. The release job checks both embedded Windows version strings against the tag before packaging.
+
+The updater's isolated environment and explicit module imports constrain its scripts. Windows PowerShell 5.1 and .NET Framework initialize before those scripts run, so this is not a sandbox for per-user Windows or .NET runtime startup configuration. A relaunched GUI process receives a fresh user environment; it does not inherit the helper's restricted or temporary environment.
 
 Running the workflow by hand with a tag builds that tag's Windows archive alone. Re-running the tag's own run rebuilds both.
 

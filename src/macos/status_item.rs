@@ -127,7 +127,7 @@ pub fn install(mtm: MainThreadMarker, handler: Rc<dyn Fn(MenuAction)>) -> Status
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     menu.addItem(&menu_item(
         mtm,
-        "Show",
+        "Open Switcher",
         Some(sel!(showSwitcher:)),
         "",
         &target,

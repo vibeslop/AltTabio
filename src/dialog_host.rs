@@ -2,7 +2,7 @@
 
 use crate::win32::{low_word, set_window_user_data, wide};
 use alttabio::dialog_layout::{MIN_DPI, Point, Size};
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 use std::mem::{size_of, size_of_val};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
@@ -13,13 +13,14 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HBRUSH, InvalidateRect};
 use windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, HICON, IDC_ARROW,
-    IsDialogMessageW, LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE, WM_NCDESTROY, WNDCLASSEXW,
+    IsDialogMessageW, IsIconic, IsWindowVisible, LoadCursorW, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowPos, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_NCCREATE,
+    WM_NCDESTROY, WNDCLASSEXW,
 };
 use windows::core::{Error, PCWSTR, Result};
 
@@ -27,7 +28,7 @@ use windows::core::{Error, PCWSTR, Result};
 // borrow before WM_DESTROY and WM_NCDESTROY arrive.
 const WM_DESTROY_DIALOG: u32 = WM_APP + 20;
 
-/// The dark surfaces both dialogs share, so Settings and About match side by side.
+/// Shared dark dialog surfaces.
 pub(crate) mod dark {
     use crate::native_drawing::rgb;
     use windows::Win32::Foundation::COLORREF;
@@ -36,7 +37,6 @@ pub(crate) mod dark {
     pub(crate) const TEXT: COLORREF = rgb(240, 240, 240);
     pub(crate) const CONTROL_SURFACE: COLORREF = rgb(45, 45, 45);
     pub(crate) const PRESSED_SURFACE: COLORREF = rgb(66, 66, 66);
-    pub(crate) const CONTROL_BORDER: COLORREF = rgb(125, 125, 125);
 }
 
 /// The fixed identity of one dialog's top-level window.
@@ -93,11 +93,6 @@ pub(crate) struct DialogHost<S> {
 }
 
 impl<S> DialogHost<S> {
-    /// Borrows the state unless a callback further up the stack already holds it.
-    pub(crate) fn state(&self) -> Option<Ref<'_, S>> {
-        self.state.try_borrow().ok()
-    }
-
     pub(crate) fn state_mut(&self) -> Result<RefMut<'_, S>> {
         self.state
             .try_borrow_mut()
@@ -113,41 +108,9 @@ pub(crate) struct ModalDialog<S: DialogWindow> {
     window: Option<HWND>,
 }
 
-/// Who handles the keyboard in a modal dialog's message loop.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Keyboard {
-    /// `IsDialogMessageW` moves focus between child controls and maps Enter and Esc to `IDOK`
-    /// and `IDCANCEL`.
-    DialogNavigation,
-    /// The window procedure receives every key itself.
-    WindowProcedure,
-}
-
 enum LoopExit {
     Closed,
     Quit(i32),
-}
-
-/// A failed `ModalDialog::run`.
-pub(crate) struct RunError {
-    pub(crate) error: Error,
-    /// The window failed to close after `WM_QUIT` ended the loop, as the application exits.
-    pub(crate) exiting: bool,
-}
-
-impl From<Error> for RunError {
-    fn from(error: Error) -> Self {
-        Self {
-            error,
-            exiting: false,
-        }
-    }
-}
-
-impl From<RunError> for Error {
-    fn from(failure: RunError) -> Self {
-        failure.error
-    }
 }
 
 impl<S: DialogWindow> ModalDialog<S> {
@@ -211,17 +174,22 @@ impl<S: DialogWindow> ModalDialog<S> {
     pub(crate) fn show_in_front(&self) {
         let window = self.window();
         unsafe {
-            // SAFETY: window is the live dialog owned by this UI thread. The return value reports
-            // the previous visibility, not a failure.
+            // SAFETY: window is the live dialog owned by this UI thread. ShowWindow reports
+            // previous visibility rather than failure. Its first call can obey STARTUPINFO
+            // instead of SW_SHOW; once consumed, explicitly show and restore the dialog.
             let _was_visible = ShowWindow(window, SW_SHOW);
+            if !IsWindowVisible(window).as_bool() || IsIconic(window).as_bool() {
+                let _was_visible = ShowWindow(window, SW_SHOWNORMAL);
+            }
         }
         bring_to_front(window, S::FRAME.name);
     }
 
     /// Runs the nested message loop until the dialog closes and returns its final state, or
-    /// `None` when `WM_QUIT` ended the loop.
-    pub(crate) fn run(mut self, keyboard: Keyboard) -> std::result::Result<Option<S>, RunError> {
-        let exit = pump_messages(self.window(), &self.host()?.done, keyboard)?;
+    /// `None` when `WM_QUIT` ended the loop. `handle_action` consumes deferred actions without
+    /// holding dialog state or running inside a native callback.
+    pub(crate) fn run(mut self, handle_action: impl FnMut(&MSG) -> bool) -> Result<Option<S>> {
+        let exit = pump_messages(self.window(), &self.host()?.done, handle_action)?;
         match exit {
             LoopExit::Closed => Ok(Some(self.release()?)),
             LoopExit::Quit(exit_code) => {
@@ -231,10 +199,7 @@ impl<S: DialogWindow> ModalDialog<S> {
                     // consumed it, so the application loop still needs it to exit.
                     PostQuitMessage(exit_code);
                 }
-                released.map(|_state| None).map_err(|error| RunError {
-                    error,
-                    exiting: true,
-                })
+                released.map(|_state| None)
             }
         }
     }
@@ -287,7 +252,11 @@ impl<S: DialogWindow> Drop for ModalDialog<S> {
     }
 }
 
-fn pump_messages(window: HWND, done: &Cell<bool>, keyboard: Keyboard) -> Result<LoopExit> {
+fn pump_messages(
+    window: HWND,
+    done: &Cell<bool>,
+    mut handle_action: impl FnMut(&MSG) -> bool,
+) -> Result<LoopExit> {
     let mut message = MSG::default();
     while !done.get() {
         let result = unsafe {
@@ -302,12 +271,14 @@ fn pump_messages(window: HWND, done: &Cell<bool>, keyboard: Keyboard) -> Result<
                 i32::try_from(message.wParam.0).unwrap_or_default(),
             ));
         }
-        if keyboard == Keyboard::DialogNavigation
-            && unsafe {
-                // SAFETY: window and message are live on this UI thread for the synchronous call.
-                IsDialogMessageW(window, &raw const message)
-            }
-            .as_bool()
+        if handle_action(&message) {
+            continue;
+        }
+        if unsafe {
+            // SAFETY: window and message are live on this UI thread for the synchronous call.
+            IsDialogMessageW(window, &raw const message)
+        }
+        .as_bool()
         {
             continue;
         }
@@ -555,30 +526,4 @@ pub(crate) fn focus(window: HWND) -> Result<()> {
         Err(error) if error.code().is_err() => error,
         _ => Error::new(E_FAIL, "the focus stayed on another window"),
     })
-}
-
-/// Disables a dialog's owner while the dialog is open, which gives the dialog modality without
-/// native ownership.
-pub(crate) struct OwnerGuard(HWND);
-
-impl OwnerGuard {
-    pub(crate) fn disable(owner: HWND) -> Self {
-        unsafe {
-            // SAFETY: owner is the live application HWND and remains live through the dialog
-            // loop. The result reports the previous state, not a failure.
-            let _was_disabled = EnableWindow(owner, false);
-        }
-        Self(owner)
-    }
-}
-
-impl Drop for OwnerGuard {
-    fn drop(&mut self) {
-        unsafe {
-            // SAFETY: owner remains live after the nested dialog closes. The result reports the
-            // previous state, not a failure.
-            let _was_disabled = EnableWindow(self.0, true);
-        }
-        bring_to_front(self.0, "the AltTabio window");
-    }
 }

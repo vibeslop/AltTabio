@@ -1,16 +1,14 @@
 //! Temporary compatibility repair for autostart tasks with the inherited 72-hour limit.
 //! Remove this module and its startup call once legacy installations have migrated.
 
+use super::{connect_scheduler, task_is_missing};
 use std::path::{Path, PathBuf};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::TaskScheduler::{
-    IExecAction, ITaskDefinition, ITaskFolder, ITaskService, TASK_ACTION_EXEC,
-    TASK_DONT_ADD_PRINCIPAL_ACE, TASK_IGNORE_REGISTRATION_TRIGGERS, TASK_LOGON_INTERACTIVE_TOKEN,
-    TASK_LOGON_NONE, TASK_UPDATE, TaskScheduler,
+    IExecAction, ITaskDefinition, ITaskFolder, TASK_ACTION_EXEC, TASK_DONT_ADD_PRINCIPAL_ACE,
+    TASK_IGNORE_REGISTRATION_TRIGGERS, TASK_LOGON_INTERACTIVE_TOKEN, TASK_LOGON_NONE, TASK_UPDATE,
 };
 use windows::Win32::System::Variant::VARIANT;
-use windows::core::{BSTR, HRESULT, Interface, Result};
+use windows::core::{BSTR, Interface, Result};
 
 pub(crate) fn repair_legacy_task_timeout() -> std::result::Result<(), String> {
     let executable = std::env::current_exe()
@@ -26,30 +24,13 @@ pub(crate) fn repair_legacy_task_timeout() -> std::result::Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn connect_scheduler() -> Result<ITaskService> {
-    unsafe {
-        // SAFETY: the caller initialized COM on this thread. Empty variants carry no borrowed
-        // pointers, and the returned COM interface owns its reference until it is dropped.
-        let service: ITaskService = CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
-        let empty = VARIANT::default();
-        service.Connect(&empty, &empty, &empty, &empty)?;
-        Ok(service)
-    }
-}
-
 fn repair_task(folder: &ITaskFolder, name: &BSTR, executable: &Path) -> Result<bool> {
     unsafe {
         // SAFETY: the caller initialized COM. Interfaces own their references, every BSTR output
         // is initialized, and registration synchronously copies its owned variants and definition.
         let task = match folder.GetTask(name) {
             Ok(task) => task,
-            Err(error)
-                if [ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND]
-                    .iter()
-                    .any(|code| error.code() == HRESULT::from_win32(code.0)) =>
-            {
-                return Ok(false);
-            }
+            Err(error) if task_is_missing(&error) => return Ok(false),
             Err(error) => return Err(error),
         };
         let definition = task.Definition()?;
@@ -123,6 +104,7 @@ mod tests {
     use crate::win32::ComApartment;
     use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Security::DACL_SECURITY_INFORMATION;
+    use windows::Win32::System::TaskScheduler::ITaskService;
 
     fn definition(
         service: &ITaskService,

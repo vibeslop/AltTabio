@@ -1,7 +1,7 @@
 use super::App;
 use crate::app_messages::SHELL_DISMISS_TIMER_ID;
 use crate::shell_menu;
-use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll, SwitchResume};
+use alttabio::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
 use alttabio::input::InputAction;
 use windows::Win32::Foundation::{HWND, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
@@ -42,34 +42,6 @@ impl App {
             return;
         }
         self.preview_shell_switch();
-    }
-
-    pub(super) fn resume_shell_switch_with_hotkey(&mut self, action: InputAction) {
-        // The actual Tab was delivered as a registered hotkey. Taking focus now dismisses the
-        // shell naturally, without injecting Escape first.
-        let pending = self.pending_shell.take();
-        if pending.is_some() {
-            self.kill_shell_dismissal_timer();
-        }
-        let pending = pending.filter(|pending| {
-            let current = self
-                .hooks
-                .as_ref()
-                .is_some_and(|hooks| hooks.action_is_current(pending.origin));
-            if !current {
-                // A new physical gesture must not replay actions from before a desktop or modal
-                // boundary, or inherit its selection.
-                self.session.hide();
-            }
-            current
-        });
-        DeferredSwitch::resume_with_hotkey(pending.map(|pending| pending.input), action, |step| {
-            match step {
-                SwitchResume::FocusOverlay => self.focus_overlay(),
-                SwitchResume::Replay(action) => self.apply_input_action_with_reset(action, false),
-                SwitchResume::Input(action) => self.apply_input_action(action),
-            }
-        });
     }
 
     /// Returns whether a pending shell dismissal took `action`.

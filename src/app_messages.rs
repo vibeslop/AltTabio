@@ -7,7 +7,6 @@ use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 
 // Posted by the hook thread.
 pub(crate) const WM_HOOK_ACTION: u32 = WM_APP + 1;
-pub(crate) const WM_HOOK_HOTKEY_ACTION: u32 = WM_APP + 21;
 
 // Sent by the Shell on behalf of the tray icon.
 pub(crate) const WM_TRAY_CALLBACK: u32 = WM_APP + 2;
@@ -20,10 +19,33 @@ pub(crate) const WM_LISTED_WINDOW_REFRESH: u32 = WM_APP + 7;
 pub(crate) const WM_SHOW_SETTINGS: u32 = WM_APP + 3;
 pub(crate) const WM_DESTROY_APP: u32 = WM_APP + 4;
 pub(crate) const WM_SHOW_ABOUT: u32 = WM_APP + 5;
+pub(crate) const WM_CLEAR_FILTER: u32 = WM_APP + 8;
+pub(crate) const WM_FILTER_POINTER: u32 = WM_APP + 9;
+pub(crate) const WM_OUTSIDE_POINTER: u32 = WM_APP + 10;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(isize)]
+pub(crate) enum FilterPointerAction {
+    PlaceCaret = 0,
+    ExtendSelection = 1,
+    SelectAll = 2,
+}
+
+impl FilterPointerAction {
+    pub(crate) const fn from_code(code: isize) -> Option<Self> {
+        match code {
+            0 => Some(Self::PlaceCaret),
+            1 => Some(Self::ExtendSelection),
+            2 => Some(Self::SelectAll),
+            _ => None,
+        }
+    }
+}
 
 pub(crate) const CLOSE_REFRESH_TIMER_ID: usize = 1;
 pub(crate) const LISTED_REFRESH_RETRY_TIMER_ID: usize = 2;
 pub(crate) const SHELL_DISMISS_TIMER_ID: usize = 3;
+pub(crate) const UPDATE_TIMER_ID: usize = 4;
 
 #[cfg(test)]
 mod tests {
@@ -34,13 +56,15 @@ mod tests {
     fn app_window_messages_are_distinct() {
         let messages = [
             WM_HOOK_ACTION,
-            WM_HOOK_HOTKEY_ACTION,
             WM_TRAY_CALLBACK,
             WM_FOREGROUND_CHECK,
             WM_LISTED_WINDOW_REFRESH,
             WM_SHOW_SETTINGS,
             WM_DESTROY_APP,
             WM_SHOW_ABOUT,
+            WM_CLEAR_FILTER,
+            WM_FILTER_POINTER,
+            WM_OUTSIDE_POINTER,
         ];
 
         assert_eq!(
@@ -55,6 +79,7 @@ mod tests {
             CLOSE_REFRESH_TIMER_ID,
             LISTED_REFRESH_RETRY_TIMER_ID,
             SHELL_DISMISS_TIMER_ID,
+            UPDATE_TIMER_ID,
         ];
 
         assert_eq!(timers.iter().collect::<HashSet<_>>().len(), timers.len());

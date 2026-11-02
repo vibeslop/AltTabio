@@ -1,11 +1,14 @@
 //! Shared GDI drawing and owned resources for native dialogs.
 
-use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
+#[cfg(test)]
+use windows::Win32::Foundation::SIZE;
+use windows::Win32::Foundation::{COLORREF, RECT};
+#[cfg(test)]
+use windows::Win32::Graphics::Gdi::GetTextExtentPoint32W;
 use windows::Win32::Graphics::Gdi::{
     BACKGROUND_MODE, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush,
-    DEFAULT_CHARSET, DeleteObject, FF_DONTCARE, FillRect, GetSysColor, GetTextExtentPoint32W,
-    HBRUSH, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    DEFAULT_CHARSET, DeleteObject, FF_DONTCARE, FillRect, GetSysColor, HBRUSH, HDC, HFONT, HGDIOBJ,
+    OUT_DEFAULT_PRECIS, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::core::{Error, Result, w};
 
@@ -90,6 +93,7 @@ pub(crate) fn frame_color(dc: HDC, rect: RECT, color: COLORREF, thickness: i32) 
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn measure_text(dc: HDC, label: &str, font: HFONT) -> Result<SIZE> {
     let _font = SelectedFont::new(dc, font)?;
     let text = label.encode_utf16().collect::<Vec<_>>();
@@ -194,10 +198,31 @@ impl Drop for TextStyle {
 pub(crate) struct OwnedFont(pub(crate) HFONT);
 
 impl OwnedFont {
+    #[cfg(test)]
     pub(crate) fn new(dpi: u32, points: u32, weight: i32, underline: bool) -> Result<Self> {
         let point_height = i32::try_from((u64::from(points) * u64::from(dpi) + 36) / 72)
             .unwrap_or(i32::MAX)
             .max(1);
+        Self::with_height(point_height, weight, underline)
+    }
+
+    pub(crate) fn pixels(dpi: u32, height: i32, weight: i32) -> Result<Self> {
+        Self::with_height(
+            alttabio::dialog_layout::scale(height, dpi).max(1),
+            weight,
+            false,
+        )
+    }
+
+    pub(crate) fn underlined_pixels(dpi: u32, height: i32, weight: i32) -> Result<Self> {
+        Self::with_height(
+            alttabio::dialog_layout::scale(height, dpi).max(1),
+            weight,
+            true,
+        )
+    }
+
+    fn with_height(point_height: i32, weight: i32, underline: bool) -> Result<Self> {
         let font = unsafe {
             // SAFETY: scalar values describe a standard Segoe UI font and the face name is static.
             CreateFontW(

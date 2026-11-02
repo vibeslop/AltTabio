@@ -3,6 +3,29 @@
 use crate::dialog_layout::{Rect, Size};
 use crate::theme::{ResolvedTheme, Rgb8};
 
+/// Foreground ownership for one opening. Failed activation is not a loss of owned focus.
+#[derive(Debug, Default)]
+pub struct OverlayFocus {
+    acquired: bool,
+}
+
+impl OverlayFocus {
+    pub fn reset(&mut self) {
+        self.acquired = false;
+    }
+
+    /// Records a foreground observation and reports a loss only after ownership was acquired.
+    #[must_use]
+    pub fn observe(&mut self, owns_foreground: bool) -> bool {
+        if owns_foreground {
+            self.acquired = true;
+            false
+        } else {
+            self.acquired
+        }
+    }
+}
+
 #[must_use]
 pub const fn overlay_bounds(work_area: Rect) -> Rect {
     let size = Size::new(
@@ -30,6 +53,17 @@ const fn colorref(color: Rgb8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_activation_does_not_count_as_losing_foreground_ownership() {
+        let mut focus = OverlayFocus::default();
+        assert!(!focus.observe(false));
+        assert!(!focus.observe(false));
+        assert!(!focus.observe(true));
+        assert!(focus.observe(false));
+        focus.reset();
+        assert!(!focus.observe(false));
+    }
 
     #[test]
     fn compositor_border_tracks_the_visible_borders_setting() {
