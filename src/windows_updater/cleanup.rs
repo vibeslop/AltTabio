@@ -104,7 +104,7 @@ fn clean_folder(
     Ok(false)
 }
 
-fn owner_pid(name: &str) -> Option<u32> {
+pub(super) fn owner_pid(name: &str) -> Option<u32> {
     let (pid, nonce) = name.strip_prefix(".AltTabio-update-")?.split_once('-')?;
     if pid.is_empty()
         || !pid.bytes().all(|value| value.is_ascii_digit())

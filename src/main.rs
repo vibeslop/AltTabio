@@ -58,6 +58,9 @@ fn main() {
 
 #[cfg(windows)]
 fn run(arguments: &[std::ffi::OsString]) {
+    if windows_updater::run_helper(arguments) {
+        return;
+    }
     let preview_mode = arguments.iter().any(|argument| argument == "--preview");
     let dwm_preview = !arguments
         .iter()

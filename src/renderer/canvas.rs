@@ -380,6 +380,6 @@ mod tests {
             encode(&mut buffer, "Größe 📁"),
             "Größe 📁".encode_utf16().collect::<Vec<_>>()
         );
-        assert_eq!(encode(&mut buffer, ""), []);
+        assert!(encode(&mut buffer, "").is_empty());
     }
 }

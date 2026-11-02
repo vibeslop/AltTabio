@@ -13,7 +13,6 @@ cargo fmt -- --check
 cargo clippy --quiet --all-targets -- -D warnings
 cargo test --quiet
 cargo build --release --quiet
-powershell.exe -NoProfile -NonInteractive -File scripts/windows/test-updater.ps1
 ```
 
 The release executable must be written to this checkout's `target\release\AltTabio.exe`; override `CARGO_TARGET_DIR` if it points elsewhere. `cargo run -- --preview` shows the overlay without installing global hooks.
@@ -44,7 +43,7 @@ The Release workflow builds the Windows and macOS archives, signs the Windows ar
 
 Windows MSVC builds statically link the C runtime through `.cargo/config.toml`, so the executable does not require a separate Visual C++ Redistributable installation. Runtime fixes are delivered by rebuilding and releasing AltTabio.
 
-The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the updater. Ordinary source builds leave it unset so they never download over local work. Windows verifies the archive's GitHub asset digest and Minisign signature before extraction, stages only `AltTabio.exe` in a protected folder beside the installation, and uses a helper to replace and restart it once the running copy exits. Run `powershell.exe -NoProfile -File scripts/windows/test-updater.ps1` to exercise verification failures, replacement, and rollback with ephemeral test keys, without downloading or launching a release. This builds the isolated signing tool using its own lockfile; no production secrets are needed.
+The Windows release job sets `ALTTABIO_RELEASE=1` at build time to enable the updater. Ordinary source builds leave it unset so they never download over local work. Windows verifies the archive's GitHub asset digest and Minisign signature before extraction, stages only `AltTabio.exe` in a protected folder beside the installation, and uses a helper to replace and restart it once the running copy exits. The Cargo tests exercise native verification, extraction, permissions, replacement, rollback, and readiness deadlines with local fixtures and inert launch mocks. Native permission and desktop tests need an elevated Windows desktop session; no production secrets are needed. See [Windows updater maintenance](docs/windows-updater.md#local-verification) for verification details and the optional live metadata test.
 
 Before publishing a Windows release, manually check Alt+Tab, Shift+Alt+Tab, Win+Tab, opening the switcher over Start and Search, and typing and editing a filter with an AltGr layout. Also verify a real install, update, and relaunch in a disposable Windows VM, starting from the autostart task and using a throwaway release repository or tag. Script mocks and hidden-window tests do not replace these checks.
 
@@ -52,7 +51,7 @@ The app pins `scripts/windows/update-signing.pub`. The `windows-release` GitHub 
 
 Keep this Windows key across releases. Its recovery files live under `windows-update/` in the private [vibeslop/release-signing](https://github.com/vibeslop/release-signing/tree/main/windows-update) repository, encrypted with age to the existing maintainer SSH recipients. Restore the same pair into `windows-release`; do not regenerate it as part of a normal release. The existing Mac rekey script does not cover the Windows folder, which must be re-encrypted separately when recipients change. See [Windows updater maintenance](docs/windows-updater.md) for recovery, key rotation and the trust boundary.
 
-The updater's isolated environment and explicit module imports constrain its scripts. Windows PowerShell 5.1 and .NET Framework initialize before those scripts run, so this is not a sandbox for per-user Windows or .NET runtime startup configuration. A relaunched GUI process receives a fresh user environment; it does not inherit the helper's restricted or temporary environment.
+The updater runs inside the executable using WinHTTP and Windows APIs, with no script interpreter. Its temporary helper runs with a restricted environment. A relaunched GUI process receives a fresh user environment; it does not inherit the helper's restricted or temporary environment.
 
 Running the workflow by hand builds a tag's Windows archive alone. Select that same tag as the workflow ref and the `tag` input; a branch ref fails before draft creation. Re-running the tag's own run rebuilds both.
 

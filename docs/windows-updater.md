@@ -1,5 +1,11 @@
 # Windows update authenticity
 
+Windows checks and installs updates inside the Rust executable. HTTPS uses WinHTTP, SHA-256 uses Windows CNG, JSON uses `serde_json`, and ZIP extraction uses `zip` with the Rust `flate2` backend. No PowerShell, curl, script file, or script interpreter runs during updates.
+
+Each HTTP request has one deadline covering connection setup, redirects, response headers, and body reads. The update worker waits for bounded asynchronous WinHTTP completions and closes the request when its deadline expires. Pending read buffers remain owned until WinHTTP reports that the request has finished closing.
+
+Windows locks a running executable, so the final replacement uses a temporary copy of the current AltTabio executable in a private `--apply-update` mode. It runs as a GUI-subsystem process without a console, acquires and validates the original process handle before acknowledging readiness, then waits for that process to exit. Only an explicit approval marker permits replacement and restart. The new app receives a normal user environment built by Windows, with no inherited helper configuration. The locked helper image stays in its protected staging directory until a later maintenance pass can remove it.
+
 Windows updates use [Minisign](https://jedisct1.github.io/minisign/), with prehashed Ed25519 signatures. The app embeds `scripts/windows/update-signing.pub`; neither the release API nor an asset can supply a trusted replacement key. The runtime uses [`minisign-verify` 0.3.0](https://github.com/jedisct1/rust-minisign-verify), a maintained verifier with no external dependencies. Key generation and signing use [`minisign` 0.10.0](https://github.com/jedisct1/rust-minisign) in the separate `tools/windows-update-signing` package. Signing and password-derivation dependencies are absent from the app's dependency tree. No custom cryptography is implemented.
 
 ## What is authenticated
@@ -12,7 +18,7 @@ AltTabio windows update v1; version=1.3.0; platform=windows-x64; asset=AltTabio-
 
 This binds the archive to AltTabio, the protocol, version, platform and asset name. Editing the comment breaks its global signature. A correctly signed archive from another version or platform is also rejected. Legacy non-prehashed signatures are not accepted.
 
-The release list remains untrusted discovery metadata. The updater selects a newer stable published version, rechecks that release, requires exact GitHub asset URLs and a unique archive and signature, and checks GitHub's archive digest and reported size. Limits remain 100 MiB for archives, 4 KiB for signatures and 50 MiB for the extracted executable. The blocking worker downloads into a protected staging directory, verifies the full archive and signed identity with the embedded key, then invokes extraction. No unsigned archive is opened as a ZIP. It extracts only the unique root `AltTabio.exe` and checks its embedded product version and original filename.
+The release list remains untrusted discovery metadata. The updater selects a newer stable published version, rechecks that release, requires exact GitHub asset URLs and a unique archive and signature, and checks GitHub's archive digest and reported size. Limits remain 100 MiB for archives, 4 KiB for signatures and 50 MiB for the extracted executable. The blocking worker downloads into a protected staging directory, verifies the full archive and signed identity with the embedded key, then invokes extraction. No unsigned archive is opened as a ZIP. It accepts single-disk ZIP32 release archives, rejects duplicate filenames, extracts only the unique root `AltTabio.exe`, and checks its embedded product version and original filename.
 
 The installation-folder ACL checks, protected staging ACL, approval marker, helper readiness handshake, final executable rehash, permission preservation, replacement, rollback and failure cooldown still apply. Input and window callbacks do no verification or network work.
 
@@ -30,7 +36,9 @@ Changing the embedded public key alone strands existing clients. For planned rot
 
 ## Local verification
 
-Run the required Cargo checks and release build, then `powershell.exe -NoProfile -NonInteractive -File scripts/windows/test-updater.ps1`. Rust tests cover archive tampering, signature corruption, key substitution, signed identity mismatches, legacy signatures, bounds and worker ordering. The script generates ephemeral test keys for local archives and exercises download verification, extraction, version checks, final rehash, permissions, approval, replacement and rollback using inert launch mocks. It never launches an updated GUI or publishes anything. These checks do not claim a live GitHub release-to-install test.
+Run the required Cargo checks and release build. Rust tests cover archive tampering, signature corruption, key substitution, signed identity mismatches, legacy signatures, bounds, worker ordering, native metadata validation, extraction, duplicate entries, version resources, final rehash, permissions, approval, replacement, rollback, and readiness deadlines. Native permission and desktop tests need an elevated Windows desktop session. Permission assertions compare the ACEs and DACL protection; Windows may add the auto-inheritance bookkeeping flag when restoring a legacy DACL through `SetNamedSecurityInfoW`.
+
+`cargo test --quiet native_https_reads_live_github_metadata -- --ignored` explicitly exercises WinHTTP against the public GitHub API. It does not download or install a release. Offline replacement tests use inert files and launch mocks. These checks do not claim a live signed GitHub release-to-install test.
 
 ## Measured dependency and size cost
 
@@ -43,3 +51,5 @@ On Windows x64 MSVC, Rust 1.95.0, the unchanged `d04b0ce` baseline and this impl
 | Windows archive including licenses | 488,203 | 512,512 | 24,309 |
 
 The executable cost is 5.14%. A signature sidecar with this comment is 360 bytes. `dumpbin /DEPENDENTS` found no external VC runtime DLL. The app adds one Rust dependency and zero transitive dependencies; the signing tool's larger dependency tree is build tooling and is not shipped. This cost buys archive and release-identity authentication without a native crypto DLL or signing process inside the app.
+
+The later native Windows updater was measured against the script-based updater with the same release profile, static CRT, and `ALTTABIO_RELEASE=1`. The executable grew from 973,824 to 1,133,056 bytes, and an optimally compressed ZIP containing only `AltTabio.exe` grew from 509,793 to 597,657 bytes. The additional runtime crates implement JSON parsing and ZIP/Deflate decoding inside the executable. WinHTTP, CNG, version resources, permissions, environment creation, and process replacement use Windows APIs; no HTTP client, TLS runtime, async runtime, or crypto crate was added.

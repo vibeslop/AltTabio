@@ -128,7 +128,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             general: GeneralSettings {
-                autostart: true,
+                autostart: false,
                 replace_alt_tab: true,
                 replace_win_tab: true,
                 typed_search: true,
@@ -462,6 +462,7 @@ mod tests {
         let settings = SettingsDocument::parse("").settings();
 
         assert_eq!(settings, Settings::default());
+        assert!(!settings.general.autostart);
         assert_eq!(settings.appearance.icon, IconColor::Azure);
         assert!(settings.appearance.compact_list);
         assert!(!settings.appearance.show_app_names);
@@ -475,6 +476,7 @@ mod tests {
         let macos = SettingsDocument::parse("").settings_over(&Settings::macos_default());
 
         assert!(!macos.general.replace_win_tab);
+        assert!(!macos.general.autostart);
         assert!(macos.appearance.preview);
         let mut expected = Settings::default();
         expected.general.replace_win_tab = false;
@@ -483,6 +485,14 @@ mod tests {
         let stored = SettingsDocument::parse("[General]\nReplaceWinTab=true\n")
             .settings_over(&Settings::macos_default());
         assert!(stored.general.replace_win_tab);
+    }
+
+    #[test]
+    fn explicitly_enabled_autostart_is_preserved_on_both_platforms() {
+        let document = SettingsDocument::parse("[General]\nAutostart=true\n");
+        for defaults in [Settings::default(), Settings::macos_default()] {
+            assert!(document.settings_over(&defaults).general.autostart);
+        }
     }
 
     #[test]
