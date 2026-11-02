@@ -1,6 +1,5 @@
 use super::surface::Surface;
 use super::text::TextRun;
-use alttabio::filter_feedback::BACKGROUND_OPACITY;
 use alttabio::text_edit::QueryText;
 use alttabio::theme::{ResolvedTheme, Rgb8};
 use std::cell::{Cell, RefCell};
@@ -9,14 +8,14 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1DCRenderTarget,
     ID2D1Factory, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::{Result, w};
@@ -26,7 +25,6 @@ pub(super) struct Painter {
     factory: ID2D1Factory,
     write: IDWriteFactory,
     query_format: IDWriteTextFormat,
-    label_format: IDWriteTextFormat,
     target: Option<ID2D1DCRenderTarget>,
     surface: Option<Surface>,
     scroll: Cell<f32>,
@@ -46,7 +44,6 @@ impl Painter {
         Ok(Self {
             factory,
             query_format: text_format(&write, 15.0)?,
-            label_format: text_format(&write, 11.0)?,
             write,
             target: None,
             surface: None,
@@ -126,16 +123,12 @@ impl Painter {
         let factor = f32::from(dpi) / 96.0;
         let width = surface.size.cx as f32 / factor;
         let height = surface.size.cy as f32 / factor;
-        let background = match theme {
-            ResolvedTheme::Light => Rgb8::new(255, 255, 255),
-            ResolvedTheme::Dark => Rgb8::new(40, 45, 52),
-        };
         let palette = theme.palette();
         let (fill, edge, text, secondary, selected) = unsafe {
             // SAFETY: all colors remain valid for their synchronous creation calls and the
-            // brushes belong to this live target. Only the background has 50% opacity.
+            // brushes belong to this live target. The field and its text are fully opaque.
             (
-                target.CreateSolidColorBrush(&color(background, BACKGROUND_OPACITY), None)?,
+                target.CreateSolidColorBrush(&color(palette.filter_background, 1.0), None)?,
                 target.CreateSolidColorBrush(&color(palette.window_border, 0.35), None)?,
                 target.CreateSolidColorBrush(&color(palette.primary, 1.0), None)?,
                 target.CreateSolidColorBrush(&color(palette.secondary, 1.0), None)?,
@@ -151,36 +144,24 @@ impl Painter {
             self.scroll.get(),
         )?;
         self.scroll.set(run.scroll);
-        let capsule = D2D1_ROUNDED_RECT {
+        let field = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
                 left: 0.5,
                 top: 0.5,
                 right: width - 0.5,
                 bottom: height - 0.5,
             },
-            radiusX: height / 2.0,
-            radiusY: height / 2.0,
+            radiusX: 6.0,
+            radiusY: 6.0,
         };
         unsafe {
             // SAFETY: every COM resource and stack rectangle stays live on this UI thread. No
             // fallible calls or early returns occur between BeginDraw and EndDraw below.
             target.BeginDraw();
             target.Clear(Some(&D2D1_COLOR_F::default()));
-            target.FillRoundedRectangle(&raw const capsule, &fill);
-            target.DrawRoundedRectangle(&raw const capsule, &edge, 1.0, None);
-            target.DrawText(
-                &"Filter".encode_utf16().collect::<Vec<_>>(),
-                &self.label_format,
-                &D2D_RECT_F {
-                    left: 14.0,
-                    top: 0.0,
-                    right: 48.0,
-                    bottom: height,
-                },
-                &secondary,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
+            target.FillRoundedRectangle(&raw const field, &fill);
+            target.DrawRoundedRectangle(&raw const field, &edge, 1.0, None);
+            draw_search_glyph(target, &secondary, height);
             run.draw(target, &text, &selected);
             draw_clear_glyph(target, &secondary, width, height);
             target.EndDraw(None, None)?;
@@ -212,6 +193,30 @@ impl Painter {
         let mut editor = QueryText::default();
         editor.insert(query);
         self.draw_editor(&editor, width, height, dpi, theme)
+    }
+}
+
+fn draw_search_glyph(target: &ID2D1DCRenderTarget, brush: &ID2D1SolidColorBrush, height: f32) {
+    let center = height / 2.0 - 1.0;
+    unsafe {
+        // SAFETY: the caller holds BeginDraw/EndDraw for this live target and its brush.
+        target.DrawEllipse(
+            &D2D1_ELLIPSE {
+                point: Vector2::new(15.0, center),
+                radiusX: 4.0,
+                radiusY: 4.0,
+            },
+            brush,
+            1.3,
+            None,
+        );
+        target.DrawLine(
+            Vector2::new(18.0, center + 3.0),
+            Vector2::new(22.0, center + 7.0),
+            brush,
+            1.3,
+            None,
+        );
     }
 }
 
@@ -275,18 +280,26 @@ mod tests {
     use crate::win32::ComApartment;
 
     #[test]
-    fn background_is_half_opaque_and_text_is_solid_in_both_themes() -> Result<()> {
+    fn field_is_opaque_in_both_themes_with_only_its_rounded_corners_transparent() -> Result<()> {
         let _apartment = ComApartment::initialize()?;
         let mut painter = Painter::new()?;
         for theme in [ResolvedTheme::Light, ResolvedTheme::Dark] {
-            let surface = painter.draw("firefox", 240, 36, 96, theme)?;
+            let surface = painter.draw("firefox", 240, 32, 96, theme)?;
             let pixels = surface.pixels();
             assert_eq!(pixels[3], 0, "rounded corner must be transparent");
             let plain_background = (10 * 240 + 190) * 4;
-            assert!((127..=128).contains(&pixels[plain_background + 3]));
+            let background = theme.palette().filter_background;
+            assert_eq!(
+                &pixels[plain_background..plain_background + 4],
+                &[background.blue, background.green, background.red, 255]
+            );
             assert!(
-                pixels.chunks_exact(4).any(|pixel| pixel[3] == 255),
-                "text must remain opaque"
+                pixels.chunks_exact(4).enumerate().all(|(index, pixel)| {
+                    !(8..232).contains(&(index % 240))
+                        || !(6..26).contains(&(index / 240))
+                        || pixel[3] == 255
+                }),
+                "the field's entire interior must block the content behind it"
             );
             assert!(
                 pixels
@@ -314,7 +327,7 @@ mod tests {
                 .chunks_exact(4)
                 .any(|pixel| pixel == [selected.blue, selected.green, selected.red, 255])
         );
-        assert_eq!(painter.hit_test(52, 96)?, 0);
+        assert_eq!(painter.hit_test(32, 96)?, 0);
         editor.reset(&"long prefix ".repeat(30));
         let _surface = painter.draw_editor(&editor, 240, 36, 96, ResolvedTheme::Dark)?;
         editor.reset("x");
@@ -339,7 +352,7 @@ mod tests {
         let _apartment = ComApartment::initialize()?;
         let mut painter = Painter::new()?;
         let query = format!("{}latest query", "a long prefix ".repeat(30));
-        let surface = painter.draw(&query, 240, 36, 96, ResolvedTheme::Dark)?;
+        let surface = painter.draw(&query, 240, 32, 96, ResolvedTheme::Dark)?;
         let opaque_query_pixels = surface
             .pixels()
             .chunks_exact(4)
@@ -347,7 +360,7 @@ mod tests {
             .filter(|(index, pixel)| {
                 let x = index % 240;
                 let y = index / 240;
-                (60..195).contains(&x) && (8..28).contains(&y) && pixel[3] > 245
+                (36..195).contains(&x) && (6..26).contains(&y) && pixel[0] > 150
             })
             .count();
         assert!(

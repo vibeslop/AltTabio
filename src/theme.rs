@@ -14,6 +14,7 @@ impl ResolvedTheme {
         match self {
             Self::Light => ThemePalette {
                 background: Rgb8::new(243, 243, 243),
+                filter_background: Rgb8::new(255, 255, 255),
                 window_border: Rgb8::new(154, 154, 154),
                 preview_border: Rgb8::new(166, 166, 166),
                 selected: Rgb8::new(204, 228, 247),
@@ -26,6 +27,7 @@ impl ResolvedTheme {
             },
             Self::Dark => ThemePalette {
                 background: Rgb8::new(14, 16, 20),
+                filter_background: Rgb8::new(30, 34, 40),
                 window_border: Rgb8::new(97, 97, 100),
                 preview_border: Rgb8::new(107, 110, 117),
                 selected: Rgb8::new(46, 87, 148),
@@ -57,6 +59,7 @@ impl Rgb8 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ThemePalette {
     pub background: Rgb8,
+    pub filter_background: Rgb8,
     pub window_border: Rgb8,
     pub preview_border: Rgb8,
     pub selected: Rgb8,
@@ -280,6 +283,7 @@ mod tests {
             ResolvedTheme::Light.palette(),
             ThemePalette {
                 background: Rgb8::new(243, 243, 243),
+                filter_background: Rgb8::new(255, 255, 255),
                 window_border: Rgb8::new(154, 154, 154),
                 preview_border: Rgb8::new(166, 166, 166),
                 selected: Rgb8::new(204, 228, 247),

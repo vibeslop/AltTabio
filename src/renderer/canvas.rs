@@ -1,5 +1,6 @@
 use super::{PreviewFrame, RenderOptions, RenderResources, TextFormats};
 use alttabio::close_button::CloseButtonVisualState;
+use alttabio::filter_feedback::list_height;
 use alttabio::overlay_layout::{
     LogicalRect, OverlayLayout, close_glyph_geometry, task_text_vertical_layout,
     window_frame_geometry,
@@ -39,7 +40,8 @@ impl Canvas<'_> {
         };
         let layout = self.layout;
         let list_width = layout.list_width(size.width, self.scale);
-        let visible_rows = layout.visible_row_count(size.height);
+        let list_height = list_height(size.height, layout, !switcher.filter().is_empty());
+        let visible_rows = layout.visible_row_count(list_height);
         let visible_range = switcher.visible_range(visible_rows);
         let start = visible_range.start;
         let selected_handle = switcher.selected_task().map(|task| task.window_handle);
@@ -56,7 +58,7 @@ impl Canvas<'_> {
             self.draw_preview_frame(frame);
         }
         self.draw_divider(list_width, size.height);
-        if switcher.visible_task_count() == 0 && !switcher.filter().is_empty() {
+        if visible_rows > 0 && switcher.visible_task_count() == 0 && !switcher.filter().is_empty() {
             self.draw_text(
                 encode(utf16, "No matching windows"),
                 &self.text.detail,
@@ -79,13 +81,13 @@ impl Canvas<'_> {
             );
         }
         self.draw_scroll_indicators(layout.scroll_indicators(
-            size.height,
+            list_height,
             list_width,
             visible_range,
             switcher.visible_task_count(),
         ));
         // Icons share the text/selection frame; no window-DC pass or full-frame GDI copy follows.
-        let icon_failure = icons.draw(target, switcher, self.options, size.height);
+        let icon_failure = icons.draw(target, switcher, self.options, list_height);
         let presented = unsafe {
             // SAFETY: the target is valid on this UI thread, and this ends the BeginDraw above on
             // it; nothing between them returns early, so every BeginDraw gets its EndDraw.

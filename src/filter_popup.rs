@@ -5,10 +5,7 @@ mod surface;
 mod text;
 
 use crate::app_messages::{FilterPointerAction, WM_CLEAR_FILTER, WM_FILTER_POINTER};
-use crate::win32::{
-    module_instance, point_from_lparam, rect_from_native, set_window_user_data,
-    work_area_near_window,
-};
+use crate::win32::{module_instance, point_from_lparam, rect_from_native, set_window_user_data};
 use alttabio::dialog_layout::Rect;
 use alttabio::filter_feedback::popup_bounds;
 use alttabio::overlay_layout::layout_dpi;
@@ -162,12 +159,7 @@ impl FilterPopup {
             GetWindowRect(owner, &raw mut panel)?;
             GetDpiForWindow(owner)
         };
-        let Some(bounds) = popup_bounds(
-            rect_from_native(panel),
-            work_area_near_window(owner)?,
-            window_dpi,
-            compact,
-        ) else {
+        let Some(bounds) = popup_bounds(rect_from_native(panel), window_dpi, compact) else {
             self.hide();
             return Ok(());
         };
@@ -554,7 +546,12 @@ mod tests {
             assert_eq!(GetForegroundWindow(), foreground);
         }
         assert_eq!(current, original);
-        assert!(bounds.top < original.top && bounds.bottom > original.top);
+        assert!(bounds.left > original.left && bounds.right < original.right);
+        assert!(bounds.top > original.top && bounds.bottom < original.bottom);
+        // SAFETY: the owned fixture is still live and DPI is a scalar query.
+        let dpi = unsafe { GetDpiForWindow(owner.0) };
+        let expected = popup_bounds(rect_from_native(original), dpi, true);
+        assert_eq!(expected, Some(rect_from_native(bounds)));
         let mut message = MSG::default();
         let click = |x: i32| {
             let point = LPARAM(

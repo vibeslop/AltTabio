@@ -73,8 +73,7 @@ impl OverlayLayout {
         reason = "the clamped positive client height yields a small on-screen row count"
     )]
     pub fn visible_row_count(self, client_height: f32) -> usize {
-        let available_height =
-            (client_height - self.list_top() - self.outer_padding).max(self.row_height);
+        let available_height = (client_height - self.list_top() - self.outer_padding).max(0.0);
         ((available_height + self.row_gap) / (self.row_height + self.row_gap)) as usize
     }
 

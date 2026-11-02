@@ -38,9 +38,10 @@ impl AppHost {
 
 impl App {
     pub(super) fn handle_mouse_wheel(&mut self, delta: i32) {
-        let visible_rows = self
-            .renderer
-            .visible_row_count(self.settings.appearance.compact_list);
+        let visible_rows = self.renderer.visible_row_count(
+            self.settings.appearance.compact_list,
+            self.session.filter_visible(),
+        );
         if self.session.handle_mouse_wheel(delta, visible_rows) == SwitcherEffect::Redraw {
             // A queued or synthetic mouse move at this position must not select the row that
             // scrolling just moved under the pointer.
