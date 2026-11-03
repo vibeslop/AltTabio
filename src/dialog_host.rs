@@ -114,6 +114,11 @@ enum LoopExit {
 }
 
 impl<S: DialogWindow> ModalDialog<S> {
+    /// The same owner can live in the application's outer loop for a modeless window.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.host().is_ok_and(|host| host.done.get())
+    }
+
     /// Creates the hidden dialog window around `state`.
     pub(crate) fn create(
         instance: HINSTANCE,

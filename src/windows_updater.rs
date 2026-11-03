@@ -107,14 +107,45 @@ pub struct StagedUpdate {
     target: PathBuf,
 }
 
-pub fn stage(update: &Update) -> Result<StagedUpdate, String> {
+#[derive(Clone, Copy)]
+pub enum Progress {
+    Downloading { received: u64, total: u64 },
+    Verifying,
+}
+
+pub struct StageError {
+    pub stage: alttabio::update_status::Stage,
+    pub detail: String,
+}
+
+pub fn stage(
+    update: &Update,
+    mut progress: impl FnMut(Progress),
+) -> Result<StagedUpdate, StageError> {
+    let mut phase = alttabio::update_status::Stage::Download;
+    stage_inner(update, &mut |event| {
+        if matches!(event, Progress::Verifying) {
+            phase = alttabio::update_status::Stage::Verify;
+        }
+        progress(event);
+    })
+    .map_err(|detail| StageError {
+        stage: phase,
+        detail,
+    })
+}
+
+fn stage_inner(
+    update: &Update,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<StagedUpdate, String> {
     if !is_release_build() {
         return Err("Development builds cannot install updates".to_owned());
     }
     let target = std::env::current_exe().map_err(|error| error.to_string())?;
     validate_update_target(&target)?;
     let work = WorkFolder::create(&target)?;
-    download::stage(update.version, &work.path)?;
+    download::stage(update.version, &work.path, progress)?;
     let hash = archive::authenticate_and_extract(
         update.version,
         &work.path,

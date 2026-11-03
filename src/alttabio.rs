@@ -29,4 +29,5 @@ pub mod text_edit;
 pub mod theme;
 pub mod update;
 pub mod update_signature;
+pub mod update_status;
 pub mod window_command;

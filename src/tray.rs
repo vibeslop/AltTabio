@@ -181,7 +181,7 @@ impl TrayIcon {
             return Ok(());
         }
         let label = if installed {
-            w!("Relaunch to Update")
+            w!("Update status...")
         } else {
             w!("Check for Updates...")
         };

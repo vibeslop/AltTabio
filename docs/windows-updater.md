@@ -2,6 +2,10 @@
 
 Windows checks and installs updates inside the Rust executable. HTTPS uses WinHTTP, SHA-256 uses Windows CNG, JSON uses `serde_json`, and ZIP extraction uses `zip` with the Rust `flate2` backend. No PowerShell, curl, script file, or script interpreter runs during updates.
 
+Manual checks open a modeless status window immediately. The same window shows the result, measured download progress, verification, and restart preparation. Closing it leaves background work running; results do not reopen it. Automatic updates remain silent. Viewing an automatic download does not approve an immediate restart: only Install and restart, Retry and restart, or Restart now does that. The existing automatic restart while the user is away remains governed by the automatic-update setting.
+
+The status window follows the app theme, supports keyboard navigation and DPI changes, and keeps technical errors in a selectable, scrollable details field. Local development builds show an informational state and still cannot install published releases. Folder-permission checks and the protected update handoff remain required.
+
 Each HTTP request has one deadline covering connection setup, redirects, response headers, and body reads. The update worker waits for bounded asynchronous WinHTTP completions and closes the request when its deadline expires. Pending read buffers remain owned until WinHTTP reports that the request has finished closing.
 
 Windows locks a running executable, so the final replacement uses a temporary copy of the current AltTabio executable in a private `--apply-update` mode. It runs as a GUI-subsystem process without a console, acquires and validates the original process handle before acknowledging readiness, then waits for that process to exit. Only an explicit approval marker permits replacement and restart. The new app receives a normal user environment built by Windows, with no inherited helper configuration. The locked helper image stays in its protected staging directory until a later maintenance pass can remove it.

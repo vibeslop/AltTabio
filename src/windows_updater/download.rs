@@ -84,20 +84,36 @@ fn asset<'a>(
     Ok((url, size))
 }
 
-pub(super) fn stage(version: Version, work: &Path) -> Result<(), String> {
-    stage_with(
+pub(super) fn stage(
+    version: Version,
+    work: &Path,
+    progress: &mut dyn FnMut(super::Progress),
+) -> Result<(), String> {
+    stage_with_progress(
         version,
         work,
         &json(&format!("{API}/tags/v{version}"))?,
         |url, limit, output| get(url, limit, Duration::from_mins(10), output),
+        progress,
     )
 }
 
+#[cfg(test)]
 fn stage_with(
     version: Version,
     work: &Path,
     release: &Value,
     fetch: impl Fn(&str, u64, &mut dyn Write) -> Result<(), String>,
+) -> Result<(), String> {
+    stage_with_progress(version, work, release, fetch, &mut |_| {})
+}
+
+fn stage_with_progress(
+    version: Version,
+    work: &Path,
+    release: &Value,
+    fetch: impl Fn(&str, u64, &mut dyn Write) -> Result<(), String>,
+    progress: &mut dyn FnMut(super::Progress),
 ) -> Result<(), String> {
     if release["tag_name"].as_str() != Some(&format!("v{version}"))
         || release["draft"].as_bool() != Some(false)
@@ -130,12 +146,27 @@ fn stage_with(
     ] {
         let path = work.join(name);
         let mut output = std::fs::File::create_new(&path).map_err(|error| error.to_string())?;
-        fetch(url, size, &mut output)?;
+        if name == "download.zip" {
+            progress(super::Progress::Downloading {
+                received: 0,
+                total: size,
+            });
+            let mut counted = ProgressWriter {
+                output: &mut output,
+                progress,
+                received: 0,
+                total: size,
+            };
+            fetch(url, size, &mut counted)?;
+        } else {
+            fetch(url, size, &mut output)?;
+        }
         output.sync_all().map_err(|error| error.to_string())?;
         if output.metadata().map_err(|error| error.to_string())?.len() != size {
             return Err("The downloaded update has the wrong size".to_owned());
         }
     }
+    progress(super::Progress::Verifying);
     if !sha256(&work.join("download.zip"))?.eq_ignore_ascii_case(digest) {
         return Err("The downloaded archive failed its SHA-256 check".to_owned());
     }
@@ -151,6 +182,28 @@ fn json(url: &str) -> Result<Value, String> {
     get(url, MAX_METADATA, Duration::from_secs(30), &mut bytes)?;
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("Unreadable GitHub release metadata: {error}"))
+}
+
+struct ProgressWriter<'a> {
+    output: &'a mut dyn Write,
+    progress: &'a mut dyn FnMut(super::Progress),
+    received: u64,
+    total: u64,
+}
+
+impl Write for ProgressWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.output.write(bytes)?;
+        self.received = self.received.saturating_add(written as u64);
+        (self.progress)(super::Progress::Downloading {
+            received: self.received,
+            total: self.total,
+        });
+        Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
+    }
 }
 
 #[cfg(test)]

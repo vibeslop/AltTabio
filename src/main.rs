@@ -43,6 +43,8 @@ mod task_query;
 #[cfg(windows)]
 mod tray;
 #[cfg(windows)]
+mod update_window;
+#[cfg(windows)]
 mod win32;
 #[cfg(windows)]
 mod win_events;
