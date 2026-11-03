@@ -207,7 +207,8 @@ impl Canvas<'_> {
     ) {
         let layout = self.layout;
         let options = self.options;
-        let close_button = selected.then(|| layout.close_button_bounds(bounds));
+        let close_button = (selected && self.close_button_state.is_some())
+            .then(|| layout.close_button_bounds(bounds));
         if selected {
             unsafe {
                 // SAFETY: the target and brush are valid on this UI thread and the rectangle
