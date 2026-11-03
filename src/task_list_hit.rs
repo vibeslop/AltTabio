@@ -1,7 +1,7 @@
 //! Which row of the overlay's task list, or which close button, a point lands on.
 
 use crate::filter_feedback::list_height;
-use crate::overlay_layout::{for_compact_list, layout_scale};
+use crate::overlay_layout::{LogicalRect, for_compact_list, layout_scale};
 use crate::switcher::Switcher;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +17,30 @@ impl TaskListHit {
             Self::Task(position) | Self::CloseButton(position) => position,
         }
     }
+}
+
+/// The whole left pane, including row gaps and padding up to the preview divider.
+#[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "Win32 client coordinates and DPI values are small integers represented as f32"
+)]
+pub fn pointer_in_list_pixels(
+    client_pixels: (i32, i32),
+    point_pixels: (i32, i32),
+    window_dpi: u32,
+    compact_list: bool,
+) -> bool {
+    let scale = layout_scale(window_dpi);
+    let layout = for_compact_list(compact_list);
+    LogicalRect {
+        left: 0.0,
+        top: 0.0,
+        right: (layout.list_width(client_pixels.0 as f32 / scale, scale) + layout.outer_padding)
+            .min(client_pixels.0 as f32 / scale),
+        bottom: client_pixels.1 as f32 / scale,
+    }
+    .contains(point_pixels.0 as f32 / scale, point_pixels.1 as f32 / scale)
 }
 
 #[must_use]
@@ -88,6 +112,31 @@ mod tests {
     use crate::settings::Settings;
     use crate::switcher::SwitchTask;
     use TaskListHit::{CloseButton, Task};
+
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the fixed test client and its pane boundaries fit inside i32"
+    )]
+    fn pane_hover_includes_gaps_and_padding_but_excludes_the_preview_and_outside() {
+        for compact in [false, true] {
+            for dpi in [96, 120, 144, 192] {
+                let client = (1_200, 900);
+                let scale = layout_scale(dpi);
+                let layout = for_compact_list(compact);
+                let divider = ((layout.list_width(1_200.0 / scale, scale) + layout.outer_padding)
+                    * scale)
+                    .ceil() as i32;
+                let gap_y = ((layout.list_top() + layout.row_height + 0.5) * scale) as i32;
+                for point in [(0, 0), (20, gap_y), (divider - 1, 899), (20, 899)] {
+                    assert!(pointer_in_list_pixels(client, point, dpi, compact));
+                }
+                for point in [(-1, 20), (20, -1), (divider, 20), (1_200, 20), (20, 900)] {
+                    assert!(!pointer_in_list_pixels(client, point, dpi, compact));
+                }
+            }
+        }
+    }
 
     fn hit_test_task_list(
         switcher: &mut Switcher,

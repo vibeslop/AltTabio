@@ -113,6 +113,7 @@ impl App {
     }
 
     pub(super) fn paint(&mut self) {
+        self.refresh_close_button_visibility();
         let mut paint = PAINTSTRUCT::default();
         let dc = unsafe {
             // SAFETY: the HWND is live during WM_PAINT and `paint` is a writable PAINTSTRUCT.
