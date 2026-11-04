@@ -64,6 +64,8 @@ impl ReplayedKeyEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Switch(i32),
+    /// Raw wheel delta captured while the overlay is open; positive scrolls up.
+    OverlayWheel(i32),
     Navigate(i32),
     ActivateSelected,
     SelectFirst,
@@ -72,7 +74,10 @@ pub enum InputAction {
     CloseSelected,
     WindowCommand(WindowCommand),
     ActivateVisiblePosition(usize),
-    NumberKey { position: usize, text: Option<char> },
+    NumberKey {
+        position: usize,
+        text: Option<char>,
+    },
     AltReleased,
     AppendSearchCharacter(char),
     BackspaceSearch,
@@ -228,6 +233,15 @@ impl HookState {
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
         core::mem::take(&mut self.replayed_key_events)
+    }
+
+    #[must_use]
+    pub fn process_overlay_wheel(&self, delta: i32) -> HookOutcome {
+        if delta != 0 && self.overlay_active && !self.interception.suspended {
+            HookOutcome::one(true, InputAction::OverlayWheel(delta))
+        } else {
+            HookOutcome::default()
+        }
     }
 
     #[must_use]
@@ -3270,5 +3284,54 @@ mod tests {
                 None
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod overlay_wheel_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_wheel_is_captured_only_while_the_overlay_is_open() {
+        let mut state = HookState::default();
+        assert_eq!(state.process_overlay_wheel(-30), HookOutcome::default());
+        state.set_overlay_active(true);
+        assert_eq!(state.process_overlay_wheel(0), HookOutcome::default());
+        let wheel = state.process_overlay_wheel(-30);
+        assert!(
+            wheel.suppress,
+            "wheel input leaked to the background application"
+        );
+        assert_eq!(
+            wheel.actions().collect::<Vec<_>>(),
+            [InputAction::OverlayWheel(-30)]
+        );
+        state.set_interception_suspended(true);
+        state.set_overlay_active(true);
+        assert_eq!(state.process_overlay_wheel(-30), HookOutcome::default());
+    }
+
+    #[test]
+    fn ordinary_overlay_wheel_preserves_alt_release_completion() {
+        let mut state = HookState::default();
+        let settings = HookSettings::default();
+        let _open = state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            settings,
+        );
+        state.set_overlay_active(true);
+        assert_eq!(
+            state.process_overlay_wheel(-120).actions().next(),
+            Some(InputAction::OverlayWheel(-120))
+        );
+        let release =
+            state.process_key(KeyEvent::released(Key::Alt, Modifiers::default()), settings);
+        assert_eq!(release.actions().next(), Some(InputAction::AltReleased));
     }
 }
