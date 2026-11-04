@@ -13,18 +13,26 @@ use windows::Win32::Security::{
     GetTokenInformation, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_QUERY,
     TokenElevation,
 };
+use windows::Win32::System::Com::{
+    CLSCTX_LOCAL_SERVER, CoCreateInstance, IDispatch, IServiceProvider,
+};
 use windows::Win32::System::Threading::{
     CreateProcessWithTokenW, LOGON_WITH_PROFILE, OpenProcess, OpenProcessToken,
     PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_TERMINATE, STARTUPINFOW, TerminateProcess,
 };
+use windows::Win32::System::Variant::VARIANT;
+use windows::Win32::UI::Shell::{
+    IShellBrowser, IShellDispatch2, IShellFolderViewDual, IShellWindows, SID_STopLevelBrowser,
+    SVGIO_BACKGROUND, SWC_DESKTOP, SWFO_NEEDDISPATCH, ShellWindows,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetShellWindow,
     GetWindowThreadProcessId, HMENU, MF_STRING, PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-    SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TrackPopupMenu, WM_CLOSE,
+    SW_SHOWNORMAL, SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, WM_CLOSE,
 };
-use windows::core::{PCWSTR, PWSTR, w};
+use windows::core::{BSTR, Interface, PCWSTR, w};
 
 pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let created = unsafe {
@@ -198,7 +206,7 @@ fn run_window_process(window: HWND, process_identity: ProcessIdentity) -> bool {
             return false;
         }
     };
-    if let Err(error) = launch_with_shell_token(&path, None) {
+    if let Err(error) = launch_with_shell_token(&path) {
         eprintln!(
             "Could not start {} without elevation: {error}",
             path.display()
@@ -267,21 +275,46 @@ pub(super) fn open_releases() -> Result<(), String> {
 }
 
 fn open_web_page(url: &str) -> Result<(), String> {
-    let system = crate::win32::system_directory()?;
-    let explorer = system
-        .parent()
-        .ok_or_else(|| "Windows has no system root".to_owned())?
-        .join("explorer.exe");
-    if !current_process_is_elevated()? {
-        let _launcher = std::process::Command::new(&explorer)
-            .arg(url)
-            .spawn()
-            .map_err(|error| format!("Could not open the repository page: {error}"))?;
-        return Ok(());
-    }
-    launch_with_shell_token(&explorer, Some(url))
+    let _apartment = crate::win32::ComApartment::initialize()
+        .map_err(|error| format!("Could not initialize Windows shell access: {error}"))?;
+    // Ask the existing desktop shell to open the URL for its user. Creating a process with
+    // Explorer's token can be denied even when the token can be opened successfully. The
+    // desktop automation object also keeps the browser out of the app's elevated context.
+    let result = unsafe {
+        // SAFETY: COM is initialized on this thread. Every interface is owned and used only
+        // here; all variants, strings, and output pointers remain live for their synchronous
+        // calls. FindWindowSW selects the existing desktop rather than creating a shell.
+        (|| -> windows::core::Result<()> {
+            let shell_windows: IShellWindows =
+                CoCreateInstance(&ShellWindows, None, CLSCTX_LOCAL_SERVER)?;
+            let empty = VARIANT::default();
+            let mut desktop_window = 0;
+            let desktop = shell_windows.FindWindowSW(
+                &raw const empty,
+                &raw const empty,
+                SWC_DESKTOP,
+                &raw mut desktop_window,
+                SWFO_NEEDDISPATCH,
+            )?;
+            let provider: IServiceProvider = desktop.cast()?;
+            let browser: IShellBrowser = provider.QueryService(&SID_STopLevelBrowser)?;
+            let view = browser.QueryActiveShellView()?;
+            let background: IDispatch = view.GetItemObject(SVGIO_BACKGROUND)?;
+            let folder: IShellFolderViewDual = background.cast()?;
+            let shell: IShellDispatch2 = folder.Application()?.cast()?;
+            shell.ShellExecute(
+                &BSTR::from(url),
+                &empty,
+                &empty,
+                &VARIANT::from("open"),
+                &VARIANT::from(SW_SHOWNORMAL.0),
+            )
+        })()
+    };
+    result.map_err(|error| format!("Could not open the web page through Windows Explorer: {error}"))
 }
 
+#[cfg(test)]
 fn current_process_is_elevated() -> Result<bool, String> {
     let mut token = HANDLE::default();
     // SAFETY: the current-process handle is borrowed; the token output is writable and its
@@ -329,37 +362,27 @@ fn unelevated_shell_token() -> Result<OwnedHandle, String> {
     Ok(shell_token)
 }
 
-fn launch_with_shell_token(path: &std::path::Path, argument: Option<&str>) -> Result<(), String> {
+fn launch_with_shell_token(path: &std::path::Path) -> Result<(), String> {
     let shell_token = unelevated_shell_token()?;
     let application = path
         .as_os_str()
         .encode_wide()
         .chain([0])
         .collect::<Vec<_>>();
-    // The only argument is the fixed HTTPS repository URL. CreateProcess parses arguments,
-    // not shell syntax; quoting keeps the executable path and URL as separate arguments.
-    let mut command_line = argument.map(|argument| {
-        let mut line = vec![u16::from(b'"')];
-        line.extend(path.as_os_str().encode_wide());
-        line.extend("\" \"".encode_utf16());
-        line.extend(argument.encode_utf16());
-        line.extend("\"\0".encode_utf16());
-        line
-    });
     let mut startup = STARTUPINFOW {
         cb: u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or_default(),
         ..STARTUPINFOW::default()
     };
     let mut process = PROCESS_INFORMATION::default();
     unsafe {
-        // SAFETY: the shell token is a live primary token. The application and optional mutable
-        // command line are terminated and live through this call, as are the writable outputs.
+        // SAFETY: the shell token is a live primary token. The application is terminated and
+        // lives through this call, as do the writable outputs. No arguments are supplied.
         // Windows retains no Rust references after synchronous process creation returns.
         CreateProcessWithTokenW(
             shell_token.0,
             LOGON_WITH_PROFILE,
             PCWSTR(application.as_ptr()),
-            command_line.as_mut().map(|line| PWSTR(line.as_mut_ptr())),
+            None,
             PROCESS_CREATION_FLAGS::default(),
             None,
             PCWSTR::null(),
@@ -476,6 +499,15 @@ mod tests {
             |_, _| Some(()),
             |_| false
         ));
+    }
+
+    #[test]
+    #[ignore = "requires elevation and an interactive Windows shell; opens the repository in the browser"]
+    fn repository_link_opens_from_elevated_process() {
+        assert_eq!(current_process_is_elevated(), Ok(true));
+        let _apartment =
+            crate::win32::ComApartment::initialize().unwrap_or_else(|error| panic!("{error}"));
+        open_repository().unwrap_or_else(|error| panic!("{error}"));
     }
 
     #[test]
