@@ -302,6 +302,102 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_mouse_number_keeps_enter_owned_until_deferred_focus_completes() {
+        use crate::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
+        use crate::input::{Key, KeyEvent, Modifiers};
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+        use std::time::Duration;
+        for typed_search in [false, true] {
+            let mut hook = HookState::default();
+            let settings = HookSettings {
+                typed_search,
+                search_active: typed_search,
+                ..ENABLED
+            };
+            let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
+            let opening = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+            let Some(first) = opening.actions().next() else {
+                panic!("gesture must open");
+            };
+            let mut deferred = DeferredSwitch::new(first);
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search,
+                release_alt_switches: true,
+            });
+            for action in deferred.take_preview_actions() {
+                let SwitcherEffect::Open { selection_delta } = session.handle_input(action) else {
+                    panic!("gesture must preview");
+                };
+                session.open(
+                    [
+                        SwitchTask::new(1, 10, "One", "one"),
+                        SwitchTask::new(2, 20, "Two", "two"),
+                    ],
+                    selection_delta,
+                );
+            }
+            hook.set_overlay_active(true);
+            let number = hook.process_key(
+                KeyEvent::pressed(Key::Digit(9), Modifiers::default()).with_text('9'),
+                settings,
+            );
+            assert!(number.suppress);
+            for action in number.actions() {
+                assert!(deferred.push(action));
+            }
+            assert!(
+                hook.process_key(
+                    KeyEvent::released(Key::Digit(9), Modifiers::default()),
+                    settings
+                )
+                .suppress
+            );
+            assert!(deferred.take_preview_actions().is_empty());
+            let enter = hook.process_key(
+                KeyEvent::pressed(Key::Enter, Modifiers::default()),
+                settings,
+            );
+            assert!(
+                enter.suppress,
+                "the pending panel must own Enter before receiving focus"
+            );
+            assert_eq!(enter.actions().next(), Some(InputAction::ActivateSelected));
+            for action in enter.actions() {
+                assert!(deferred.push(action));
+            }
+            assert!(
+                hook.process_key(
+                    KeyEvent::released(Key::Enter, Modifiers::default()),
+                    settings
+                )
+                .suppress
+            );
+            let button_release = hook.process_mouse(MouseEvent::RightButtonReleased, settings);
+            assert!(button_release.suppress);
+            assert!(button_release.actions().next().is_none());
+            assert_eq!(
+                deferred.poll(true, Duration::ZERO),
+                DeferredSwitchPoll::Wait
+            );
+            let DeferredSwitchPoll::Ready(actions) = deferred.poll(false, Duration::ZERO) else {
+                panic!("focus must release queued input");
+            };
+            let mut activations = Vec::new();
+            for action in actions {
+                match session.handle_input(action) {
+                    SwitcherEffect::None => {}
+                    SwitcherEffect::Activate(target) => activations.push(target),
+                    effect => panic!("unexpected deferred effect: {effect:?}"),
+                }
+            }
+            assert_eq!(activations, [20]);
+            assert!(!session.is_visible());
+        }
+    }
+
+    #[test]
     fn inactive_capture_sync_preserves_pending_clicks_and_partial_wheels() {
         let mut click = HookState::default();
         let _press = click.process_mouse(MouseEvent::RightButtonPressed, ENABLED);

@@ -775,8 +775,9 @@ impl HookState {
         if self.owned_key_release_pending(event.key) {
             return Some(HookOutcome::suppressed());
         }
-        let mouse_enter = event.key == Key::Enter && self.mouse.is_active();
-        if !self.switch_gesture_active() && !mouse_enter {
+        let overlay_enter =
+            event.key == Key::Enter && (self.overlay_active || self.mouse.is_active());
+        if !self.switch_gesture_active() && !overlay_enter {
             return None;
         }
 

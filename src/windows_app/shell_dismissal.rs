@@ -167,6 +167,35 @@ mod tests {
 
     #[test]
     fn two_mouse_gestures_complete_in_order_after_shell_dismissal() -> Result<()> {
+        assert_deferred_mouse_completion(
+            &[
+                InputAction::MouseWheelReleased,
+                InputAction::RightButtonPressed,
+                InputAction::MouseWheel(2),
+                InputAction::MouseWheelReleased,
+            ],
+            1,
+            &[20, 30],
+        )
+    }
+
+    #[test]
+    fn ordinary_wheel_cannot_overtake_a_deferred_mouse_release() -> Result<()> {
+        assert_deferred_mouse_completion(
+            &[
+                InputAction::MouseWheelReleased,
+                InputAction::OverlayWheel(-120),
+            ],
+            0,
+            &[20],
+        )
+    }
+
+    fn assert_deferred_mouse_completion(
+        later: &[InputAction],
+        pending_openings: usize,
+        expected_activations: &[isize],
+    ) -> Result<()> {
         let _apartment = ComApartment::initialize()?;
         let owner = Owner(unsafe {
             // SAFETY: STATIC is a system class; the test owns this hidden, off-screen popup.
@@ -214,12 +243,7 @@ mod tests {
             started: Instant::now(),
             input,
         });
-        for action in [
-            InputAction::MouseWheelReleased,
-            InputAction::RightButtonPressed,
-            InputAction::MouseWheel(2),
-            InputAction::MouseWheelReleased,
-        ] {
+        for &action in later {
             app.handle_hook_input(action, WPARAM(0));
         }
         assert_eq!(
@@ -232,10 +256,11 @@ mod tests {
         let Some(mut pending) = app.pending_shell.take() else {
             panic!("shell is still dismissing");
         };
-        assert_eq!(pending.input.pending_openings(), 1);
+        assert_eq!(pending.input.pending_openings(), pending_openings);
         let DeferredSwitchPoll::Ready(actions) = pending.input.poll(false, Duration::ZERO) else {
             panic!("input must resume when the shell releases focus");
         };
+        assert_eq!(actions, later);
         let mut activations = Vec::new();
         for action in actions {
             match app.session.handle_input(action) {
@@ -247,7 +272,7 @@ mod tests {
                 effect => panic!("unexpected queued effect: {effect:?}"),
             }
         }
-        assert_eq!(activations, [20, 30]);
+        assert_eq!(activations, expected_activations);
         assert!(!app.session.is_visible());
         Ok(())
     }

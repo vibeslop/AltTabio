@@ -227,10 +227,6 @@ impl App {
     }
 
     pub(super) fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
-        if let InputAction::OverlayWheel(delta) = action {
-            self.handle_overlay_wheel(delta);
-            return;
-        }
         if self.pending_shell.is_none()
             && !self.is_visible()
             && matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_))
@@ -253,6 +249,10 @@ impl App {
     }
 
     pub(super) fn apply_hook_action(&mut self, action: InputAction, origin: WPARAM) {
+        if let InputAction::OverlayWheel(delta) = action {
+            self.handle_overlay_wheel(delta);
+            return;
+        }
         let _opening = if matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_)) {
             self.hooks
                 .as_ref()
