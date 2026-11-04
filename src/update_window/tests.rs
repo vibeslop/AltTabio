@@ -55,6 +55,24 @@ fn native_states_keep_geometry_and_expose_their_actions() -> Result<()> {
         }
         window.events.borrow_mut().details = true;
         window.take_events()?;
+        let mut background_rect = RECT::default();
+        let mut client_rect = RECT::default();
+        // SAFETY: the native background and parent are both owned by this live test window.
+        unsafe {
+            GetWindowRect(window.controls[9], &raw mut background_rect)?;
+            windows::Win32::UI::WindowsAndMessaging::GetClientRect(
+                window.dialog.window(),
+                &raw mut client_rect,
+            )?;
+        }
+        assert_eq!(
+            background_rect.right - background_rect.left,
+            client_rect.right
+        );
+        assert_eq!(
+            background_rect.bottom - background_rect.top,
+            client_rect.bottom
+        );
         let mut detail_rect = RECT::default();
         let mut action_rect = RECT::default();
         // SAFETY: both controls belong to the live dialog and the RECTs are writable.

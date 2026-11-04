@@ -113,39 +113,27 @@ pub enum Progress {
     Verifying,
 }
 
-pub struct StageError {
-    pub stage: alttabio::update_status::Stage,
-    pub detail: String,
-}
+use alttabio::update_status::{Failure, Stage};
 
-pub fn stage(
-    update: &Update,
-    mut progress: impl FnMut(Progress),
-) -> Result<StagedUpdate, StageError> {
-    let mut phase = alttabio::update_status::Stage::Download;
-    stage_inner(update, &mut |event| {
+pub fn stage(update: &Update, mut progress: impl FnMut(Progress)) -> Result<StagedUpdate, Failure> {
+    if !is_release_build() {
+        return Err(Failure::new(
+            Stage::Download,
+            "Development builds cannot install updates",
+        ));
+    }
+    let target =
+        std::env::current_exe().map_err(|error| Failure::new(Stage::Extract, error.to_string()))?;
+    validate_update_target(&target).map_err(|error| Failure::new(Stage::Extract, error))?;
+    let work = WorkFolder::create(&target).map_err(|error| Failure::new(Stage::Extract, error))?;
+    let mut phase = Stage::Download;
+    download::stage(update.version, &work.path, &mut |event| {
         if matches!(event, Progress::Verifying) {
-            phase = alttabio::update_status::Stage::Verify;
+            phase = Stage::Verify;
         }
         progress(event);
     })
-    .map_err(|detail| StageError {
-        stage: phase,
-        detail,
-    })
-}
-
-fn stage_inner(
-    update: &Update,
-    progress: &mut dyn FnMut(Progress),
-) -> Result<StagedUpdate, String> {
-    if !is_release_build() {
-        return Err("Development builds cannot install updates".to_owned());
-    }
-    let target = std::env::current_exe().map_err(|error| error.to_string())?;
-    validate_update_target(&target)?;
-    let work = WorkFolder::create(&target)?;
-    download::stage(update.version, &work.path, progress)?;
+    .map_err(|detail| Failure::new(phase, detail))?;
     let hash = archive::authenticate_and_extract(
         update.version,
         &work.path,

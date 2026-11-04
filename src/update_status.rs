@@ -6,7 +6,24 @@ use std::time::SystemTime;
 pub enum Stage {
     Download,
     Verify,
+    Extract,
     Prepare,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    pub stage: Stage,
+    pub detail: String,
+}
+
+impl Failure {
+    #[must_use]
+    pub fn new(stage: Stage, detail: impl Into<String>) -> Self {
+        Self {
+            stage,
+            detail: detail.into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,6 +173,7 @@ impl Status {
                     None => "Couldn’t check for updates",
                     Some(Stage::Download) => "Couldn’t download update",
                     Some(Stage::Verify) => "Couldn’t verify the update",
+                    Some(Stage::Extract) => "Couldn’t prepare the update",
                     Some(Stage::Prepare) => "Couldn’t restart AltTabio",
                 }
                 .into();
@@ -165,6 +183,7 @@ impl Status {
                     Some(Stage::Verify) => {
                         "The download didn’t pass the security checks. The update wasn’t installed."
                     }
+                    Some(Stage::Extract) => "The update couldn’t be saved. Check available disk space and folder permissions, then try again.",
                     Some(Stage::Prepare) => {
                         "AltTabio couldn’t prepare the restart. You can try again."
                     }
@@ -174,7 +193,9 @@ impl Status {
                 view.detail.clone_from(detail);
                 view.primary = Some(match stage {
                     None => ("Try again", Command::Check),
-                    Some(Stage::Download) => ("Retry and restart", Command::Install),
+                    Some(Stage::Download | Stage::Extract) => {
+                        ("Retry and restart", Command::Install)
+                    }
                     Some(Stage::Verify) => ("View releases", Command::Releases),
                     Some(Stage::Prepare) => ("Retry restart", Command::Restart),
                 });

@@ -23,13 +23,13 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BS_PUSHBUTTON, CreateWindowExW, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect,
-    HMENU, IsDialogMessageW, IsWindowVisible, MSG, MoveWindow, PostMessageW, SW_HIDE, SW_SHOW,
+    BS_PUSHBUTTON, CreateWindowExW, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, HMENU,
+    IsDialogMessageW, IsWindowVisible, MSG, MoveWindow, PostMessageW, SW_HIDE, SW_SHOW,
     SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowTextW, ShowWindow,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORDLG, WM_CTLCOLOREDIT,
-    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_ERASEBKGND, WM_SETFONT, WM_SETTINGCHANGE, WM_THEMECHANGED,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_OVERLAPPED,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_CTLCOLORSTATIC, WM_DPICHANGED, WM_SETFONT, WM_SETTINGCHANGE, WM_THEMECHANGED, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_OVERLAPPED, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{HRESULT, PCWSTR, Result, w};
 
@@ -74,7 +74,7 @@ impl DialogWindow for Callback {
     fn attach(&mut self, _: HWND) {}
     fn handle_message(
         &mut self,
-        window: HWND,
+        _window: HWND,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
@@ -113,33 +113,6 @@ impl DialogWindow for Callback {
                 }
                 return Some(LRESULT(self.background.0.0 as isize));
             }
-            WM_ERASEBKGND => {
-                let mut rect = RECT::default();
-                // SAFETY: owner of the paint area is the dialog; DC is borrowed for this message.
-                // Native child controls paint content; only the exposed background is filled here.
-                return Some(LRESULT({
-                    let dc = HDC(wparam.0 as *mut _);
-                    // SAFETY: the dialog HWND is supplied by this callback's caller.
-                    let result = unsafe { GetClientRect(window, &raw mut rect) };
-                    if let Err(error) = result {
-                        events.error = Some(format!("Could not read update bounds: {error}"));
-                        0
-                    } else {
-                        // SAFETY: dc, rect and the owned brush live through this fill.
-                        let filled = unsafe {
-                            windows::Win32::Graphics::Gdi::FillRect(
-                                dc,
-                                &raw const rect,
-                                self.background.0,
-                            )
-                        };
-                        if filled == 0 {
-                            events.error = Some("Could not paint update background".into());
-                        }
-                        filled as isize
-                    }
-                }));
-            }
             _ => return None,
         }
         // SAFETY: the owning app window is live; the wake carries no pointers or borrowed data.
@@ -159,7 +132,7 @@ impl DialogWindow for Callback {
 
 pub(crate) struct UpdateWindow {
     dialog: ModalDialog<Callback>,
-    controls: [HWND; 9],
+    controls: [HWND; 10],
     fonts: Vec<OwnedFont>,
     events: Rc<RefCell<Events>>,
     api: Option<DarkModeApi>,
@@ -380,6 +353,7 @@ impl UpdateWindow {
             (378, 238 + extra, 64, 34),
             (28, 201, 150, 28),
             (28, 238, 414, 108),
+            (0, 0, 470, 300 + extra),
         ]
         .into_iter()
         .enumerate()
@@ -495,7 +469,7 @@ fn set_text(window: HWND, text: &str) -> Result<()> {
 fn create_controls(
     parent: HWND,
     instance: windows::Win32::Foundation::HINSTANCE,
-) -> Result<[HWND; 9]> {
+) -> Result<[HWND; 10]> {
     // SAFETY: this struct is initialized for a synchronous control-class registration.
     unsafe {
         InitCommonControlsEx(&INITCOMMONCONTROLSEX {
@@ -504,7 +478,26 @@ fn create_controls(
         })
     }
     .ok()?;
-    let mut controls = [HWND::default(); 9];
+    let mut controls = [HWND::default(); 10];
+    // A native STATIC paints the client background using WM_CTLCOLORSTATIC's cached brush.
+    // It is created before its siblings, so no custom drawing runs in our window callback.
+    // SAFETY: this child belongs to parent; static class and instance live for creation.
+    controls[9] = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD | WS_VISIBLE | windows::Win32::UI::WindowsAndMessaging::WS_CLIPSIBLINGS,
+            0,
+            0,
+            0,
+            0,
+            Some(parent),
+            None,
+            Some(instance),
+            None,
+        )
+    }?;
     for (index, class, flags, id) in [
         (0, w!("STATIC"), 0, 200),
         (1, w!("STATIC"), 0, 201),
@@ -550,5 +543,19 @@ fn create_controls(
         }?;
     }
 
+    // SAFETY: place the native background behind every other owned child without activating it.
+    unsafe {
+        SetWindowPos(
+            controls[9],
+            Some(windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE
+                | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
+                | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
+        )
+    }?;
     Ok(controls)
 }

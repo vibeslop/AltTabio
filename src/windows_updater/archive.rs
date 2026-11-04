@@ -1,6 +1,11 @@
 //! Authenticate every archive byte before opening ZIP metadata or extracting anything.
 use super::native::{path_wide, sha256};
-use alttabio::{update::Version, update_signature};
+use alttabio::{
+    update::Version,
+    update_signature,
+    update_status::{Failure, Stage},
+};
+use std::cell::Cell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -15,37 +20,73 @@ pub(super) fn authenticate_and_extract(
     version: Version,
     work: &Path,
     public_key: &str,
-) -> Result<String, String> {
+) -> Result<String, Failure> {
     let mut signature = String::new();
     File::open(work.join("download.zip.minisig"))
         .and_then(|file| {
             file.take(update_signature::MAX_SIGNATURE_BYTES + 1)
                 .read_to_string(&mut signature)
         })
-        .map_err(|error| error.to_string())?;
-    // Keep the same file handle across verification and extraction. The protected staging ACL
-    // and read sharing prevent an unprivileged process from substituting the archive.
-    let mut archive = File::open(work.join("download.zip")).map_err(|error| error.to_string())?;
-    update_signature::verify(&mut archive, &signature, version, public_key)?;
-    archive.rewind().map_err(|error| error.to_string())?;
+        .map_err(storage)?;
+    // Keep the same file handle across authentication and extraction in the protected folder.
+    let mut archive = File::open(work.join("download.zip")).map_err(storage)?;
+    let read_failed = Cell::new(false);
+    update_signature::verify(
+        TrackedReader {
+            input: &mut archive,
+            failed: &read_failed,
+        },
+        &signature,
+        version,
+        public_key,
+    )
+    .map_err(|detail| {
+        if read_failed.get() {
+            Failure::new(Stage::Extract, detail)
+        } else {
+            invalid(detail)
+        }
+    })?;
+    archive.rewind().map_err(storage)?;
     let exe = work.join("AltTabio.exe");
     extract(archive, &exe)?;
-    validate_version(&exe, version)?;
-    sha256(&exe)
+    validate_version(&exe, version).map_err(invalid)?;
+    sha256(&exe).map_err(|detail| Failure::new(Stage::Extract, detail))
 }
 
-fn extract(archive: File, exe: &Path) -> Result<(), String> {
-    let mut archive = archive;
+fn invalid(detail: impl Into<String>) -> Failure {
+    Failure::new(Stage::Verify, detail)
+}
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "map_err transfers ownership of each I/O error into an owned diagnostic"
+)]
+fn storage(error: std::io::Error) -> Failure {
+    Failure::new(Stage::Extract, error.to_string())
+}
+
+fn zip_failure(error: zip::result::ZipError) -> Failure {
+    match error {
+        zip::result::ZipError::Io(error) => storage(error),
+        error => invalid(error.to_string()),
+    }
+}
+
+fn extract(mut archive: File, exe: &Path) -> Result<(), Failure> {
     let entries = declared_entries(&mut archive)?;
-    let mut zip = zip::ZipArchive::new(archive).map_err(|error| error.to_string())?;
-    // ZipArchive indexes by name and collapses duplicate central-directory entries.
-    // Compare its unique count with the ZIP footer before accepting any executable.
+    let read_failed = Cell::new(false);
+    let mut zip = zip::ZipArchive::new(TrackedReader {
+        input: &mut archive,
+        failed: &read_failed,
+    })
+    .map_err(zip_failure)?;
+    // Preserve the existing unique-name, root executable, and size restrictions.
     if zip.len() != entries {
-        return Err("The update archive contains duplicate file names".to_owned());
+        return Err(invalid("The update archive contains duplicate file names"));
     }
     let mut index = None;
     for i in 0..zip.len() {
-        let entry = zip.by_index(i).map_err(|error| error.to_string())?;
+        let entry = zip.by_index(i).map_err(zip_failure)?;
         if entry.name() == "AltTabio.exe" {
             if index.is_some()
                 || entry.size() == 0
@@ -53,36 +94,90 @@ fn extract(archive: File, exe: &Path) -> Result<(), String> {
                 || entry.is_dir()
                 || entry.is_symlink()
             {
-                return Err(
-                    "The archive has no unique Windows executable of an allowed size".to_owned(),
-                );
+                return Err(invalid(
+                    "The archive has no unique Windows executable of an allowed size",
+                ));
             }
             index = Some(i);
         }
     }
-    let index = index.ok_or("The archive has no Windows executable")?;
-    let mut entry = zip.by_index(index).map_err(|error| error.to_string())?;
+    let index = index.ok_or_else(|| invalid("The archive has no Windows executable"))?;
+    let mut entry = zip.by_index(index).map_err(zip_failure)?;
     let expected = entry.size();
-    let mut output = File::create_new(exe).map_err(|error| error.to_string())?;
-    let copied = std::io::copy(&mut (&mut entry).take(MAX_EXE + 1), &mut output)
-        .map_err(|error| error.to_string())?;
+    let mut output = File::create_new(exe).map_err(storage)?;
+    let mut write_failed = false;
+    let copied = std::io::copy(
+        &mut (&mut entry).take(MAX_EXE + 1),
+        &mut TrackedWriter {
+            output: &mut output,
+            failed: &mut write_failed,
+        },
+    )
+    .map_err(|error| {
+        if write_failed || read_failed.get() {
+            storage(error)
+        } else {
+            invalid(error.to_string())
+        }
+    })?;
     if copied != expected || copied > MAX_EXE {
-        return Err("The extracted executable has the wrong size".to_owned());
+        return Err(invalid("The extracted executable has the wrong size"));
     }
-    output.sync_all().map_err(|error| error.to_string())
+    output.sync_all().map_err(storage)
 }
 
-fn declared_entries(file: &mut File) -> Result<usize, String> {
+struct TrackedReader<'a> {
+    input: &'a mut File,
+    failed: &'a Cell<bool>,
+}
+impl Read for TrackedReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let result = self.input.read(buffer);
+        if result.is_err() {
+            self.failed.set(true);
+        }
+        result
+    }
+}
+impl Seek for TrackedReader<'_> {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        let result = self.input.seek(position);
+        if result.is_err() {
+            self.failed.set(true);
+        }
+        result
+    }
+}
+struct TrackedWriter<'a> {
+    output: &'a mut File,
+    failed: &'a mut bool,
+}
+impl std::io::Write for TrackedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let result = self.output.write(bytes);
+        if result.is_err() {
+            *self.failed = true;
+        }
+        result
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let result = self.output.flush();
+        if result.is_err() {
+            *self.failed = true;
+        }
+        result
+    }
+}
+
+fn declared_entries(file: &mut File) -> Result<usize, Failure> {
     // Release artifacts are bounded, single-disk ZIP32 archives. Reject ZIP64 and ambiguous
     // footers rather than depending on name deduplication in the ZIP reader.
-    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    let length = file.metadata().map_err(storage)?.len();
     let tail = length.min(65_557);
-    let offset = i64::try_from(tail).map_err(|error| error.to_string())?;
-    file.seek(SeekFrom::End(-offset))
-        .map_err(|error| error.to_string())?;
-    let mut bytes = vec![0; usize::try_from(tail).map_err(|error| error.to_string())?];
-    file.read_exact(&mut bytes)
-        .map_err(|error| error.to_string())?;
+    let offset = i64::try_from(tail).map_err(|error| invalid(error.to_string()))?;
+    file.seek(SeekFrom::End(-offset)).map_err(storage)?;
+    let mut bytes = vec![0; usize::try_from(tail).map_err(|error| invalid(error.to_string()))?];
+    file.read_exact(&mut bytes).map_err(storage)?;
     for i in (0..bytes.len().saturating_sub(21)).rev() {
         if bytes[i..].starts_with(b"PK\x05\x06") {
             let footer = &bytes[i..];
@@ -91,13 +186,13 @@ fn declared_entries(file: &mut File) -> Result<usize, String> {
                 continue;
             }
             if word(4) != 0 || word(6) != 0 || word(8) != word(10) || word(10) == u16::MAX {
-                return Err("The update must be a single-disk ZIP32 archive".to_owned());
+                return Err(invalid("The update must be a single-disk ZIP32 archive"));
             }
-            file.rewind().map_err(|error| error.to_string())?;
+            file.rewind().map_err(storage)?;
             return Ok(usize::from(word(10)));
         }
     }
-    Err("The update has no valid ZIP footer".to_owned())
+    Err(invalid("The update has no valid ZIP footer"))
 }
 
 pub(super) fn validate_version(exe: &Path, version: Version) -> Result<(), String> {
@@ -174,6 +269,51 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     #[test]
+    fn signed_archive_storage_failure_is_retryable_and_retry_reauthenticates() {
+        let work = WorkFolder::temporary().unwrap_or_else(|error| panic!("{error}"));
+        let version = Version::parse("9.0.0").unwrap_or_else(|| panic!("fixture version"));
+        let archive = include_bytes!("../../tests/fixtures/update-storage/archive.zip");
+        let signature = include_str!("../../tests/fixtures/update-storage/valid.minisig");
+        let public = include_str!("../../tests/fixtures/update-storage/fixture.pub");
+        std::fs::write(work.path.join("download.zip"), archive)
+            .unwrap_or_else(|error| panic!("{error}"));
+        std::fs::write(work.path.join("download.zip.minisig"), signature)
+            .unwrap_or_else(|error| panic!("{error}"));
+        // A directory at the executable path deterministically fails File::create_new after
+        // authenticating and parsing a real signed ZIP. No filesystem permissions are changed.
+        std::fs::create_dir(work.path.join("AltTabio.exe"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let failure = authenticate_and_extract(version, &work.path, public)
+            .err()
+            .unwrap_or_else(|| panic!("expected storage failure"));
+        assert_eq!(failure.stage, Stage::Extract);
+        let view = alttabio::update_status::Status::Failed {
+            stage: Some(failure.stage),
+            detail: failure.detail,
+        }
+        .view("1.3.0", false, false);
+        assert!(!view.body.contains("security checks"));
+        assert_eq!(
+            view.primary,
+            Some((
+                "Retry and restart",
+                alttabio::update_status::Command::Install
+            ))
+        );
+        // A retry must authenticate again, even while the output-path problem is still present.
+        let mut tampered = archive.to_vec();
+        tampered[40] ^= 1;
+        std::fs::write(work.path.join("download.zip"), tampered)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let failure = authenticate_and_extract(version, &work.path, public)
+            .err()
+            .unwrap_or_else(|| panic!("expected authentication failure"));
+        assert_eq!(failure.stage, Stage::Verify);
+        assert!(failure.detail.to_lowercase().contains("signature"));
+        assert!(work.path.join("AltTabio.exe").is_dir());
+    }
+
+    #[test]
     fn unsigned_or_wrong_identity_archives_never_reach_extraction() {
         let work = WorkFolder::temporary().unwrap_or_else(|error| panic!("{error}"));
         let version = Version::parse("9.0.0").unwrap_or_else(|| panic!("version"));
@@ -188,14 +328,14 @@ mod tests {
             let error = authenticate_and_extract(version, &work.path, update_signature::PUBLIC_KEY)
                 .err()
                 .unwrap_or_else(|| panic!("unsigned extraction"));
-            assert!(error.to_lowercase().contains("signature"));
+            assert!(error.detail.to_lowercase().contains("signature"));
             assert!(!work.path.join("AltTabio.exe").exists());
         }
         // The valid signed text fixture gets past authentication, then fails ZIP parsing.
         let error = authenticate_and_extract(version, &work.path, public)
             .err()
             .unwrap_or_else(|| panic!("not a ZIP"));
-        assert!(!error.to_lowercase().contains("signature"));
+        assert!(!error.detail.to_lowercase().contains("signature"));
         assert!(!work.path.join("AltTabio.exe").exists());
     }
 
