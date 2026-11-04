@@ -237,23 +237,25 @@ impl HookFlags {
     /// Register and arm together before posting. Retire each opening when applied or discarded.
     #[must_use]
     pub fn begin_opening(&self, generation: usize, typed_search: bool) -> bool {
-        self.update_once(|value| {
-            let snapshot = state_snapshot(value);
-            if self.recovery_pending()
-                || snapshot & !OVERLAY_FLAGS != generation
-                || snapshot & INTERCEPTION_SUSPENDED != 0
-                || value & OPENING_MASK == OPENING_MASK
-            {
-                return None;
-            }
-            let flags = OVERLAY_ACTIVE
-                | if typed_search {
-                    SEARCH_ACTIVE | (snapshot & FILTER_VISIBLE)
-                } else {
-                    0
-                };
-            Some(((value + OPENING_STEP) & !(OVERLAY_FLAGS as u64)) | flags as u64)
-        })
+        self.update_once(|value| self.opening_state(value, generation, typed_search))
+    }
+
+    fn opening_state(&self, value: u64, generation: usize, typed_search: bool) -> Option<u64> {
+        let snapshot = state_snapshot(value);
+        if self.recovery_pending()
+            || snapshot & !OVERLAY_FLAGS != generation
+            || snapshot & INTERCEPTION_SUSPENDED != 0
+            || value & OPENING_MASK == OPENING_MASK
+        {
+            return None;
+        }
+        let flags = OVERLAY_ACTIVE
+            | if typed_search {
+                SEARCH_ACTIVE | (snapshot & FILTER_VISIBLE)
+            } else {
+                0
+            };
+        Some(((value + OPENING_STEP) & !(OVERLAY_FLAGS as u64)) | flags as u64)
     }
 
     /// Callback publication makes one attempt; concurrent UI work wins without a retry loop.
@@ -426,6 +428,25 @@ impl HookFlags {
     }
 }
 
+/// Owns the receipt of an opening while the UI applies its action.
+#[must_use = "keep the receipt alive until the opening finishes applying"]
+pub struct HookOpeningReceipt {
+    flags: Arc<HookFlags>,
+    origin: usize,
+}
+
+impl HookOpeningReceipt {
+    pub fn new(flags: Arc<HookFlags>, origin: usize) -> Self {
+        Self { flags, origin }
+    }
+}
+
+impl Drop for HookOpeningReceipt {
+    fn drop(&mut self) {
+        self.flags.retire_action_openings(self.origin, 1);
+    }
+}
+
 /// Restores a modal scope's saved flags on drop. Nested guards must drop in reverse order.
 #[must_use = "keep the guard alive for the entire modal call"]
 pub struct HookInterceptionGuard {
@@ -449,6 +470,78 @@ impl Drop for HookInterceptionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_post_cleanup_preserves_an_opening_being_applied() {
+        let flags = Arc::new(HookFlags::new());
+        let generation = flags.load();
+        assert!(flags.begin_opening(generation, true)); // A failed to post.
+        assert!(flags.begin_opening(generation, true)); // B reached the UI.
+        let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
+        let applying = HookOpeningReceipt::new(Arc::clone(&flags), origin);
+        // B is enumerating windows and has not published visibility yet.
+        flags.withdraw_openings(generation, 1);
+        assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+        let mut hook = crate::input::HookState::default();
+        hook.set_overlay_active(flags.load() & OVERLAY_ACTIVE != 0);
+        let escape = hook.process_key(
+            crate::input::KeyEvent::pressed(
+                crate::input::Key::Escape,
+                crate::input::Modifiers::default(),
+            ),
+            crate::input::HookSettings::default(),
+        );
+        assert!(escape.suppress);
+        flags.set(OVERLAY_ACTIVE, true);
+        drop(applying);
+        assert_eq!(flags.value.load(Ordering::Acquire) & OPENING_MASK, 0);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
+    fn refused_mouse_publication_does_not_capture_enter_or_number_keys() {
+        use crate::input::{
+            HookOutcome, HookSettings, HookState, Key, KeyEvent, Modifiers, MouseEvent,
+        };
+        for key in [Key::Enter, Key::Digit(2)] {
+            let flags = HookFlags::new();
+            flags.set(OVERLAY_ACTIVE, true);
+            let generation = flags.load() & !OVERLAY_FLAGS;
+            let mut hook = HookState::default();
+            let settings = HookSettings {
+                right_button_wheel_switching: true,
+                ..HookSettings::default()
+            };
+            hook.set_overlay_active(true);
+            let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
+            assert_eq!(
+                hook.process_mouse(MouseEvent::Wheel(-120), settings)
+                    .actions()
+                    .next(),
+                Some(InputAction::MouseWheel(1))
+            );
+            // Run the same publication policy and CAS, with completion precisely between
+            // the opening read and publication. No opening is posted after refusal.
+            assert!(!flags.update_once(|value| {
+                let opening = flags.opening_state(value, generation, true);
+                flags.complete_overlay();
+                opening
+            }));
+            assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+            hook.set_overlay_active(flags.load() & OVERLAY_ACTIVE != 0);
+            for event in [
+                KeyEvent::pressed(key, Modifiers::default()),
+                KeyEvent::released(key, Modifiers::default()),
+            ] {
+                assert_eq!(hook.process_key(event, settings), HookOutcome::default());
+            }
+            let release = hook.process_mouse(MouseEvent::RightButtonReleased, settings);
+            assert!(release.suppress);
+            assert!(release.actions().next().is_none());
+            assert!(!hook.take_replayed_right_click());
+        }
+    }
 
     #[test]
     fn failed_post_cleanup_preserves_a_later_visible_session() {

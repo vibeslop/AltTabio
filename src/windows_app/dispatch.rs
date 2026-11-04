@@ -253,7 +253,13 @@ impl App {
     }
 
     pub(super) fn apply_hook_action(&mut self, action: InputAction, origin: WPARAM) {
-        self.retire_hook_opening(action, origin);
+        let _opening = if matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_)) {
+            self.hooks
+                .as_ref()
+                .map(|hooks| hooks.applying_opening(origin))
+        } else {
+            None
+        };
         if let InputAction::MouseWheel(steps) = action
             && self.handle_gesture_wheel(steps)
         {

@@ -12,8 +12,8 @@ mod replay;
 use crate::app_messages::WM_OUTSIDE_POINTER;
 use crate::win32::{high_word, module_instance};
 use alttabio::hook_flags::{
-    FILTER_VISIBLE, HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE,
-    OVERLAY_FLAGS, SEARCH_ACTIVE,
+    FILTER_VISIBLE, HookFlags, HookInterceptionGuard, HookOpeningReceipt, INTERCEPTION_SUSPENDED,
+    OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE,
 };
 use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
@@ -201,6 +201,10 @@ impl HookThread {
 
     pub fn retire_openings(&self, origin: WPARAM, count: usize) {
         self.flags.retire_action_openings(origin.0, count);
+    }
+
+    pub fn applying_opening(&self, origin: WPARAM) -> HookOpeningReceipt {
+        HookOpeningReceipt::new(Arc::clone(&self.flags), origin.0)
     }
 
     /// Cancels interception across modal boundaries without touching the UI's restored flags.
@@ -898,6 +902,17 @@ mod tests {
             };
             assert_eq!(outcome.actions().next(), expected);
             assert_eq!(outcome.suppress, suppress);
+            // The next native callback observes the receipt armed by actual delivery.
+            assert_eq!(
+                alttabio::hook_delivery::deliver(
+                    &flags,
+                    flags.load() & !OVERLAY_FLAGS,
+                    true,
+                    outcome,
+                    |_| true,
+                ),
+                alttabio::hook_delivery::Delivery::Posted
+            );
         }
         let down = MSLLHOOKSTRUCT::default();
         let _down = process_mouse_message(

@@ -302,6 +302,126 @@ mod tests {
     }
 
     #[test]
+    fn inactive_capture_sync_preserves_pending_clicks_and_partial_wheels() {
+        let mut click = HookState::default();
+        let _press = click.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
+        click.set_overlay_active(false);
+        assert_eq!(
+            click.process_mouse(MouseEvent::RightButtonReleased, ENABLED),
+            HookOutcome::suppressed()
+        );
+        assert!(click.take_replayed_right_click());
+
+        let mut partial = HookState::default();
+        let _press = partial.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
+        partial.set_overlay_active(false);
+        let first = partial.process_mouse(MouseEvent::Wheel(-60), ENABLED);
+        assert!(first.suppress);
+        assert!(first.actions().next().is_none());
+        partial.set_overlay_active(false);
+        let second = partial.process_mouse(MouseEvent::Wheel(-60), ENABLED);
+        assert_eq!(second.actions().next(), Some(InputAction::MouseWheel(1)));
+        partial.set_overlay_active(true);
+        assert_eq!(
+            partial
+                .process_mouse(MouseEvent::RightButtonReleased, ENABLED)
+                .actions()
+                .next(),
+            Some(InputAction::MouseWheelReleased)
+        );
+        assert!(!partial.take_replayed_right_click());
+    }
+
+    #[test]
+    fn unavailable_mouse_number_keeps_empty_and_filtered_number_routing() {
+        use crate::input::{Key, KeyEvent, Modifiers};
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+        for filtered in [false, true] {
+            let mut hook = HookState::default();
+            let settings = HookSettings {
+                search_active: true,
+                ..ENABLED
+            };
+            let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
+            let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            session.open(
+                [
+                    SwitchTask::new(1, 10, "One", "one"),
+                    SwitchTask::new(2, 20, "Two", "two"),
+                ],
+                Some(1),
+            );
+            hook.set_overlay_active(true);
+            let unavailable = hook.process_key(
+                KeyEvent::pressed(Key::Digit(9), Modifiers::default()).with_text('9'),
+                settings,
+            );
+            let Some(action) = unavailable.actions().next() else {
+                panic!("number must be delivered");
+            };
+            assert_eq!(session.handle_input(action), SwitcherEffect::None);
+            let _release = hook.process_key(
+                KeyEvent::released(Key::Digit(9), Modifiers::default()),
+                settings,
+            );
+            assert!(
+                hook.process_mouse(MouseEvent::RightButtonReleased, settings)
+                    .actions()
+                    .next()
+                    .is_none()
+            );
+            if filtered {
+                let typing = hook.process_key(
+                    KeyEvent::pressed(Key::Other(0x54), Modifiers::default()).with_text('T'),
+                    settings,
+                );
+                for action in typing.actions() {
+                    assert_eq!(session.handle_input(action), SwitcherEffect::Redraw);
+                }
+            }
+            let retry = hook.process_key(
+                KeyEvent::pressed(Key::Digit(2), Modifiers::default()).with_text('2'),
+                HookSettings {
+                    filter_visible: filtered,
+                    ..settings
+                },
+            );
+            assert_eq!(
+                retry.actions().next(),
+                Some(InputAction::NumberKey {
+                    position: 2,
+                    text: Some('2')
+                })
+            );
+            let effect = session.handle_input(InputAction::NumberKey {
+                position: 2,
+                text: Some('2'),
+            });
+            if filtered {
+                assert_eq!(effect, SwitcherEffect::Redraw);
+                assert_eq!(session.switcher().filter(), "T2");
+            } else {
+                assert_eq!(effect, SwitcherEffect::Activate(20));
+                hook.set_overlay_active(false);
+                assert!(
+                    !hook
+                        .process_key(
+                            KeyEvent::pressed(Key::Other(0x41), Modifiers::default()),
+                            ENABLED
+                        )
+                        .suppress
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unavailable_win_number_keeps_number_selection_until_successful_completion() {
         use crate::input::{Key, KeyEvent, Modifiers};
         use crate::switcher::{

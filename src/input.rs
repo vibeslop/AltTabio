@@ -221,6 +221,11 @@ impl HookState {
             // keep interception armed, so this cannot retire a later queued gesture.
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
+            if self.mouse.is_active() {
+                // Keep the swallowed button's release debt, pending clicks and sub-notch
+                // accumulation. Only a selection without a visible/pending opening ends.
+                self.mouse.cancel();
+            }
         }
         self.overlay_active = active;
     }
@@ -532,6 +537,7 @@ impl HookState {
         if (self.alt_switch_gesture_active && alt_down)
             || self.win_switch_gesture_active
             || self.mouse.is_active()
+            || self.overlay_active
         {
             self.mouse.cancel();
             self.alt_switch_gesture_active = false;
