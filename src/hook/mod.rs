@@ -433,13 +433,9 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     }
 
     std::panic::catch_unwind(|| {
-        finish_mouse_callback_with(
-            wparam,
-            process_mouse_message(wparam, lparam),
-            post_actions,
-            reset_context,
-            || call_next(code, wparam, lparam),
-        )
+        finish_mouse_callback_with(process_mouse_message(wparam, lparam), post_actions, || {
+            call_next(code, wparam, lparam)
+        })
     })
     .unwrap_or_else(|_| call_next(code, wparam, lparam))
 }
@@ -647,22 +643,22 @@ fn finish_callback_with(
 }
 
 fn finish_mouse_callback_with(
-    message: WPARAM,
     outcome: Option<HookOutcome>,
     post: impl FnOnce(HookOutcome) -> bool,
-    reset: impl FnOnce(),
     call_next: impl FnOnce() -> LRESULT,
 ) -> LRESULT {
-    let owned_button = matches!(u32::try_from(message.0), Ok(WM_RBUTTONDOWN | WM_RBUTTONUP))
-        && outcome.is_some_and(|outcome| outcome.suppress);
-    finish_callback_with(outcome, post, reset, || {
-        // A failed UI post cannot forward the release of a press we already swallowed.
-        if owned_button {
-            LRESULT(1)
-        } else {
-            call_next()
-        }
-    })
+    let Some(outcome) = outcome else {
+        return call_next();
+    };
+    // Posting reports failures and schedules receipt cleanup outside the callback. Retain
+    // the gesture: an earlier accepted opening may still need its physical release. If no
+    // opening survives cleanup, the next input synchronization retires capture instead.
+    let _posted = post(outcome);
+    if outcome.suppress {
+        LRESULT(1)
+    } else {
+        call_next()
+    }
 }
 
 fn handle_gesture_reset() {

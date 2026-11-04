@@ -164,18 +164,14 @@ fn a_failed_completion_post_cannot_forward_an_owned_button_release() {
     let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
     let _wheel = state.process_mouse(MouseEvent::Wheel(-120), settings);
     let release = state.process_mouse(MouseEvent::RightButtonReleased, settings);
-    let reset = Cell::new(false);
     assert_eq!(
         finish_mouse_callback_with(
-            WPARAM(WM_RBUTTONUP as usize),
             Some(release),
             |_| false,
-            || reset.set(true),
             || panic!("owned release reached the original app")
         ),
         LRESULT(1)
     );
-    assert!(reset.get());
 }
 
 #[test]
@@ -357,7 +353,6 @@ fn native_mouse_release_fixture() {
                     },
                 );
                 finish_mouse_callback_with(
-                    WPARAM(message as usize),
                     outcome,
                     |outcome| {
                         for action in outcome.actions() {
@@ -373,7 +368,6 @@ fn native_mouse_release_fixture() {
                         }
                         true
                     },
-                    reset_context,
                     || {
                         // SAFETY: fixture windows are live and owned by the current thread.
                         unsafe { SendMessageW(original, message, Some(WPARAM(0)), Some(LPARAM(0))) }

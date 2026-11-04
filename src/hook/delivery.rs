@@ -149,6 +149,162 @@ mod tests {
     }
 
     #[test]
+    fn failed_later_wheel_posts_preserve_accepted_mouse_completion() {
+        use alttabio::hook_flags::decode_action;
+        use alttabio::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        };
+
+        for visible in [false, true] {
+            let mut context = test_context();
+            context.settings.right_button_wheel_switching = true;
+            let flags = Arc::clone(&context.flags);
+            CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+            let mut queue = Vec::new();
+            let mut results = Vec::new();
+            let mut forwarded = Vec::new();
+            for (index, message) in [WM_RBUTTONDOWN, WM_MOUSEWHEEL, WM_MOUSEWHEEL, WM_RBUTTONUP]
+                .into_iter()
+                .enumerate()
+            {
+                results.push(post_mouse_callback(
+                    message,
+                    index != 2,
+                    &mut queue,
+                    &mut forwarded,
+                ));
+                if index == 1 && visible {
+                    flags.sync_overlay(true, true, false);
+                    retire_opening(&flags, InputAction::MouseWheel(1), queue[0].0);
+                }
+                if index == 2 {
+                    super::super::report_callback_errors();
+                    assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+                }
+            }
+            CONTEXT.with(|slot| *slot.borrow_mut() = None);
+            let actions = queue
+                .iter()
+                .map(|&(wparam, lparam)| {
+                    let Some(action) = decode_action(wparam, lparam) else {
+                        panic!("invalid queued action");
+                    };
+                    action
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actions,
+                [InputAction::MouseWheel(1), InputAction::MouseWheelReleased],
+                "failed step cancelled the accepted gesture's release"
+            );
+            assert_eq!(results, [LRESULT(1); 4]);
+            assert!(forwarded.is_empty(), "owned wheel input reached the app");
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            assert_eq!(
+                session.handle_input(actions[0]),
+                SwitcherEffect::Open {
+                    selection_delta: Some(1)
+                }
+            );
+            session.open(
+                [
+                    SwitchTask::new(1, 10, "One", "one"),
+                    SwitchTask::new(2, 20, "Two", "two"),
+                ],
+                Some(1),
+            );
+            assert_eq!(
+                session.handle_input(actions[1]),
+                SwitcherEffect::Activate(20)
+            );
+            if !visible {
+                retire_opening(&flags, actions[0], queue[0].0);
+            }
+            flags.complete_overlay();
+            assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        }
+    }
+
+    fn post_mouse_callback(
+        message: u32,
+        succeeds: bool,
+        queue: &mut Vec<(usize, isize)>,
+        forwarded: &mut Vec<u32>,
+    ) -> LRESULT {
+        use windows::Win32::UI::WindowsAndMessaging::MSLLHOOKSTRUCT;
+
+        let data = MSLLHOOKSTRUCT {
+            mouseData: 0xff88_0000,
+            ..Default::default()
+        };
+        let message_param = WPARAM(message as usize);
+        let outcome = super::super::process_mouse_message_with(
+            message_param,
+            LPARAM((&raw const data) as isize),
+            || panic!("switch gesture replayed an ordinary click"),
+        );
+        super::super::finish_mouse_callback_with(
+            outcome,
+            |outcome| {
+                process_with_context(|context| {
+                    let generation = context.interception_generation;
+                    post_context_actions(context, outcome, |_, action| {
+                        if succeeds {
+                            queue.push(encode_action(action, generation));
+                        }
+                        succeeds
+                    })
+                })
+                .unwrap_or(false)
+            },
+            || {
+                forwarded.push(message);
+                LRESULT(0)
+            },
+        )
+    }
+
+    #[test]
+    fn a_failed_first_wheel_post_retires_capture_without_replaying_the_click() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        };
+
+        let mut context = test_context();
+        context.settings.right_button_wheel_switching = true;
+        let flags = Arc::clone(&context.flags);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        let mut queue = Vec::new();
+        let mut forwarded = Vec::new();
+        for (message, succeeds) in [(WM_RBUTTONDOWN, true), (WM_MOUSEWHEEL, false)] {
+            assert_eq!(
+                post_mouse_callback(message, succeeds, &mut queue, &mut forwarded),
+                LRESULT(1)
+            );
+        }
+        super::super::report_callback_errors();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        assert_eq!(
+            post_mouse_callback(WM_RBUTTONUP, true, &mut queue, &mut forwarded),
+            LRESULT(1)
+        );
+        assert!(queue.is_empty());
+        assert!(forwarded.is_empty());
+        assert_eq!(
+            post_mouse_callback(WM_MOUSEWHEEL, true, &mut queue, &mut forwarded),
+            LRESULT(0)
+        );
+        assert_eq!(forwarded, [WM_MOUSEWHEEL]);
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    #[test]
     fn delayed_failed_post_cleanup_cannot_disarm_a_new_generation() {
         let mut context = test_context();
         let flags = Arc::clone(&context.flags);
