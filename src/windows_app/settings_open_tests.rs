@@ -211,7 +211,7 @@ fn first_about_open_fixture() -> Result<()> {
 }
 
 fn assert_selected_page(window: HWND, category: Category) -> Result<()> {
-    for candidate in Category::ALL {
+    for candidate in Category::visible() {
         let id = Control::Navigation(candidate).id().unwrap_or_default();
         // SAFETY: the live dialog owns navigation buttons with these bounded control IDs.
         let navigation =

@@ -83,6 +83,103 @@ fn tab_moves_from_the_selected_category_into_its_settings() -> Result<()> {
 }
 
 #[test]
+fn category_navigation_preserves_unsaved_edits() -> Result<()> {
+    let dialog = dialog()?;
+    let window = dialog.window();
+    let host = dialog.host()?;
+    let baseline = host.state_mut()?.settings.clone();
+    host.state_mut()?.select_category(Category::Switching)?;
+    let toggle = host
+        .state_mut()?
+        .controls
+        .checkbox(SettingOption::MouseOverSelection);
+    // SAFETY: the test owns this hidden native checkbox and its notification recipient.
+    unsafe { SendMessageW(toggle, BM_CLICK, None, None) };
+    let edited = is_checked(toggle);
+    for category in Category::visible() {
+        navigate(window, category)?;
+        pump(window);
+        assert_eq!(host.state_mut()?.pages.category, category);
+        assert_eq!(host.state_mut()?.settings, baseline);
+    }
+    host.state_mut()?.select_category(Category::Switching)?;
+    assert_eq!(is_checked(toggle), edited);
+    assert!(is_control_enabled(
+        host.state_mut()?
+            .controls
+            .get(Control::Button(DialogButton::Ok))
+    ));
+    host.state_mut()?.cancel();
+    assert_eq!(host.state_mut()?.settings, baseline);
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
+fn empty_categories_have_no_native_controls_and_are_skipped_by_navigation() -> Result<()> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_END, VK_HOME, VK_UP};
+    use windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN;
+
+    let dialog = dialog()?;
+    let window = dialog.window();
+    let host = dialog.host()?;
+    for category in Category::ALL {
+        let navigation = host
+            .state_mut()?
+            .controls
+            .get(Control::Navigation(category));
+        assert_eq!(navigation.is_invalid(), category.controls().is_empty());
+        if category.controls().is_empty() {
+            navigate(window, category)?;
+            pump(window);
+            assert_eq!(host.state_mut()?.pages.category, Category::General);
+        }
+    }
+    for category in Category::visible().skip(1).chain([Category::General]) {
+        let current = host.state_mut()?.pages.category;
+        let navigation = host.state_mut()?.controls.get(Control::Navigation(current));
+        // SAFETY: send a scalar key event to this test's live native navigation button.
+        unsafe {
+            SendMessageW(
+                navigation,
+                WM_KEYDOWN,
+                Some(WPARAM(usize::from(VK_DOWN.0))),
+                None,
+            )
+        };
+        pump(window);
+        assert_eq!(host.state_mut()?.pages.category, category);
+    }
+    let before_about = Category::visible()
+        .take_while(|category| *category != Category::About)
+        .last()
+        .unwrap_or_default();
+    for (key, expected) in [
+        (VK_END, Category::About),
+        (VK_UP, before_about),
+        (VK_HOME, Category::General),
+        (VK_UP, Category::About),
+        (VK_DOWN, Category::General),
+    ] {
+        let current = host.state_mut()?.pages.category;
+        let navigation = host.state_mut()?.controls.get(Control::Navigation(current));
+        // SAFETY: send a scalar key event to this test's live native navigation button.
+        unsafe {
+            SendMessageW(
+                navigation,
+                WM_KEYDOWN,
+                Some(WPARAM(usize::from(key.0))),
+                None,
+            )
+        };
+        pump(window);
+        assert_eq!(host.state_mut()?.pages.category, expected);
+    }
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
 fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_headers()
 -> Result<()> {
     let dialog = dialog()?;

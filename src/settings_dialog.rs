@@ -475,8 +475,10 @@ fn handle_settings_message(
             Some(LRESULT(0))
         }
         WM_SETTINGS_NAVIGATE => {
-            if let Some(category) = Category::ALL.get(wparam.0) {
-                report_layout(state.focus_category(*category));
+            if let Some(category) =
+                Category::visible().find(|category| *category as usize == wparam.0)
+            {
+                report_layout(state.focus_category(category));
             }
             Some(LRESULT(0))
         }

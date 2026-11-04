@@ -36,13 +36,9 @@ impl Control {
     pub fn all() -> impl Iterator<Item = Self> {
         [Self::SidebarTitle]
             .into_iter()
-            .chain(Category::ALL.map(Self::Navigation))
+            .chain(Category::visible().map(Self::Navigation))
             .chain([Self::PageHeading, Self::PageIntro, Self::Viewport])
-            .chain(
-                Category::ALL
-                    .into_iter()
-                    .flat_map(|category| category.controls().iter().copied()),
-            )
+            .chain(Category::visible().flat_map(|category| category.controls().iter().copied()))
             .chain(DialogButton::ALL.map(Self::Button))
     }
 
@@ -139,17 +135,26 @@ pub enum Category {
     Switching,
     Appearance,
     Display,
+    Experimental,
     About,
 }
 
 impl Category {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::General,
         Self::Switching,
         Self::Appearance,
         Self::Display,
+        Self::Experimental,
         Self::About,
     ];
+
+    /// Categories with content, in sidebar order. Adding controls makes a page visible.
+    pub fn visible() -> impl Iterator<Item = Self> + Clone {
+        Self::ALL
+            .into_iter()
+            .filter(|category| !category.controls().is_empty())
+    }
 
     #[must_use]
     pub const fn title(self) -> &'static str {
@@ -158,6 +163,7 @@ impl Category {
             Self::Switching => "Switching",
             Self::Appearance => "Appearance",
             Self::Display => "Display",
+            Self::Experimental => "Experimental",
             Self::About => "About",
         }
     }
@@ -169,6 +175,7 @@ impl Category {
             Self::Switching => "Choose how you move between windows.",
             Self::Appearance => "The look of your switcher.",
             Self::Display => "Windows across your monitors.",
+            Self::Experimental => "These features may not work reliably.",
             Self::About => "",
         }
     }
@@ -211,6 +218,7 @@ impl Category {
                 C(FullDesktopPreview),
             ],
             Self::Display => &[C(CurrentMonitorFilter)],
+            Self::Experimental => &[],
             Self::About => &[
                 AboutIdentity,
                 AboutDescription,

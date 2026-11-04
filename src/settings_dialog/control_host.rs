@@ -296,19 +296,23 @@ fn paint_notification(
 }
 
 fn navigation_target(category: Category, key: u16) -> Option<usize> {
-    let index = category as usize;
-    let count = Category::ALL.len();
-    if key == VK_UP.0 || key == VK_LEFT.0 {
-        Some((index + count - 1) % count)
+    let mut categories = Category::visible();
+    let index = categories
+        .clone()
+        .position(|candidate| candidate == category)?;
+    let count = categories.clone().count();
+    let target = if key == VK_UP.0 || key == VK_LEFT.0 {
+        (index + count - 1) % count
     } else if key == VK_DOWN.0 || key == VK_RIGHT.0 {
-        Some((index + 1) % count)
+        (index + 1) % count
     } else if key == VK_HOME.0 {
-        Some(0)
+        0
     } else if key == VK_END.0 {
-        Some(count - 1)
+        count - 1
     } else {
-        None
-    }
+        return None;
+    };
+    categories.nth(target).map(|category| category as usize)
 }
 
 fn post(root: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
