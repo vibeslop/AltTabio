@@ -2,6 +2,7 @@
 use super::native::sha256;
 use alttabio::update::{Asset, Release, Version};
 use alttabio::update_signature::{MAX_ARCHIVE_BYTES, MAX_SIGNATURE_BYTES};
+use alttabio::update_status::{Failure, Stage};
 use serde_json::Value;
 use std::io::Write;
 use std::path::Path;
@@ -88,11 +89,11 @@ pub(super) fn stage(
     version: Version,
     work: &Path,
     progress: &mut dyn FnMut(super::Progress),
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     stage_with_progress(
         version,
         work,
-        &json(&format!("{API}/tags/v{version}"))?,
+        &json(&format!("{API}/tags/v{version}")).map_err(download_failure)?,
         |url, limit, output| get(url, limit, Duration::from_mins(10), output),
         progress,
     )
@@ -106,6 +107,7 @@ fn stage_with(
     fetch: impl Fn(&str, u64, &mut dyn Write) -> Result<(), String>,
 ) -> Result<(), String> {
     stage_with_progress(version, work, release, fetch, &mut |_| {})
+        .map_err(|failure| failure.detail)
 }
 
 fn stage_with_progress(
@@ -114,15 +116,18 @@ fn stage_with_progress(
     release: &Value,
     fetch: impl Fn(&str, u64, &mut dyn Write) -> Result<(), String>,
     progress: &mut dyn FnMut(super::Progress),
-) -> Result<(), String> {
+) -> Result<(), Failure> {
     if release["tag_name"].as_str() != Some(&format!("v{version}"))
         || release["draft"].as_bool() != Some(false)
         || release["prerelease"].as_bool() != Some(false)
     {
-        return Err("This release is no longer a published stable release".to_owned());
+        return Err(download_failure(
+            "This release is no longer a published stable release",
+        ));
     }
     let name = format!("AltTabio-{version}-windows-x64.zip");
-    let (url, size) = asset(release, version, &name, MAX_ARCHIVE_BYTES)?;
+    let (url, size) =
+        asset(release, version, &name, MAX_ARCHIVE_BYTES).map_err(download_failure)?;
     let digest = release["assets"]
         .as_array()
         .and_then(|items| {
@@ -133,42 +138,64 @@ fn stage_with_progress(
         .and_then(|asset| asset["digest"].as_str())
         .and_then(|digest| digest.strip_prefix("sha256:"))
         .filter(|hash| valid_hash(hash))
-        .ok_or("The release has no verifiable Windows archive")?;
+        .ok_or_else(|| integrity_failure("The release has no verifiable Windows archive"))?;
     let (signature_url, signature_size) = asset(
         release,
         version,
         &format!("{name}.minisig"),
         MAX_SIGNATURE_BYTES,
-    )?;
+    )
+    .map_err(download_failure)?;
     for (url, size, name) in [
         (url, size, "download.zip"),
         (signature_url, signature_size, "download.zip.minisig"),
     ] {
         let path = work.join(name);
-        let mut output = std::fs::File::create_new(&path).map_err(|error| error.to_string())?;
+        let mut output = std::fs::File::create_new(&path).map_err(storage_failure)?;
         if name == "download.zip" {
             progress(super::Progress::Downloading {
                 received: 0,
                 total: size,
             });
+        }
+        {
             let mut counted = ProgressWriter {
                 output: &mut output,
-                progress,
+                progress: if name == "download.zip" {
+                    Some(&mut *progress)
+                } else {
+                    None
+                },
                 received: 0,
                 total: size,
+                storage_failed: false,
             };
-            fetch(url, size, &mut counted)?;
-        } else {
-            fetch(url, size, &mut output)?;
+            fetch(url, size, &mut counted).map_err(|detail| {
+                Failure::new(
+                    if counted.storage_failed {
+                        Stage::Extract
+                    } else {
+                        Stage::Download
+                    },
+                    detail,
+                )
+            })?;
         }
-        output.sync_all().map_err(|error| error.to_string())?;
-        if output.metadata().map_err(|error| error.to_string())?.len() != size {
-            return Err("The downloaded update has the wrong size".to_owned());
+        output.sync_all().map_err(storage_failure)?;
+        if output.metadata().map_err(storage_failure)?.len() != size {
+            return Err(integrity_failure(
+                "The downloaded update has the wrong size",
+            ));
         }
     }
     progress(super::Progress::Verifying);
-    if !sha256(&work.join("download.zip"))?.eq_ignore_ascii_case(digest) {
-        return Err("The downloaded archive failed its SHA-256 check".to_owned());
+    if !sha256(&work.join("download.zip"))
+        .map_err(|detail| Failure::new(Stage::Extract, detail))?
+        .eq_ignore_ascii_case(digest)
+    {
+        return Err(integrity_failure(
+            "The downloaded archive failed its SHA-256 check",
+        ));
     }
     Ok(())
 }
@@ -184,25 +211,46 @@ fn json(url: &str) -> Result<Value, String> {
         .map_err(|error| format!("Unreadable GitHub release metadata: {error}"))
 }
 
-struct ProgressWriter<'a> {
-    output: &'a mut dyn Write,
-    progress: &'a mut dyn FnMut(super::Progress),
-    received: u64,
-    total: u64,
+fn download_failure(detail: impl Into<String>) -> Failure {
+    Failure::new(Stage::Download, detail)
+}
+fn integrity_failure(detail: impl Into<String>) -> Failure {
+    Failure::new(Stage::Verify, detail)
+}
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "map_err consumes an owned I/O error to build a diagnostic"
+)]
+fn storage_failure(error: std::io::Error) -> Failure {
+    Failure::new(Stage::Extract, error.to_string())
 }
 
+struct ProgressWriter<'a> {
+    output: &'a mut dyn Write,
+    progress: Option<&'a mut dyn FnMut(super::Progress)>,
+    received: u64,
+    total: u64,
+    storage_failed: bool,
+}
 impl Write for ProgressWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let written = self.output.write(bytes)?;
+        let written = self
+            .output
+            .write(bytes)
+            .inspect_err(|_| self.storage_failed = true)?;
         self.received = self.received.saturating_add(written as u64);
-        (self.progress)(super::Progress::Downloading {
-            received: self.received,
-            total: self.total,
-        });
+        if let Some(progress) = &mut self.progress {
+            progress(super::Progress::Downloading {
+                received: self.received,
+                total: self.total,
+            });
+        }
         Ok(written)
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        self.output.flush()
+        self.output
+            .flush()
+            .inspect_err(|_| self.storage_failed = true)
     }
 }
 
@@ -210,6 +258,54 @@ impl Write for ProgressWriter<'_> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn hash_read_failure_is_storage_but_digest_mismatch_is_integrity() {
+        let version = Version::parse("9.0.0").unwrap_or_else(|| panic!("fixture version"));
+        for remove_archive in [true, false] {
+            let work =
+                super::super::WorkFolder::temporary().unwrap_or_else(|error| panic!("{error}"));
+            let expected = b"archive";
+            let source = work.path.join("source");
+            std::fs::write(&source, expected).unwrap_or_else(|error| panic!("{error}"));
+            let hash = sha256(&source).unwrap_or_else(|error| panic!("{error}"));
+            let name = "AltTabio-9.0.0-windows-x64.zip";
+            let release = json!({"tag_name":"v9.0.0", "draft":false, "prerelease":false, "assets":[
+                {"name":name,"browser_download_url":asset_url(version,name),"size":expected.len(),"digest":format!("sha256:{hash}")},
+                {"name":format!("{name}.minisig"),"browser_download_url":asset_url(version,&format!("{name}.minisig")),"size":3}
+            ]});
+            let result = stage_with_progress(
+                version,
+                &work.path,
+                &release,
+                |url, _, output| {
+                    if url.ends_with(".minisig") {
+                        if remove_archive {
+                            // This runs after the archive output has closed, before its hash is read.
+                            std::fs::remove_file(work.path.join("download.zip"))
+                                .map_err(|error| error.to_string())?;
+                        }
+                        output.write_all(b"sig")
+                    } else {
+                        output.write_all(b"Archive")
+                    }
+                    .map_err(|error| error.to_string())
+                },
+                &mut |_| {},
+            );
+            let failure = result
+                .err()
+                .unwrap_or_else(|| panic!("expected hash failure"));
+            assert_eq!(
+                failure.stage,
+                if remove_archive {
+                    Stage::Extract
+                } else {
+                    Stage::Verify
+                }
+            );
+        }
+    }
 
     #[test]
     fn native_metadata_rejects_untrusted_urls_flags_sizes_and_duplicate_assets() {

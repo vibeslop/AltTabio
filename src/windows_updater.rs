@@ -126,14 +126,7 @@ pub fn stage(update: &Update, mut progress: impl FnMut(Progress)) -> Result<Stag
         std::env::current_exe().map_err(|error| Failure::new(Stage::Extract, error.to_string()))?;
     validate_update_target(&target).map_err(|error| Failure::new(Stage::Extract, error))?;
     let work = WorkFolder::create(&target).map_err(|error| Failure::new(Stage::Extract, error))?;
-    let mut phase = Stage::Download;
-    download::stage(update.version, &work.path, &mut |event| {
-        if matches!(event, Progress::Verifying) {
-            phase = Stage::Verify;
-        }
-        progress(event);
-    })
-    .map_err(|detail| Failure::new(phase, detail))?;
+    download::stage(update.version, &work.path, &mut progress)?;
     let hash = archive::authenticate_and_extract(
         update.version,
         &work.path,

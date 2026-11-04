@@ -9,10 +9,14 @@ use std::cell::Cell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use windows::Win32::Foundation::{
+    ERROR_BAD_EXE_FORMAT, ERROR_RESOURCE_DATA_NOT_FOUND, ERROR_RESOURCE_LANG_NOT_FOUND,
+    ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_RESOURCE_TYPE_NOT_FOUND, SetLastError, WIN32_ERROR,
+};
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
-use windows::core::PCWSTR;
+use windows::core::{Error, HRESULT, PCWSTR};
 
 pub(super) const MAX_EXE: u64 = 50 * 1024 * 1024;
 
@@ -21,13 +25,15 @@ pub(super) fn authenticate_and_extract(
     work: &Path,
     public_key: &str,
 ) -> Result<String, Failure> {
-    let mut signature = String::new();
+    let mut signature = Vec::new();
     File::open(work.join("download.zip.minisig"))
         .and_then(|file| {
             file.take(update_signature::MAX_SIGNATURE_BYTES + 1)
-                .read_to_string(&mut signature)
+                .read_to_end(&mut signature)
         })
         .map_err(storage)?;
+    let signature = String::from_utf8(signature)
+        .map_err(|error| invalid(format!("The update signature is not UTF-8: {error}")))?;
     // Keep the same file handle across authentication and extraction in the protected folder.
     let mut archive = File::open(work.join("download.zip")).map_err(storage)?;
     let read_failed = Cell::new(false);
@@ -50,7 +56,7 @@ pub(super) fn authenticate_and_extract(
     archive.rewind().map_err(storage)?;
     let exe = work.join("AltTabio.exe");
     extract(archive, &exe)?;
-    validate_version(&exe, version).map_err(invalid)?;
+    validate_version(&exe, version)?;
     sha256(&exe).map_err(|detail| Failure::new(Stage::Extract, detail))
 }
 
@@ -195,17 +201,31 @@ fn declared_entries(file: &mut File) -> Result<usize, Failure> {
     Err(invalid("The update has no valid ZIP footer"))
 }
 
-pub(super) fn validate_version(exe: &Path, version: Version) -> Result<(), String> {
-    let path = path_wide(exe)?;
+pub(super) fn validate_version(exe: &Path, version: Version) -> Result<(), Failure> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Version-resource APIs can mask sharing/access failures as missing resources. Establish
+    // read access first and deny replacement while Windows reads the same file by path.
+    let _read_guard = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0)
+        .open(exe)
+        .map_err(storage)?;
+    let path = path_wide(exe).map_err(|detail| Failure::new(Stage::Extract, detail))?;
     // SAFETY: path is a terminated filename borrowed for the call.
-    let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), None) };
-    if size == 0 || size > 1024 * 1024 {
-        return Err("The update has no bounded version resource".to_owned());
+    let size = unsafe {
+        SetLastError(WIN32_ERROR(0));
+        GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), None)
+    };
+    if size == 0 {
+        return Err(resource_failure(Error::from_thread()));
+    }
+    if size > 1024 * 1024 {
+        return Err(invalid("The update has no bounded version resource"));
     }
     let mut bytes = vec![0_u8; size as usize];
     // SAFETY: bytes has the exact size returned by Windows and remains live for every query.
     unsafe { GetFileVersionInfoW(PCWSTR(path.as_ptr()), None, size, bytes.as_mut_ptr().cast()) }
-        .map_err(|error| error.to_string())?;
+        .map_err(resource_failure)?;
     let mut translations = std::ptr::null_mut();
     let mut length = 0;
     let query = crate::win32::wide("\\VarFileInfo\\Translation");
@@ -221,7 +241,7 @@ pub(super) fn validate_version(exe: &Path, version: Version) -> Result<(), Strin
     .as_bool()
         || length < 4
     {
-        return Err("The update has no version translations".to_owned());
+        return Err(invalid("The update has no version translations"));
     }
     for offset in (0..length as usize / 4 * 4).step_by(4) {
         // SAFETY: translation entries contain two unaligned u16 values within the returned length.
@@ -229,13 +249,38 @@ pub(super) fn validate_version(exe: &Path, version: Version) -> Result<(), Strin
             std::ptr::read_unaligned(translations.cast::<u8>().add(offset).cast::<[u16; 2]>())
         };
         let prefix = format!("\\StringFileInfo\\{:04x}{:04x}\\", pair[0], pair[1]);
-        if version_string(&bytes, &format!("{prefix}ProductVersion"))? == version.to_string()
-            && version_string(&bytes, &format!("{prefix}OriginalFilename"))? == "AltTabio.exe"
+        if version_string(&bytes, &format!("{prefix}ProductVersion")).map_err(invalid)?
+            == version.to_string()
+            && version_string(&bytes, &format!("{prefix}OriginalFilename")).map_err(invalid)?
+                == "AltTabio.exe"
         {
             return Ok(());
         }
     }
-    Err("The downloaded executable does not match the release version or application".to_owned())
+    Err(invalid(
+        "The downloaded executable does not match the release version or application",
+    ))
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "maps owned Win32 errors into an owned update failure"
+)]
+fn resource_failure(error: Error) -> Failure {
+    let invalid_resource = [
+        ERROR_BAD_EXE_FORMAT,
+        ERROR_RESOURCE_DATA_NOT_FOUND,
+        ERROR_RESOURCE_TYPE_NOT_FOUND,
+        ERROR_RESOURCE_NAME_NOT_FOUND,
+        ERROR_RESOURCE_LANG_NOT_FOUND,
+    ]
+    .into_iter()
+    .any(|code| error.code() == HRESULT::from_win32(code.0));
+    if error.code().is_ok() || invalid_resource {
+        invalid("The update has no valid version resource")
+    } else {
+        Failure::new(Stage::Extract, error.to_string())
+    }
 }
 
 fn version_string(bytes: &[u8], name: &str) -> Result<String, String> {
@@ -267,6 +312,57 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn malformed_signature_encoding_is_integrity_not_storage() {
+        let work = WorkFolder::temporary().unwrap_or_else(|error| panic!("{error}"));
+        let version = Version::parse("9.0.0").unwrap_or_else(|| panic!("fixture version"));
+        std::fs::write(
+            work.path.join("download.zip"),
+            include_bytes!("../../tests/fixtures/update-storage/archive.zip"),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        std::fs::write(work.path.join("download.zip.minisig"), [0xff, 0xfe, 0xfd])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let failure = authenticate_and_extract(version, &work.path, update_signature::PUBLIC_KEY)
+            .err()
+            .unwrap_or_else(|| panic!("expected malformed encoding failure"));
+        assert_eq!(failure.stage, Stage::Verify);
+        assert!(failure.detail.contains("UTF-8"));
+        assert!(!work.path.join("AltTabio.exe").exists());
+    }
+
+    #[test]
+    fn version_resource_access_failure_is_storage_and_bad_identity_is_integrity() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let work = WorkFolder::temporary().unwrap_or_else(|error| panic!("{error}"));
+        let version =
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| panic!("fixture version"));
+        let current = std::env::current_exe().unwrap_or_else(|error| panic!("{error}"));
+        let exe = work.path.join("version-fixture.exe");
+        std::fs::copy(current, &exe).unwrap_or_else(|error| panic!("{error}"));
+        let exclusive = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&exe)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let failure = validate_version(&exe, version)
+            .err()
+            .unwrap_or_else(|| panic!("expected sharing failure"));
+        assert_eq!(failure.stage, Stage::Extract);
+        drop(exclusive);
+        assert_eq!(validate_version(&exe, version), Ok(()));
+        let wrong = Version::parse("99.0.0").unwrap_or_else(|| panic!("fixture version"));
+        let failure = validate_version(&exe, wrong)
+            .err()
+            .unwrap_or_else(|| panic!("expected identity failure"));
+        assert_eq!(failure.stage, Stage::Verify);
+        std::fs::remove_file(&exe).unwrap_or_else(|error| panic!("{error}"));
+        let failure = validate_version(&exe, version)
+            .err()
+            .unwrap_or_else(|| panic!("expected missing file failure"));
+        assert_eq!(failure.stage, Stage::Extract);
+    }
 
     #[test]
     fn signed_archive_storage_failure_is_retryable_and_retry_reauthenticates() {

@@ -183,7 +183,7 @@ impl Status {
                     Some(Stage::Verify) => {
                         "The download didn’t pass the security checks. The update wasn’t installed."
                     }
-                    Some(Stage::Extract) => "The update couldn’t be saved. Check available disk space and folder permissions, then try again.",
+                    Some(Stage::Extract) => "There was a problem reading or saving the update files. Check disk space and folder permissions, then try again.",
                     Some(Stage::Prepare) => {
                         "AltTabio couldn’t prepare the restart. You can try again."
                     }
