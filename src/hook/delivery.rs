@@ -42,18 +42,21 @@ fn post_context_actions(
         outcome,
         |action| post(target, action),
     ) {
-        Delivery::Posted => true,
-        // Keep release ownership even when a modal boundary races with this callback.
-        #[allow(
-            clippy::match_same_arms,
-            reason = "the comment above applies only to a stale outcome"
-        )]
-        Delivery::Stale => true,
-        Delivery::OverlayRefused => {
-            context.state.reset_gestures();
-            true
-        }
-        Delivery::PostFailed => {
+        // Stale and refused actions retain release ownership. Publication may lose its
+        // single atomic attempt to the UI; withholding it must not cancel earlier openings.
+        Delivery::Posted | Delivery::Stale | Delivery::OverlayRefused => true,
+        Delivery::PostFailed { pending_opening } => {
+            if pending_opening {
+                let generation = context.interception_generation;
+                let (pending_generation, count) =
+                    context.failed_openings.get_or_insert((generation, 0));
+                if *pending_generation != generation {
+                    // An epoch change already discarded the previous epoch's receipts.
+                    *pending_generation = generation;
+                    *count = 0;
+                }
+                *count = count.saturating_add(1);
+            }
             context.record_error(HOOK_ERROR_POST_ACTION);
             false
         }
@@ -74,6 +77,104 @@ mod tests {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LMENU, VK_RMENU, VK_TAB};
     use windows::Win32::UI::WindowsAndMessaging::{KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP};
+
+    #[test]
+    fn an_unpublished_win_opening_does_not_capture_subsequent_typing() {
+        let mut context = test_context();
+        let win = Modifiers {
+            left_windows: true,
+            ..Modifiers::default()
+        };
+        let _down = context.state.process_key(
+            KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
+            context.settings,
+        );
+        let opening = context
+            .state
+            .process_key(KeyEvent::pressed(Key::Tab, win), context.settings);
+        assert_eq!(opening.actions().next(), Some(InputAction::Switch(1)));
+        // Model the bounded publication losing its CAS: no receipt and no UI action.
+        let mut queue = Vec::new();
+        for event in [
+            KeyEvent::released(Key::Tab, win),
+            KeyEvent::released(Key::LeftWindows, Modifiers::default()),
+        ] {
+            enqueue_event(&mut context, Event::Key(event), &mut queue);
+        }
+        let typing = enqueue_event(
+            &mut context,
+            Event::Key(KeyEvent::pressed(Key::Other(0x41), Modifiers::default())),
+            &mut queue,
+        );
+        assert!(!typing.suppress);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn failed_openings_are_withdrawn_on_the_message_loop_without_losing_an_earlier_opening() {
+        let mut context = test_context();
+        let flags = Arc::clone(&context.flags);
+        let opening = context.state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            context.settings,
+        );
+        assert!(post_context_actions(&mut context, opening, |_, _| true));
+        for _ in 0..2 {
+            assert!(!post_context_actions(&mut context, opening, |_, _| false));
+        }
+        assert_eq!(
+            context.failed_openings,
+            Some((context.interception_generation, 2))
+        );
+        assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        super::super::report_callback_errors();
+        CONTEXT.with(|slot| {
+            let Some(context) = slot.borrow_mut().take() else {
+                panic!("test context must remain installed");
+            };
+            assert!(context.failed_openings.is_none());
+        });
+        flags.complete_overlay();
+        assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+        flags.retire_openings(0, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
+    fn delayed_failed_post_cleanup_cannot_disarm_a_new_generation() {
+        let mut context = test_context();
+        let flags = Arc::clone(&context.flags);
+        let opening = context.state.process_key(
+            KeyEvent::pressed(
+                Key::Tab,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            ),
+            context.settings,
+        );
+        assert!(!post_context_actions(&mut context, opening, |_, _| false));
+        flags.cancel_overlay();
+        let generation = flags.load();
+        assert!(flags.begin_opening(generation, true));
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        super::super::report_callback_errors();
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+        flags.complete_overlay();
+        assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
 
     #[test]
     fn queued_keyboard_gestures_complete_independently() {
@@ -605,6 +706,7 @@ mod tests {
             target_thread_id: 0,
             hook_thread_id: 0,
             pending_errors: 0,
+            failed_openings: None,
             flags: Arc::clone(&flags),
             interception_generation: 0,
             keyboard_state: KeyboardState::default(),

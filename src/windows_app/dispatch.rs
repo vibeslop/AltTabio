@@ -226,15 +226,9 @@ impl App {
         }
     }
 
-    fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
+    pub(super) fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
         if let InputAction::OverlayWheel(delta) = action {
             self.handle_overlay_wheel(delta);
-            return;
-        }
-        if let InputAction::MouseWheel(steps) = action
-            && self.handle_gesture_wheel(steps)
-        {
-            self.retire_hook_opening(action, origin);
             return;
         }
         if self.pending_shell.is_none()
@@ -260,6 +254,11 @@ impl App {
 
     pub(super) fn apply_hook_action(&mut self, action: InputAction, origin: WPARAM) {
         self.retire_hook_opening(action, origin);
+        if let InputAction::MouseWheel(steps) = action
+            && self.handle_gesture_wheel(steps)
+        {
+            return;
+        }
         self.apply_input_action(action);
     }
 

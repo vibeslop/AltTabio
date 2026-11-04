@@ -216,9 +216,9 @@ impl HookState {
     }
 
     pub fn set_overlay_active(&mut self, active: bool) {
-        if self.overlay_active && !active {
-            // UI selection can complete a sticky keyboard gesture. Pending openings keep
-            // interception armed, so this edge cannot retire a later queued gesture.
+        if !active {
+            // Completion or a refused opening ends sticky keyboard capture. Pending openings
+            // keep interception armed, so this cannot retire a later queued gesture.
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
         }
@@ -535,7 +535,8 @@ impl HookState {
         {
             self.mouse.cancel();
             self.alt_switch_gesture_active = false;
-            self.win_switch_gesture_active = false;
+            // An unavailable position leaves the panel open. Keep sticky Win+Tab number
+            // routing until the UI acknowledges completion through set_overlay_active.
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }

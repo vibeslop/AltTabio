@@ -17,7 +17,9 @@ pub const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE | FILTER_VISIBLE
 // Generations are multiples of 16, so the flags share their word.
 const FLAG_BITS: usize = INTERCEPTION_SUSPENDED | OVERLAY_FLAGS;
 const GENERATION_SHIFT: usize = 4;
-const OPENING_STEP: u64 = 1 << 4;
+// UI visibility is distinct from capture armed for an opening that has not reached the UI.
+const OVERLAY_VISIBLE: u64 = 1 << 4;
+const OPENING_STEP: u64 = 1 << 5;
 const OPENING_MASK: u64 = (1 << 32) - OPENING_STEP;
 const STATE_EPOCH_SHIFT: u32 = 32;
 
@@ -162,13 +164,18 @@ fn state_snapshot(value: u64) -> usize {
 
 fn completed_state(value: u64, generation: usize) -> Option<u64> {
     let snapshot = state_snapshot(value);
-    (snapshot & !OVERLAY_FLAGS == generation
-        && snapshot & INTERCEPTION_SUSPENDED == 0
-        && value & OPENING_MASK == 0)
-        .then_some(value & !(OVERLAY_FLAGS as u64))
+    if snapshot & !OVERLAY_FLAGS != generation || snapshot & INTERCEPTION_SUSPENDED != 0 {
+        return None;
+    }
+    let value = value & !OVERLAY_VISIBLE;
+    Some(if value & OPENING_MASK == 0 {
+        value & !(OVERLAY_FLAGS as u64)
+    } else {
+        value
+    })
 }
 
-/// Flags, pending-opening count, and action epoch share one atomic word. Publishing an opening
+/// Capture flags, UI visibility, pending-opening count, and action epoch share one atomic word. Publishing an opening
 /// and hiding a completed session therefore cannot expose a false inactive state to input.
 /// The public snapshot retains the action encoding's epoch-and-flags layout.
 #[derive(Default)]
@@ -214,7 +221,12 @@ impl HookFlags {
     }
 
     pub fn set(&self, flag: usize, active: bool) {
-        let flag = (flag & FLAG_BITS) as u64;
+        let flag = (flag & FLAG_BITS) as u64
+            | if flag & OVERLAY_ACTIVE != 0 {
+                OVERLAY_VISIBLE
+            } else {
+                0
+            };
         if active {
             self.value.fetch_or(flag, Ordering::AcqRel);
         } else {
@@ -225,25 +237,54 @@ impl HookFlags {
     /// Register and arm together before posting. Retire each opening when applied or discarded.
     #[must_use]
     pub fn begin_opening(&self, generation: usize, typed_search: bool) -> bool {
+        self.update_once(|value| {
+            let snapshot = state_snapshot(value);
+            if self.recovery_pending()
+                || snapshot & !OVERLAY_FLAGS != generation
+                || snapshot & INTERCEPTION_SUSPENDED != 0
+                || value & OPENING_MASK == OPENING_MASK
+            {
+                return None;
+            }
+            let flags = OVERLAY_ACTIVE
+                | if typed_search {
+                    SEARCH_ACTIVE | (snapshot & FILTER_VISIBLE)
+                } else {
+                    0
+                };
+            Some(((value + OPENING_STEP) & !(OVERLAY_FLAGS as u64)) | flags as u64)
+        })
+    }
+
+    /// Callback publication makes one attempt; concurrent UI work wins without a retry loop.
+    fn update_once(&self, update: impl FnOnce(u64) -> Option<u64>) -> bool {
+        let value = self.value.load(Ordering::Acquire);
+        let Some(updated) = update(value) else {
+            return false;
+        };
         self.value
+            .compare_exchange(value, updated, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Withdraw failed posts on the hook message loop, outside native input callbacks.
+    /// Stale cleanup cannot retire a new epoch's openings or clear its interception flags.
+    pub fn withdraw_openings(&self, generation: usize, count: usize) {
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        let _previous = self
+            .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                let snapshot = state_snapshot(value);
-                if self.recovery_pending()
-                    || snapshot & !OVERLAY_FLAGS != generation
-                    || snapshot & INTERCEPTION_SUSPENDED != 0
-                    || value & OPENING_MASK == OPENING_MASK
-                {
+                if state_snapshot(value) & !FLAG_BITS != generation & !FLAG_BITS {
                     return None;
                 }
-                let flags = OVERLAY_ACTIVE
-                    | if typed_search {
-                        SEARCH_ACTIVE | (snapshot & FILTER_VISIBLE)
-                    } else {
-                        0
-                    };
-                Some(((value + OPENING_STEP) & !(OVERLAY_FLAGS as u64)) | flags as u64)
-            })
-            .is_ok()
+                let pending = ((value & OPENING_MASK) / OPENING_STEP).saturating_sub(count);
+                let value = (value & !OPENING_MASK) | (pending * OPENING_STEP);
+                Some(if pending == 0 && value & OVERLAY_VISIBLE == 0 {
+                    value & !(OVERLAY_FLAGS as u64)
+                } else {
+                    value
+                })
+            });
     }
 
     pub fn retire_action_openings(&self, wparam: usize, count: usize) {
@@ -322,22 +363,26 @@ impl HookFlags {
         let _previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                Some(pack_state(
-                    next_hook_generation() | (state_snapshot(value) & FLAG_BITS),
-                ))
+                Some(
+                    pack_state(next_hook_generation() | (state_snapshot(value) & FLAG_BITS))
+                        | (value & OVERLAY_VISIBLE),
+                )
             });
     }
 
-    fn replace_modal_flags(&self, flags: usize) -> usize {
+    fn replace_modal_flags(&self, flags: u64) -> u64 {
         // The closure always supplies a value, so fetch_update retries until it swaps the
         // complete snapshot. Entry and exit advance the generation even when already suspended.
         let previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |_value| {
-                Some(pack_state(next_hook_generation() | (flags & FLAG_BITS)))
+                Some(
+                    pack_state(next_hook_generation())
+                        | (flags & (FLAG_BITS as u64 | OVERLAY_VISIBLE)),
+                )
             })
             .unwrap_or_else(|value| value);
-        state_snapshot(previous) & FLAG_BITS
+        previous & (FLAG_BITS as u64 | OVERLAY_VISIBLE)
     }
 
     pub fn update_overlay(&self, generation: usize, active: bool, typed_search: bool) -> bool {
@@ -346,7 +391,7 @@ impl HookFlags {
         if self.recovery_pending()
             || snapshot & !OVERLAY_FLAGS != generation
             || snapshot & INTERCEPTION_SUSPENDED != 0
-            || (!active && value & OPENING_MASK != 0)
+            || (!active && value & (OPENING_MASK | OVERLAY_VISIBLE) != 0)
         {
             return false;
         }
@@ -385,12 +430,12 @@ impl HookFlags {
 #[must_use = "keep the guard alive for the entire modal call"]
 pub struct HookInterceptionGuard {
     flags: Arc<HookFlags>,
-    saved_flags: usize,
+    saved_flags: u64,
 }
 
 impl HookInterceptionGuard {
     pub fn new(flags: Arc<HookFlags>) -> Self {
-        let saved_flags = flags.replace_modal_flags(INTERCEPTION_SUSPENDED);
+        let saved_flags = flags.replace_modal_flags(INTERCEPTION_SUSPENDED as u64);
         Self { flags, saved_flags }
     }
 }
@@ -404,6 +449,56 @@ impl Drop for HookInterceptionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_post_cleanup_preserves_a_later_visible_session() {
+        let flags = HookFlags::new();
+        let generation = flags.load();
+        assert!(flags.begin_opening(generation, true)); // Failed post, cleanup delayed.
+        assert!(flags.begin_opening(generation, true)); // Later successful opening.
+        flags.retire_openings(generation, 1);
+        flags.set(OVERLAY_ACTIVE, true); // The UI has applied the successful opening.
+        flags.withdraw_openings(generation, 1);
+        assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
+    fn completion_before_failed_post_cleanup_eventually_disarms_capture() {
+        let flags = HookFlags::new();
+        let generation = flags.load();
+        assert!(flags.begin_opening(generation, true));
+        flags.set(OVERLAY_ACTIVE, true);
+        flags.complete_overlay();
+        assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
+        flags.withdraw_openings(generation, 1);
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
+    fn callback_publication_loses_contention_without_retrying_or_leaking_a_receipt() {
+        let flags = HookFlags::new();
+        let generation = flags.load();
+        let mut attempts = 0;
+        assert!(!flags.update_once(|value| {
+            attempts += 1;
+            // The UI changes the same word after the callback read and before its CAS.
+            flags.set_search_state(true, true);
+            Some(value + OPENING_STEP)
+        }));
+        assert_eq!(attempts, 1);
+        assert_eq!(flags.value.load(Ordering::Acquire) & OPENING_MASK, 0);
+        assert_eq!(flags.load() & OVERLAY_FLAGS, SEARCH_ACTIVE | FILTER_VISIBLE);
+        assert!(flags.begin_opening(generation, true));
+        assert_eq!(
+            flags.value.load(Ordering::Acquire) & OPENING_MASK,
+            OPENING_STEP
+        );
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
 
     #[test]
     fn captured_wheel_preserves_raw_deltas_and_the_interception_epoch() {

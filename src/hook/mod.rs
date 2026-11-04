@@ -67,6 +67,7 @@ struct HookContext {
     target_thread_id: u32,
     hook_thread_id: u32,
     pending_errors: u8,
+    failed_openings: Option<(usize, usize)>,
     flags: Arc<HookFlags>,
     interception_generation: usize,
     keyboard_state: KeyboardState,
@@ -153,6 +154,7 @@ impl HookThread {
                         remote_desktop_passthrough: hook_remote_desktop_passthrough,
                         hook_thread_id: 0,
                         pending_errors: 0,
+                        failed_openings: None,
                         flags: hook_flags,
                         interception_generation: 0,
                         keyboard_state,
@@ -681,8 +683,13 @@ fn record_callback_error(error: u8) {
 }
 
 fn report_callback_errors() {
-    let pending = process_with_context(|context| core::mem::take(&mut context.pending_errors))
-        .unwrap_or_default();
+    let pending = process_with_context(|context| {
+        if let Some((generation, count)) = context.failed_openings.take() {
+            context.flags.withdraw_openings(generation, count);
+        }
+        core::mem::take(&mut context.pending_errors)
+    })
+    .unwrap_or_default();
     if pending & HOOK_ERROR_REPLAY_INPUT != 0 {
         eprintln!("Could not replay a suppressed input sequence from the input hook");
     }
@@ -718,6 +725,7 @@ fn test_context() -> HookContext {
         target_thread_id: 0,
         hook_thread_id: 0,
         pending_errors: 0,
+        failed_openings: None,
         flags: Arc::new(HookFlags::default()),
         interception_generation: 0,
         keyboard_state: KeyboardState::default(),
@@ -920,9 +928,21 @@ mod tests {
             KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
             settings,
         );
-        let _tab = context
+        let opening = context
             .state
             .process_key(KeyEvent::pressed(Key::Tab, Modifiers::default()), settings);
+        // Match actual delivery: a sticky gesture owns later keys only after its opening
+        // armed capture. An unpublished opening must not leave sticky capture behind.
+        assert_eq!(
+            alttabio::hook_delivery::deliver(
+                &context.flags,
+                context.interception_generation,
+                settings.typed_search,
+                opening,
+                |_| true,
+            ),
+            alttabio::hook_delivery::Delivery::Posted
+        );
         CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
         for message in [WM_KEYDOWN, WM_KEYDOWN, WM_KEYUP] {
             let data = KBDLLHOOKSTRUCT {

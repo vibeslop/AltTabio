@@ -302,6 +302,78 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_win_number_keeps_number_selection_until_successful_completion() {
+        use crate::input::{Key, KeyEvent, Modifiers};
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+        for typed_search in [false, true] {
+            let mut hook = HookState::default();
+            let settings = HookSettings {
+                search_active: typed_search,
+                right_button_wheel_switching: false,
+                ..HookSettings::default()
+            };
+            let win = Modifiers {
+                left_windows: true,
+                ..Modifiers::default()
+            };
+            for event in [
+                KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
+                KeyEvent::pressed(Key::Tab, win),
+                KeyEvent::released(Key::Tab, win),
+                KeyEvent::released(Key::LeftWindows, Modifiers::default()),
+            ] {
+                let _event = hook.process_key(event, settings);
+            }
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search,
+                release_alt_switches: true,
+            });
+            session.open(
+                [
+                    SwitchTask::new(1, 10, "One", "one"),
+                    SwitchTask::new(2, 20, "Two", "two"),
+                ],
+                None,
+            );
+            hook.set_overlay_active(true);
+            for (digit, expected) in [(9, SwitcherEffect::None), (2, SwitcherEffect::Activate(20))]
+            {
+                let outcome = hook.process_key(
+                    KeyEvent::pressed(Key::Digit(digit), Modifiers::default())
+                        .with_text(char::from(b'0' + digit)),
+                    settings,
+                );
+                assert!(outcome.suppress);
+                let Some(action) = outcome.actions().next() else {
+                    panic!("number must reach the session");
+                };
+                assert_eq!(session.handle_input(action), expected);
+                assert!(session.switcher().filter().is_empty());
+                hook.set_overlay_active(session.is_visible());
+                assert!(
+                    hook.process_key(
+                        KeyEvent::released(Key::Digit(digit), Modifiers::default()),
+                        settings
+                    )
+                    .suppress
+                );
+            }
+            assert!(!session.is_visible());
+            assert!(
+                !hook
+                    .process_key(
+                        KeyEvent::pressed(Key::Other(0x41), Modifiers::default()),
+                        HookSettings::default()
+                    )
+                    .suppress,
+                "successful selection must stop capturing ordinary typing"
+            );
+        }
+    }
+
+    #[test]
     fn ownership_of_sticky_win_gesture_ends_on_number_or_pointer_selection() {
         use crate::input::{Key, KeyEvent, Modifiers};
         for pointer in [false, true] {

@@ -14,8 +14,8 @@ pub enum Delivery {
     Stale,
     /// The overlay could not be armed for this generation, so its opening action was withheld.
     OverlayRefused,
-    /// Posting an action failed. If it would have opened the overlay, the arming was withdrawn.
-    PostFailed,
+    /// Posting failed. The caller must withdraw any registered opening outside the callback.
+    PostFailed { pending_opening: bool },
 }
 
 /// Posts the outcome's actions in order. Posting can race with a modal boundary, so the
@@ -38,11 +38,9 @@ pub fn deliver(
             return Delivery::OverlayRefused;
         }
         if !post(action) {
-            if opens_overlay {
-                flags.retire_openings(generation, 1);
-                flags.complete_overlay();
-            }
-            return Delivery::PostFailed;
+            return Delivery::PostFailed {
+                pending_opening: opens_overlay,
+            };
         }
     }
     Delivery::Posted
@@ -165,8 +163,11 @@ mod tests {
         );
         assert_eq!(
             deliver(&flags, generation, true, alt_tab(), |_| false),
-            Delivery::PostFailed
+            Delivery::PostFailed {
+                pending_opening: true
+            }
         );
+        flags.withdraw_openings(generation, 1);
         assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_ACTIVE | SEARCH_ACTIVE);
         flags.retire_openings(generation, 1);
         flags.complete_overlay();
@@ -177,7 +178,15 @@ mod tests {
     fn a_failed_post_withdraws_the_overlay_it_armed() {
         let (flags, generation) = current_flags();
         let delivery = deliver(&flags, generation, true, alt_tab(), |_| false);
-        assert_eq!(delivery, Delivery::PostFailed);
+        assert_eq!(
+            delivery,
+            Delivery::PostFailed {
+                pending_opening: true
+            }
+        );
+        // Callback delivery keeps the receipt until the hook message loop withdraws it.
+        assert_ne!(flags.load() & OVERLAY_FLAGS, 0);
+        flags.withdraw_openings(generation, 1);
         assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
         assert!(flags.generation_is_current(generation));
     }
