@@ -224,7 +224,7 @@ impl Renderer {
         task_icons: &TaskIcons,
         preview_frame: Option<RECT>,
         options: RenderOptions,
-        close_button_state: CloseButtonVisualState,
+        close_button_state: Option<CloseButtonVisualState>,
     ) -> Result<()> {
         self.prepare(hwnd)?;
         self.icons.for_snapshot(task_icons);

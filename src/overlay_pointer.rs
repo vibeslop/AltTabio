@@ -45,25 +45,34 @@ impl HoverSelection {
 /// selection moves under the pointer.
 #[derive(Default)]
 pub struct CloseButtonInteraction {
+    pointer_in_list: bool,
     hovered_target: Option<isize>,
     pressed_target: Option<isize>,
 }
 
 impl CloseButtonInteraction {
     #[must_use]
-    pub fn visual_state(&self, selected_target: Option<isize>) -> CloseButtonVisualState {
-        let Some(selected_target) = selected_target else {
-            return CloseButtonVisualState::Normal;
-        };
+    pub fn visual_state(&self, selected_target: Option<isize>) -> Option<CloseButtonVisualState> {
+        let selected_target = selected_target.filter(|_| self.pointer_in_list)?;
         if self.pressed_target == Some(selected_target)
             && self.hovered_target == Some(selected_target)
         {
-            CloseButtonVisualState::Pressed
+            Some(CloseButtonVisualState::Pressed)
         } else if self.hovered_target == Some(selected_target) {
-            CloseButtonVisualState::Hovered
+            Some(CloseButtonVisualState::Hovered)
         } else {
-            CloseButtonVisualState::Normal
+            Some(CloseButtonVisualState::Normal)
         }
+    }
+
+    /// Returns whether entering or leaving the pane changed the button's visibility.
+    pub fn update_pointer_in_list(&mut self, in_list: bool) -> bool {
+        let changed = self.pointer_in_list != in_list;
+        self.pointer_in_list = in_list;
+        if !in_list {
+            self.hovered_target = None;
+        }
+        changed
     }
 
     /// Returns whether the hover changed and the button needs a redraw.
@@ -76,6 +85,7 @@ impl CloseButtonInteraction {
     }
 
     pub fn press(&mut self, target: isize) {
+        self.pointer_in_list = true;
         self.hovered_target = Some(target);
         self.pressed_target = Some(target);
     }
@@ -96,6 +106,7 @@ impl CloseButtonInteraction {
     }
 
     pub fn reset(&mut self) {
+        self.pointer_in_list = false;
         self.hovered_target = None;
         self.pressed_target = None;
     }
@@ -195,26 +206,50 @@ mod tests {
     fn close_button_visual_state_tracks_hover_press_and_leave() {
         let mut interaction = CloseButtonInteraction::default();
 
+        assert_eq!(interaction.visual_state(Some(10)), None);
+        assert!(interaction.update_pointer_in_list(true));
         assert_eq!(
             interaction.visual_state(Some(10)),
-            CloseButtonVisualState::Normal
+            Some(CloseButtonVisualState::Normal)
         );
         assert!(interaction.update_hover(Some(10)));
         assert_eq!(
             interaction.visual_state(Some(10)),
-            CloseButtonVisualState::Hovered
+            Some(CloseButtonVisualState::Hovered)
         );
         interaction.press(10);
         assert_eq!(
             interaction.visual_state(Some(10)),
-            CloseButtonVisualState::Pressed
+            Some(CloseButtonVisualState::Pressed)
         );
         assert!(interaction.update_hover(None));
         assert_eq!(
             interaction.visual_state(Some(10)),
-            CloseButtonVisualState::Normal
+            Some(CloseButtonVisualState::Normal)
         );
         assert!(interaction.cancel_press());
+        assert!(interaction.update_pointer_in_list(false));
+        assert_eq!(interaction.visual_state(Some(10)), None);
+    }
+
+    #[test]
+    fn leaving_the_list_hides_the_button_and_reentry_does_not_restore_a_stale_highlight() {
+        let mut interaction = CloseButtonInteraction::default();
+        interaction.press(10);
+        assert!(interaction.update_pointer_in_list(false));
+        assert_eq!(interaction.visual_state(Some(10)), None);
+        assert_eq!(interaction.release(None), None);
+
+        assert!(interaction.update_pointer_in_list(true));
+        assert_eq!(
+            interaction.visual_state(Some(20)),
+            Some(CloseButtonVisualState::Normal)
+        );
+        assert!(!interaction.update_pointer_in_list(true));
+        assert_eq!(interaction.visual_state(None), None);
+
+        interaction.reset();
+        assert_eq!(interaction.visual_state(Some(20)), None);
     }
 
     #[test]

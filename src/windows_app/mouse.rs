@@ -4,7 +4,9 @@ use crate::win32::point_from_lparam;
 use alttabio::input::InputAction;
 use alttabio::overlay_pointer::{close_target_for_hit, select_hovered_position};
 use alttabio::switcher::SwitcherEffect;
-use alttabio::task_list_hit::{TaskListHit, hit_test_pixels, wheel_behavior_at_pixels};
+use alttabio::task_list_hit::{
+    TaskListHit, hit_test_pixels, pointer_in_list_pixels, wheel_behavior_at_pixels,
+};
 use alttabio::task_refresh::ContextMenuCommandOutcome;
 use alttabio::window_command::WindowCommand;
 use std::mem::size_of;
@@ -107,7 +109,7 @@ impl App {
         self.track_mouse_leave();
 
         let mut hit = self.hit_test(lparam);
-        let mut needs_redraw = false;
+        let mut needs_redraw = self.refresh_close_button_visibility();
         if pointer_moved
             && self.settings.general.mouse_over_selection
             && !self.close_button.is_pressed()
@@ -126,9 +128,41 @@ impl App {
 
     pub(super) fn handle_mouse_leave(&mut self) {
         self.mouse_leave_tracked = false;
-        if self.close_button.update_hover(None) {
+        if self.close_button.update_pointer_in_list(false) {
             self.request_redraw();
         }
+    }
+
+    /// Refresh on paint too, so opening, resizing, or changing selection under a stationary
+    /// pointer uses its current pane without arming hover selection.
+    pub(super) fn refresh_close_button_visibility(&mut self) -> bool {
+        let in_list = self.read_mouse_position().is_some_and(|mut cursor| {
+            let converted = unsafe {
+                // SAFETY: the overlay HWND is live and `cursor` is writable for this call.
+                ScreenToClient(self.hwnd, &raw mut cursor)
+            };
+            if !converted.as_bool() {
+                eprintln!("Could not convert the cursor position for close-button visibility");
+                return false;
+            }
+            let Some(client) = self.client_size() else {
+                return false;
+            };
+            let dpi = unsafe {
+                // SAFETY: the overlay HWND is live and the call returns a scalar DPI value.
+                GetDpiForWindow(self.hwnd)
+            };
+            pointer_in_list_pixels(
+                client,
+                (cursor.x, cursor.y),
+                dpi,
+                self.settings.appearance.compact_list,
+            )
+        });
+        if in_list {
+            self.track_mouse_leave();
+        }
+        self.close_button.update_pointer_in_list(in_list)
     }
 
     pub(super) fn handle_button_down(&mut self, lparam: LPARAM) {

@@ -22,7 +22,7 @@ pub(super) struct Canvas<'a> {
     pub(super) layout: OverlayLayout,
     pub(super) options: RenderOptions,
     pub(super) scale: f32,
-    pub(super) close_button_state: CloseButtonVisualState,
+    pub(super) close_button_state: Option<CloseButtonVisualState>,
 }
 
 impl Canvas<'_> {
@@ -207,7 +207,8 @@ impl Canvas<'_> {
     ) {
         let layout = self.layout;
         let options = self.options;
-        let close_button = selected.then(|| layout.close_button_bounds(bounds));
+        let close_button = (selected && self.close_button_state.is_some())
+            .then(|| layout.close_button_bounds(bounds));
         if selected {
             unsafe {
                 // SAFETY: the target and brush are valid on this UI thread and the rectangle
@@ -262,8 +263,10 @@ impl Canvas<'_> {
                 &self.resources.secondary_brush,
             );
         }
-        if let Some(close_button) = close_button {
-            self.draw_close_button(close_button);
+        if let Some(close_button) = close_button
+            && let Some(state) = self.close_button_state
+        {
+            self.draw_close_button(close_button, state);
         }
     }
 
@@ -288,10 +291,10 @@ impl Canvas<'_> {
         }
     }
 
-    fn draw_close_button(&self, bounds: LogicalRect) {
+    fn draw_close_button(&self, bounds: LogicalRect, state: CloseButtonVisualState) {
         let resources = self.resources;
         let target = &resources.target;
-        let background = match self.close_button_state {
+        let background = match state {
             CloseButtonVisualState::Normal => None,
             CloseButtonVisualState::Hovered => Some(&resources.close_hover_brush),
             CloseButtonVisualState::Pressed => Some(&resources.close_pressed_brush),

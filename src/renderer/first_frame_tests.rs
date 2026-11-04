@@ -116,7 +116,7 @@ fn assert_complete_frame(
         &icons,
         None,
         options,
-        CloseButtonVisualState::Normal,
+        Some(CloseButtonVisualState::Normal),
     )?;
     // SAFETY: drawing committed this test window's first frame. DwmFlush waits for this
     // process's queued presentation before the screen-backed client DC is sampled below.
