@@ -12,7 +12,7 @@ mod replay;
 use crate::app_messages::WM_OUTSIDE_POINTER;
 use crate::win32::{high_word, module_instance};
 use alttabio::hook_flags::{
-    FILTER_VISIBLE, HookFlags, HookInterceptionGuard, HookOpeningReceipt, INTERCEPTION_SUSPENDED,
+    FILTER_VISIBLE, HookActionGuard, HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED,
     OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE,
 };
 use alttabio::input::{
@@ -187,12 +187,8 @@ impl HookThread {
         }
     }
 
-    pub fn set_search_state(&self, active: bool, filtered: bool) {
-        self.flags.set_search_state(active, filtered);
-    }
-
-    pub fn set_overlay_active(&self, active: bool) {
-        self.flags.set(OVERLAY_ACTIVE, active);
+    pub fn sync_overlay(&self, visible: bool, typed_search: bool, filtered: bool) {
+        self.flags.sync_overlay(visible, typed_search, filtered);
     }
 
     pub fn complete_overlay(&self) {
@@ -203,8 +199,8 @@ impl HookThread {
         self.flags.retire_action_openings(origin.0, count);
     }
 
-    pub fn applying_opening(&self, origin: WPARAM) -> HookOpeningReceipt {
-        HookOpeningReceipt::new(Arc::clone(&self.flags), origin.0)
+    pub fn applying_action(&self, origin: WPARAM, action: InputAction) -> Option<HookActionGuard> {
+        HookActionGuard::new(Arc::clone(&self.flags), origin.0, action)
     }
 
     /// Cancels interception across modal boundaries without touching the UI's restored flags.

@@ -221,6 +221,54 @@ mod tests {
     use crate::hook::{CONTEXT, test_context};
 
     #[test]
+    fn desktop_recovery_drops_unapplied_capture_and_keeps_visible_panel_capture() {
+        use alttabio::hook_flags::{
+            FILTER_VISIBLE, OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE, encode_action,
+        };
+        use alttabio::input::{Key, KeyEvent, Modifiers, MouseEvent};
+        for visible in [false, true] {
+            let context = test_context();
+            let flags = std::sync::Arc::clone(&context.flags);
+            let generation = flags.load();
+            assert!(flags.begin_opening(generation, true));
+            let (origin, _) =
+                encode_action(alttabio::input::InputAction::MouseWheel(1), generation);
+            if visible {
+                flags.sync_overlay(true, true, true);
+            }
+            CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+            DESKTOP_BOUNDARY.set(None);
+            note_desktop_boundary(200);
+            recover_keyboard_state_with(400, || Ok(true), || [false; 8]);
+            assert!(!flags.action_is_current(origin));
+            assert_eq!(
+                flags.load() & OVERLAY_FLAGS,
+                if visible { OVERLAY_FLAGS } else { 0 }
+            );
+            let _outcome = process_with_context(|context| {
+                let capture = context.sync_interception();
+                context
+                    .state
+                    .set_overlay_active(capture & OVERLAY_ACTIVE != 0);
+                let settings = alttabio::input::HookSettings {
+                    search_active: capture & SEARCH_ACTIVE != 0,
+                    filter_visible: capture & FILTER_VISIBLE != 0,
+                    ..context.settings
+                };
+                let mut event = KeyEvent::pressed(Key::Other(0x41), Modifiers::default());
+                event.text = Some('a');
+                let typing = context.state.process_key(event, settings);
+                assert_eq!(typing.suppress, visible);
+                let wheel = context
+                    .state
+                    .process_mouse(MouseEvent::Wheel(-120), settings);
+                assert_eq!(wheel.suppress, visible);
+            });
+            CONTEXT.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    #[test]
     fn desktop_recovery_waits_for_access_and_coalesces_a_complete_gap() {
         CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
         DESKTOP_BOUNDARY.set(None);

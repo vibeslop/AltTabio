@@ -167,7 +167,7 @@ fn completed_state(value: u64, generation: usize) -> Option<u64> {
     if snapshot & !OVERLAY_FLAGS != generation || snapshot & INTERCEPTION_SUSPENDED != 0 {
         return None;
     }
-    let value = value & !OVERLAY_VISIBLE;
+    let value = value & !(OVERLAY_VISIBLE | FILTER_VISIBLE as u64);
     Some(if value & OPENING_MASK == 0 {
         value & !(OVERLAY_FLAGS as u64)
     } else {
@@ -232,6 +232,31 @@ impl HookFlags {
         } else {
             self.value.fetch_and(!flag, Ordering::AcqRel);
         }
+    }
+
+    /// Publishes UI visibility and derives capture atomically, retaining accepted openings.
+    pub fn sync_overlay(&self, visible: bool, typed_search: bool, filtered: bool) {
+        let _previous = self
+            .value
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                let capture = visible || value & OPENING_MASK != 0;
+                let flags = if capture { OVERLAY_ACTIVE } else { 0 }
+                    | if capture && typed_search {
+                        SEARCH_ACTIVE
+                    } else {
+                        0
+                    }
+                    | if visible && typed_search && filtered {
+                        FILTER_VISIBLE
+                    } else {
+                        0
+                    };
+                Some(
+                    (value & !(OVERLAY_VISIBLE | OVERLAY_FLAGS as u64))
+                        | flags as u64
+                        | if visible { OVERLAY_VISIBLE } else { 0 },
+                )
+            });
     }
 
     /// Register and arm together before posting. Retire each opening when applied or discarded.
@@ -360,15 +385,18 @@ impl HookFlags {
             });
     }
 
-    /// Invalidates queued actions without overwriting concurrent UI flag changes.
+    /// Invalidates queued openings and retains capture only for a visible UI session.
     pub fn advance_generation(&self) {
         let _previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                Some(
-                    pack_state(next_hook_generation() | (state_snapshot(value) & FLAG_BITS))
-                        | (value & OVERLAY_VISIBLE),
-                )
+                let flags = state_snapshot(value)
+                    & if value & OVERLAY_VISIBLE != 0 {
+                        FLAG_BITS
+                    } else {
+                        INTERCEPTION_SUSPENDED
+                    };
+                Some(pack_state(next_hook_generation() | flags) | (value & OVERLAY_VISIBLE))
             });
     }
 
@@ -428,22 +456,36 @@ impl HookFlags {
     }
 }
 
-/// Owns the receipt of an opening while the UI applies its action.
-#[must_use = "keep the receipt alive until the opening finishes applying"]
-pub struct HookOpeningReceipt {
+/// Validates each queued action and retains any opening receipt throughout UI application.
+#[must_use = "keep the guard alive until the action finishes applying"]
+pub struct HookActionGuard {
     flags: Arc<HookFlags>,
     origin: usize,
+    opening: bool,
 }
 
-impl HookOpeningReceipt {
-    pub fn new(flags: Arc<HookFlags>, origin: usize) -> Self {
-        Self { flags, origin }
+impl HookActionGuard {
+    pub fn new(flags: Arc<HookFlags>, origin: usize, action: InputAction) -> Option<Self> {
+        let opening = matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_));
+        if !flags.action_is_current(origin) {
+            if opening {
+                flags.retire_action_openings(origin, 1);
+            }
+            return None;
+        }
+        Some(Self {
+            flags,
+            origin,
+            opening,
+        })
     }
 }
 
-impl Drop for HookOpeningReceipt {
+impl Drop for HookActionGuard {
     fn drop(&mut self) {
-        self.flags.retire_action_openings(self.origin, 1);
+        if self.opening {
+            self.flags.retire_action_openings(self.origin, 1);
+        }
     }
 }
 
@@ -472,13 +514,148 @@ mod tests {
     use super::*;
 
     #[test]
+    fn completion_clears_old_query_presence_for_a_queued_mouse_opening() {
+        use crate::input::{HookSettings, HookState, Key, KeyEvent, Modifiers, MouseEvent};
+        let flags = HookFlags::new();
+        flags.sync_overlay(true, true, true);
+        let generation = flags.load() & !OVERLAY_FLAGS;
+        let mut hook = HookState::default();
+        let settings = HookSettings {
+            right_button_wheel_switching: true,
+            ..HookSettings::default()
+        };
+        hook.set_overlay_active(true);
+        let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
+        let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+        assert!(flags.begin_opening(generation, true));
+        // The searched session completes before the queued fresh session reaches the UI.
+        flags.complete_overlay();
+        let capture = flags.load();
+        hook.set_overlay_active(capture & OVERLAY_ACTIVE != 0);
+        let left = hook.process_key(
+            KeyEvent::pressed(Key::LeftArrow, Modifiers::default()),
+            HookSettings {
+                search_active: capture & SEARCH_ACTIVE != 0,
+                filter_visible: capture & FILTER_VISIBLE != 0,
+                ..settings
+            },
+        );
+        assert_eq!(left.actions().next(), Some(InputAction::Navigate(-1)));
+    }
+
+    #[test]
+    fn hidden_ui_sync_keeps_an_accepted_mouse_opening_armed() {
+        use crate::hook_delivery::{Delivery, deliver};
+        use crate::input::{HookSettings, HookState, MouseEvent};
+        for typed_search in [false, true] {
+            let flags = Arc::new(HookFlags::new());
+            let generation = flags.load();
+            let settings = HookSettings {
+                typed_search,
+                right_button_wheel_switching: true,
+                ..HookSettings::default()
+            };
+            let mut hook = HookState::default();
+            let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
+            let opening = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+            assert_eq!(
+                deliver(&flags, generation, typed_search, opening, |_| true),
+                Delivery::Posted
+            );
+            // Settings closes before the accepted opening reaches the UI.
+            flags.sync_overlay(false, typed_search, false);
+            let expected = OVERLAY_ACTIVE | if typed_search { SEARCH_ACTIVE } else { 0 };
+            assert_eq!(flags.load() & OVERLAY_FLAGS, expected);
+            hook.set_overlay_active(flags.load() & OVERLAY_ACTIVE != 0);
+            let release = hook.process_mouse(MouseEvent::RightButtonReleased, settings);
+            assert!(release.suppress);
+            assert_eq!(
+                release.actions().next(),
+                Some(InputAction::MouseWheelReleased)
+            );
+            let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
+            let Some(applying) =
+                HookActionGuard::new(Arc::clone(&flags), origin, InputAction::MouseWheel(1))
+            else {
+                panic!("accepted opening must stay current");
+            };
+            flags.sync_overlay(true, typed_search, false);
+            drop(applying);
+            flags.complete_overlay();
+            assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        }
+    }
+
+    #[test]
+    fn queued_actions_stop_when_application_cancels_their_epoch() {
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+        let flags = Arc::new(HookFlags::new());
+        let generation = flags.load();
+        let tasks = [
+            SwitchTask::new(1, 10, "One", "one"),
+            SwitchTask::new(2, 20, "Two", "two"),
+        ];
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        let _opening = session.handle_input(InputAction::MouseWheel(1));
+        session.open(tasks.clone(), Some(1));
+        flags.sync_overlay(true, true, false);
+        assert!(flags.begin_opening(generation, true));
+        assert!(flags.begin_opening(generation, true));
+        let mut opened = 0;
+        let mut activations = Vec::new();
+        for action in [
+            InputAction::MouseWheelReleased,
+            InputAction::MouseWheel(1),
+            InputAction::MouseWheel(1),
+            InputAction::MouseWheelReleased,
+        ] {
+            let (origin, _) = encode_action(action, generation);
+            let Some(_applying) = HookActionGuard::new(Arc::clone(&flags), origin, action) else {
+                continue;
+            };
+            match session.handle_input(action) {
+                SwitcherEffect::Open { selection_delta } => {
+                    opened += 1;
+                    if opened == 1 {
+                        // The first enumeration failed, cancelling the originating batch.
+                        session.hide();
+                        flags.cancel_overlay();
+                    } else {
+                        session.open(tasks.clone(), selection_delta);
+                        flags.sync_overlay(true, true, false);
+                    }
+                }
+                SwitcherEffect::Activate(target) => {
+                    activations.push(target);
+                    flags.complete_overlay();
+                }
+                SwitcherEffect::None | SwitcherEffect::Redraw => {}
+                effect => panic!("unexpected batch effect: {effect:?}"),
+            }
+        }
+        assert_eq!(opened, 1, "cancelled input must not retry opening");
+        assert_eq!(activations, [20]);
+        assert!(!session.is_visible());
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
     fn failed_post_cleanup_preserves_an_opening_being_applied() {
         let flags = Arc::new(HookFlags::new());
         let generation = flags.load();
         assert!(flags.begin_opening(generation, true)); // A failed to post.
         assert!(flags.begin_opening(generation, true)); // B reached the UI.
         let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
-        let applying = HookOpeningReceipt::new(Arc::clone(&flags), origin);
+        let Some(applying) =
+            HookActionGuard::new(Arc::clone(&flags), origin, InputAction::MouseWheel(1))
+        else {
+            panic!("opening must be current");
+        };
         // B is enumerating windows and has not published visibility yet.
         flags.withdraw_openings(generation, 1);
         assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
@@ -908,15 +1085,26 @@ mod tests {
     }
 
     #[test]
-    fn advancing_the_generation_keeps_the_ui_flags_and_retires_queued_actions() {
+    fn advancing_the_generation_keeps_only_visible_ui_flags_and_retires_queued_actions() {
         // The last epoch before the counter wraps, so no generation handed out in tests repeats it.
         let generation = ACTION_EPOCH_MASK << GENERATION_SHIFT;
         for saved_flags in 0..=FLAG_BITS {
             let flags = HookFlags::with_value(generation | saved_flags);
+            let visible = saved_flags & OVERLAY_ACTIVE != 0;
+            if visible {
+                flags.value.fetch_or(OVERLAY_VISIBLE, Ordering::AcqRel);
+            }
             let (queued, _) = encode_action(InputAction::AltReleased, flags.load());
             assert_eq!(flags.action_is_current(queued), saved_flags & 1 == 0);
             flags.advance_generation();
-            assert_eq!(flags.load() & FLAG_BITS, saved_flags);
+            assert_eq!(
+                flags.load() & FLAG_BITS,
+                if visible {
+                    saved_flags
+                } else {
+                    saved_flags & INTERCEPTION_SUSPENDED
+                }
+            );
             assert_ne!(flags.load() & !FLAG_BITS, generation);
             assert!(!flags.action_is_current(queued));
         }

@@ -249,17 +249,17 @@ impl App {
     }
 
     pub(super) fn apply_hook_action(&mut self, action: InputAction, origin: WPARAM) {
+        let Some(_action) = self
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.applying_action(origin, action))
+        else {
+            return;
+        };
         if let InputAction::OverlayWheel(delta) = action {
             self.handle_overlay_wheel(delta);
             return;
         }
-        let _opening = if matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_)) {
-            self.hooks
-                .as_ref()
-                .map(|hooks| hooks.applying_opening(origin))
-        } else {
-            None
-        };
         if let InputAction::MouseWheel(steps) = action
             && self.handle_gesture_wheel(steps)
         {

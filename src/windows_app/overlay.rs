@@ -54,8 +54,7 @@ impl App {
             self.focus_overlay();
         }
         self.sync_content_size();
-        self.set_hook_search_active(true);
-        self.set_hook_overlay_active(true);
+        self.sync_hook_overlay();
         self.request_redraw();
     }
 
@@ -165,7 +164,7 @@ impl App {
     }
 
     pub(super) fn request_redraw(&mut self) {
-        self.set_hook_search_active(self.is_visible());
+        self.sync_hook_overlay();
         self.sync_filter_popup();
         let source = self
             .session

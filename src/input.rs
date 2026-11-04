@@ -759,7 +759,7 @@ impl HookState {
         if !matches!(action, InputAction::Navigate(_)) {
             return None;
         }
-        if event.transition == KeyTransition::Pressed && self.switch_gesture_active() {
+        if event.transition == KeyTransition::Pressed && self.overlay_controls_active() {
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -775,9 +775,7 @@ impl HookState {
         if self.owned_key_release_pending(event.key) {
             return Some(HookOutcome::suppressed());
         }
-        let overlay_enter =
-            event.key == Key::Enter && (self.overlay_active || self.mouse.is_active());
-        if !self.switch_gesture_active() && !overlay_enter {
+        if !self.overlay_controls_active() {
             return None;
         }
 
@@ -820,7 +818,7 @@ impl HookState {
         if !matches!(action, InputAction::SelectFirst | InputAction::SelectLast) {
             return None;
         }
-        if event.transition == KeyTransition::Pressed && self.switch_gesture_active() {
+        if event.transition == KeyTransition::Pressed && self.overlay_controls_active() {
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -848,7 +846,7 @@ impl HookState {
         // An empty query has no caret or selection to move. Keep modified navigation on the
         // switcher route too, including its paired release and final Alt-release activation.
         if !settings.filter_visible
-            && self.switch_gesture_active()
+            && self.overlay_controls_active()
             && matches!(
                 event.key,
                 Key::LeftArrow | Key::RightArrow | Key::Home | Key::End
@@ -930,6 +928,10 @@ impl HookState {
 
     const fn switch_gesture_active(&self) -> bool {
         self.alt_switch_gesture_active || self.win_switch_gesture_active
+    }
+
+    const fn overlay_controls_active(&self) -> bool {
+        self.switch_gesture_active() || self.overlay_active || self.mouse.is_active()
     }
 }
 

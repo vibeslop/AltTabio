@@ -31,28 +31,23 @@ impl App {
         if suspended {
             hooks.set_interception_suspended(true);
         }
-        hooks.set_search_state(
-            !suspended && self.session.search_active(),
+        hooks.sync_overlay(
+            !suspended && self.session.is_visible(),
+            self.settings.general.typed_search,
             self.session.filter_visible(),
         );
-        hooks.set_overlay_active(!suspended && self.session.is_visible());
         if !suspended {
             hooks.set_interception_suspended(false);
         }
     }
 
-    pub(super) fn set_hook_search_active(&self, overlay_visible: bool) {
+    pub(super) fn sync_hook_overlay(&self) {
         if let Some(hooks) = &self.hooks {
-            hooks.set_search_state(
-                overlay_visible && self.settings.general.typed_search,
+            hooks.sync_overlay(
+                self.is_visible(),
+                self.settings.general.typed_search,
                 self.session.filter_visible(),
             );
-        }
-    }
-
-    pub(super) fn set_hook_overlay_active(&self, active: bool) {
-        if let Some(hooks) = &self.hooks {
-            hooks.set_overlay_active(active);
         }
     }
 

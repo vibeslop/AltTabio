@@ -302,6 +302,86 @@ mod tests {
     }
 
     #[test]
+    fn mouse_panel_owns_navigation_before_shell_focus_transfers() {
+        use crate::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
+        use crate::input::{Key, KeyEvent, Modifiers};
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
+        use std::time::Duration;
+        for typed_search in [false, true] {
+            for (key, navigation, selected) in [
+                (Key::UpArrow, InputAction::Navigate(-1), 10),
+                (Key::DownArrow, InputAction::Navigate(1), 30),
+                (Key::LeftArrow, InputAction::Navigate(-1), 10),
+                (Key::RightArrow, InputAction::Navigate(1), 30),
+                (Key::Home, InputAction::SelectFirst, 10),
+                (Key::End, InputAction::SelectLast, 30),
+            ] {
+                let mut hook = HookState::default();
+                let settings = HookSettings {
+                    typed_search,
+                    search_active: typed_search,
+                    ..ENABLED
+                };
+                let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
+                let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+                hook.set_overlay_active(true);
+                let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                    typed_search,
+                    release_alt_switches: true,
+                });
+                let _opening = session.handle_input(InputAction::MouseWheel(1));
+                session.open(
+                    [
+                        SwitchTask::new(1, 10, "One", "one"),
+                        SwitchTask::new(2, 20, "Two", "two"),
+                        SwitchTask::new(3, 30, "Three", "three"),
+                    ],
+                    Some(1),
+                );
+                let mut deferred = DeferredSwitch::new(InputAction::MouseWheel(1));
+                let _previewed = deferred.take_preview_actions();
+                let press =
+                    hook.process_key(KeyEvent::pressed(key, Modifiers::default()), settings);
+                assert!(press.suppress, "pending mouse panel must own {key:?}");
+                assert_eq!(press.actions().next(), Some(navigation));
+                for action in press.actions() {
+                    assert!(deferred.push(action));
+                }
+                assert!(
+                    hook.process_key(KeyEvent::released(key, Modifiers::default()), settings)
+                        .suppress
+                );
+                for action in deferred.take_preview_actions() {
+                    assert_eq!(session.handle_input(action), SwitcherEffect::Redraw);
+                }
+                let release = hook.process_mouse(MouseEvent::RightButtonReleased, settings);
+                assert_eq!(
+                    release.actions().next(),
+                    Some(InputAction::MouseWheelReleased)
+                );
+                for action in release.actions() {
+                    assert!(deferred.push(action));
+                }
+                assert_eq!(
+                    deferred.poll(true, Duration::ZERO),
+                    DeferredSwitchPoll::Wait
+                );
+                let DeferredSwitchPoll::Ready(actions) = deferred.poll(false, Duration::ZERO)
+                else {
+                    panic!("focus must release completion");
+                };
+                assert_eq!(actions, [InputAction::MouseWheelReleased]);
+                assert_eq!(
+                    session.handle_input(actions[0]),
+                    SwitcherEffect::Activate(selected)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unavailable_mouse_number_keeps_enter_owned_until_deferred_focus_completes() {
         use crate::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
         use crate::input::{Key, KeyEvent, Modifiers};
