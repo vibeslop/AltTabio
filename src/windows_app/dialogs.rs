@@ -8,7 +8,7 @@ use alttabio::settings_change::{
 use alttabio::settings_form::Category;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsIconic, PostMessageW, PostQuitMessage, SW_RESTORE, SW_SHOW, ShowWindow,
+    IsIconic, PostMessageW, SW_RESTORE, SW_SHOW, ShowWindow,
 };
 
 #[cfg(test)]
@@ -79,18 +79,7 @@ impl AppHost {
             |window| {
                 self.settings_window.set(Some(window));
             },
-            |message| {
-                if !super::update::is_update_timer(message, owner) {
-                    return false;
-                }
-                // The Settings loop has no state borrow here. Work may proceed, while the
-                // settings_dialog flag still prevents committing an update restart.
-                if self.update_tick() {
-                    // SAFETY: propagate a requested application exit through the nested loop.
-                    unsafe { PostQuitMessage(0) };
-                }
-                true
-            },
+            |message| self.handle_update_message(message),
         );
         self.settings_window.set(None);
 

@@ -145,7 +145,7 @@ pub fn run(
 
     let loop_result = unsafe {
         // SAFETY: host_pointer remains allocated until the loop ends and window user data is cleared.
-        run_message_loop(&*host_pointer, hwnd)
+        run_message_loop(&*host_pointer)
     };
     let window_retains_app = unsafe {
         // SAFETY: hwnd is either the application window or an already-destroyed borrowed value;
@@ -214,11 +214,11 @@ struct App {
     win_event_watcher: Option<WinEventWatcher>,
     listed_refresh_retry_timer_armed: bool,
     updates: update::Updates,
-    update_dialog_open: bool,
 }
 
 struct AppHost {
     state: RefCell<App>,
+    update_window: RefCell<Option<crate::update_window::UpdateWindow>>,
     // Borrowed only while the Settings dialog's nested message loop is running.
     settings_window: Cell<Option<HWND>>,
 }
@@ -227,6 +227,7 @@ impl AppHost {
     fn new(state: App) -> Self {
         Self {
             state: RefCell::new(state),
+            update_window: RefCell::new(None),
             settings_window: Cell::new(None),
         }
     }
@@ -270,7 +271,6 @@ impl App {
             win_event_watcher: None,
             listed_refresh_retry_timer_armed: false,
             updates: update::Updates::default(),
-            update_dialog_open: false,
         })
     }
 
@@ -355,7 +355,7 @@ impl App {
     const fn dialog_state(&self) -> DialogState {
         DialogState {
             settings_dialog: self.settings_dialog_open,
-            blocking_dialog: self.update_dialog_open,
+            blocking_dialog: false,
             context_menu: self.session.context_menu_open(),
         }
     }
@@ -409,7 +409,7 @@ fn register_window_class(instance: HINSTANCE) -> Result<()> {
     }
 }
 
-fn run_message_loop(host: &AppHost, hwnd: HWND) -> Result<()> {
+fn run_message_loop(host: &AppHost) -> Result<()> {
     let mut message = MSG::default();
     loop {
         let result = unsafe {
@@ -422,10 +422,7 @@ fn run_message_loop(host: &AppHost, hwnd: HWND) -> Result<()> {
         if result.0 == 0 {
             return Ok(());
         }
-        if update::is_update_timer(&message, hwnd) {
-            if host.update_tick() {
-                return Ok(());
-            }
+        if host.handle_update_message(&message) {
             continue;
         }
         unsafe {

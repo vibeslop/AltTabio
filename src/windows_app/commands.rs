@@ -233,6 +233,14 @@ fn open_selected_process_with<P>(
 }
 
 pub(super) fn open_repository() -> Result<(), String> {
+    open_web_page(alttabio::settings_form::REPOSITORY_URL)
+}
+
+pub(super) fn open_releases() -> Result<(), String> {
+    open_web_page("https://github.com/vibeslop/AltTabio/releases")
+}
+
+fn open_web_page(url: &str) -> Result<(), String> {
     let system = crate::win32::system_directory()?;
     let explorer = system
         .parent()
@@ -240,12 +248,12 @@ pub(super) fn open_repository() -> Result<(), String> {
         .join("explorer.exe");
     if !current_process_is_elevated()? {
         let _launcher = std::process::Command::new(&explorer)
-            .arg(alttabio::settings_form::REPOSITORY_URL)
+            .arg(url)
             .spawn()
             .map_err(|error| format!("Could not open the repository page: {error}"))?;
         return Ok(());
     }
-    launch_with_shell_token(&explorer, Some(alttabio::settings_form::REPOSITORY_URL))
+    launch_with_shell_token(&explorer, Some(url))
 }
 
 fn current_process_is_elevated() -> Result<bool, String> {

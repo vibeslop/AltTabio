@@ -153,6 +153,15 @@ pub struct Updater {
 }
 
 impl Updater {
+    /// Observe an existing job without approving installation or an immediate restart.
+    /// A manual observation of a check asks for an offer instead of silently installing.
+    pub fn check_or_observe(&mut self) -> Step {
+        match self.phase {
+            Phase::Idle | Phase::Checking => self.requested(),
+            Phase::Installing(_) | Phase::Installed(_) => Step::None,
+        }
+    }
+
     /// The daily check is due. It is skipped while anything else is under way.
     pub fn check_due(&mut self) -> Step {
         if self.phase != Phase::Idle {

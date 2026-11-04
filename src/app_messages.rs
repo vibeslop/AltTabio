@@ -22,6 +22,8 @@ pub(crate) const WM_SHOW_ABOUT: u32 = WM_APP + 5;
 pub(crate) const WM_CLEAR_FILTER: u32 = WM_APP + 8;
 pub(crate) const WM_FILTER_POINTER: u32 = WM_APP + 9;
 pub(crate) const WM_OUTSIDE_POINTER: u32 = WM_APP + 10;
+pub(crate) const WM_SHOW_UPDATES: u32 = WM_APP + 11;
+pub(crate) const WM_UPDATE_UI: u32 = WM_APP + 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(isize)]
@@ -65,6 +67,8 @@ mod tests {
             WM_CLEAR_FILTER,
             WM_FILTER_POINTER,
             WM_OUTSIDE_POINTER,
+            WM_SHOW_UPDATES,
+            WM_UPDATE_UI,
         ];
 
         assert_eq!(
