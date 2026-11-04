@@ -36,13 +36,9 @@ impl Control {
     pub fn all() -> impl Iterator<Item = Self> {
         [Self::SidebarTitle]
             .into_iter()
-            .chain(Category::ALL.map(Self::Navigation))
+            .chain(Category::visible().map(Self::Navigation))
             .chain([Self::PageHeading, Self::PageIntro, Self::Viewport])
-            .chain(
-                Category::ALL
-                    .into_iter()
-                    .flat_map(|category| category.controls().iter().copied()),
-            )
+            .chain(Category::visible().flat_map(|category| category.controls().iter().copied()))
             .chain(DialogButton::ALL.map(Self::Button))
     }
 
@@ -152,6 +148,13 @@ impl Category {
         Self::Experimental,
         Self::About,
     ];
+
+    /// Categories with content, in sidebar order. Adding controls makes a page visible.
+    pub fn visible() -> impl Iterator<Item = Self> + Clone {
+        Self::ALL
+            .into_iter()
+            .filter(|category| !category.controls().is_empty())
+    }
 
     #[must_use]
     pub const fn title(self) -> &'static str {

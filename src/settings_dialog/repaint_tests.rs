@@ -300,7 +300,7 @@ fn category_change_keeps_dark_headers_during_synchronous_native_repaint() -> Res
     };
     let heading = RepaintProbe::install(heading)?;
     let intro = RepaintProbe::install(intro)?;
-    for category in Category::ALL.into_iter().cycle().take(15) {
+    for category in Category::visible().cycle().take(15) {
         let navigation = host
             .state_mut()?
             .controls
