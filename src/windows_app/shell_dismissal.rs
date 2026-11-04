@@ -191,6 +191,18 @@ mod tests {
         )
     }
 
+    #[test]
+    fn queued_tab_after_mouse_completion_does_not_reopen_the_panel() -> Result<()> {
+        assert_deferred_mouse_completion(
+            &[
+                InputAction::MouseWheelReleased,
+                InputAction::CycleSelection(1),
+            ],
+            0,
+            &[20],
+        )
+    }
+
     fn assert_deferred_mouse_completion(
         later: &[InputAction],
         pending_openings: usize,

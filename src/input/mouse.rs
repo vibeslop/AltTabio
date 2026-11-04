@@ -310,13 +310,15 @@ mod tests {
         };
         use std::time::Duration;
         for typed_search in [false, true] {
-            for (key, navigation, selected) in [
-                (Key::UpArrow, InputAction::Navigate(-1), 10),
-                (Key::DownArrow, InputAction::Navigate(1), 30),
-                (Key::LeftArrow, InputAction::Navigate(-1), 10),
-                (Key::RightArrow, InputAction::Navigate(1), 30),
-                (Key::Home, InputAction::SelectFirst, 10),
-                (Key::End, InputAction::SelectLast, 30),
+            for (key, shift, navigation, selected) in [
+                (Key::UpArrow, false, InputAction::Navigate(-1), 10),
+                (Key::DownArrow, false, InputAction::Navigate(1), 30),
+                (Key::LeftArrow, false, InputAction::Navigate(-1), 10),
+                (Key::RightArrow, false, InputAction::Navigate(1), 30),
+                (Key::Home, false, InputAction::SelectFirst, 10),
+                (Key::End, false, InputAction::SelectLast, 30),
+                (Key::Tab, false, InputAction::CycleSelection(1), 30),
+                (Key::Tab, true, InputAction::CycleSelection(-1), 10),
             ] {
                 let mut hook = HookState::default();
                 let settings = HookSettings {
@@ -342,17 +344,30 @@ mod tests {
                 );
                 let mut deferred = DeferredSwitch::new(InputAction::MouseWheel(1));
                 let _previewed = deferred.take_preview_actions();
-                let press =
-                    hook.process_key(KeyEvent::pressed(key, Modifiers::default()), settings);
+                let modifiers = Modifiers {
+                    shift,
+                    ..Modifiers::default()
+                };
+                if shift {
+                    let _shift =
+                        hook.process_key(KeyEvent::pressed(Key::LeftShift, modifiers), settings);
+                }
+                let press = hook.process_key(KeyEvent::pressed(key, modifiers), settings);
                 assert!(press.suppress, "pending mouse panel must own {key:?}");
                 assert_eq!(press.actions().next(), Some(navigation));
                 for action in press.actions() {
                     assert!(deferred.push(action));
                 }
                 assert!(
-                    hook.process_key(KeyEvent::released(key, Modifiers::default()), settings)
+                    hook.process_key(KeyEvent::released(key, modifiers), settings)
                         .suppress
                 );
+                if shift {
+                    let _shift = hook.process_key(
+                        KeyEvent::released(Key::LeftShift, Modifiers::default()),
+                        settings,
+                    );
+                }
                 for action in deferred.take_preview_actions() {
                     assert_eq!(session.handle_input(action), SwitcherEffect::Redraw);
                 }

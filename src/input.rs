@@ -68,6 +68,8 @@ impl ReplayedKeyEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Switch(i32),
+    /// Cycle an existing panel without opening a new session after a queued completion.
+    CycleSelection(i32),
     /// Raw wheel delta captured while the overlay is open; positive scrolls up.
     OverlayWheel(i32),
     /// Whole wheel steps, negative for up and positive for down.
@@ -407,7 +409,7 @@ impl HookState {
             return outcome;
         }
 
-        if let Some(outcome) = self.process_arrow(event) {
+        if let Some(outcome) = self.process_navigation(event, alt_down) {
             return outcome;
         }
 
@@ -750,13 +752,25 @@ impl HookState {
         suppressed
     }
 
-    fn process_arrow(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        let action = overlay_key_action(OverlayKeyEvent {
+    fn process_navigation(&mut self, event: KeyEvent, alt_down: bool) -> Option<HookOutcome> {
+        let mut action = overlay_key_action(OverlayKeyEvent {
             key: event.key,
             repeated: false,
             shift: self.shift_down(),
         })?;
-        if !matches!(action, InputAction::Navigate(_)) {
+        if let InputAction::Switch(delta) = action {
+            if alt_down
+                || windows_modifier_mask(event.modifiers) != 0
+                || self.pending_windows_keys != 0
+            {
+                return None;
+            }
+            action = InputAction::CycleSelection(delta);
+        }
+        if !matches!(
+            action,
+            InputAction::Navigate(_) | InputAction::CycleSelection(_)
+        ) {
             return None;
         }
         if event.transition == KeyTransition::Pressed && self.overlay_controls_active() {

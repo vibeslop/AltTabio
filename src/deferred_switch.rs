@@ -63,6 +63,7 @@ impl DeferredSwitch {
                 matches!(
                     action,
                     InputAction::Switch(_)
+                        | InputAction::CycleSelection(_)
                         | InputAction::MouseWheel(_)
                         | InputAction::OverlayWheel(_)
                         | InputAction::Navigate(_)

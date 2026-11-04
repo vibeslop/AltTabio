@@ -41,6 +41,7 @@ const ACTION_WINDOW_COMMAND: usize = 16;
 const ACTION_EDIT_SEARCH: usize = 17;
 const ACTION_NUMBER_KEY: usize = 18;
 const ACTION_OVERLAY_WHEEL: usize = 19;
+const ACTION_CYCLE_SELECTION: usize = 20;
 const ACTION_CODE_MASK: usize = 0xFF;
 // Keep the epoch within 32 bits so an epoch and opening count fit one atomic word.
 const ACTION_EPOCH_MASK: usize = (usize::MAX >> 8) & u32::MAX as usize;
@@ -59,6 +60,7 @@ const fn action_wparam(code: usize, generation: usize) -> usize {
 pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
     let (code, value) = match action {
         InputAction::Switch(delta) => (ACTION_SWITCH, delta as isize),
+        InputAction::CycleSelection(delta) => (ACTION_CYCLE_SELECTION, delta as isize),
         InputAction::OverlayWheel(delta) => (ACTION_OVERLAY_WHEEL, delta as isize),
         InputAction::MouseWheel(delta) => (ACTION_MOUSE_WHEEL, delta as isize),
         InputAction::MouseWheelReleased => (ACTION_MOUSE_WHEEL_RELEASED, 0),
@@ -97,6 +99,7 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
 pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
     match wparam & ACTION_CODE_MASK {
         ACTION_SWITCH => i32::try_from(lparam).ok().map(InputAction::Switch),
+        ACTION_CYCLE_SELECTION => i32::try_from(lparam).ok().map(InputAction::CycleSelection),
         ACTION_OVERLAY_WHEEL => i32::try_from(lparam).ok().map(InputAction::OverlayWheel),
         ACTION_MOUSE_WHEEL => i32::try_from(lparam).ok().map(InputAction::MouseWheel),
         ACTION_MOUSE_WHEEL_RELEASED => Some(InputAction::MouseWheelReleased),
@@ -162,17 +165,24 @@ fn state_snapshot(value: u64) -> usize {
         | usize::try_from(value & FLAG_BITS as u64).unwrap_or_default()
 }
 
-fn completed_state(value: u64, generation: usize) -> Option<u64> {
-    let snapshot = state_snapshot(value);
-    if snapshot & !OVERLAY_FLAGS != generation || snapshot & INTERCEPTION_SUSPENDED != 0 {
-        return None;
-    }
+fn completed_state(value: u64) -> u64 {
     let value = value & !(OVERLAY_VISIBLE | FILTER_VISIBLE as u64);
-    Some(if value & OPENING_MASK == 0 {
+    if value & OPENING_MASK == 0 {
         value & !(OVERLAY_FLAGS as u64)
     } else {
         value
-    })
+    }
+}
+
+/// Epoch boundaries discard pending input; only actual UI visibility can retain capture.
+fn visible_ui_state(value: u64) -> u64 {
+    value
+        & (INTERCEPTION_SUSPENDED as u64
+            | if value & OVERLAY_VISIBLE != 0 {
+                OVERLAY_VISIBLE | OVERLAY_FLAGS as u64
+            } else {
+                0
+            })
 }
 
 /// Capture flags, UI visibility, pending-opening count, and action epoch share one atomic word. Publishing an opening
@@ -333,15 +343,12 @@ impl HookFlags {
 
     /// Hide the completed session without disarming a later opening waiting on the UI.
     pub fn complete_overlay(&self) {
-        let generation = self.load() & !OVERLAY_FLAGS;
         let _previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                if self.recovery_pending() {
-                    None
-                } else {
-                    completed_state(value, generation)
-                }
+                // UI visibility still changes during recovery. Derive from the latest word,
+                // retaining its epoch and any subsequently accepted opening receipts.
+                Some(completed_state(value))
             });
     }
 
@@ -376,12 +383,12 @@ impl HookFlags {
                 if (value & INTERCEPTION_SUSPENDED as u64 != 0) == suspended {
                     return None;
                 }
-                let flags = if suspended {
-                    INTERCEPTION_SUSPENDED
+                let state = if suspended {
+                    INTERCEPTION_SUSPENDED as u64
                 } else {
-                    state_snapshot(value) & OVERLAY_FLAGS
+                    visible_ui_state(value) & !(INTERCEPTION_SUSPENDED as u64)
                 };
-                Some(pack_state(next_hook_generation() | flags))
+                Some(pack_state(next_hook_generation()) | state)
             });
     }
 
@@ -390,13 +397,7 @@ impl HookFlags {
         let _previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                let flags = state_snapshot(value)
-                    & if value & OVERLAY_VISIBLE != 0 {
-                        FLAG_BITS
-                    } else {
-                        INTERCEPTION_SUSPENDED
-                    };
-                Some(pack_state(next_hook_generation() | flags) | (value & OVERLAY_VISIBLE))
+                Some(pack_state(next_hook_generation()) | visible_ui_state(value))
             });
     }
 
@@ -406,13 +407,10 @@ impl HookFlags {
         let previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |_value| {
-                Some(
-                    pack_state(next_hook_generation())
-                        | (flags & (FLAG_BITS as u64 | OVERLAY_VISIBLE)),
-                )
+                Some(pack_state(next_hook_generation()) | visible_ui_state(flags))
             })
             .unwrap_or_else(|value| value);
-        previous & (FLAG_BITS as u64 | OVERLAY_VISIBLE)
+        visible_ui_state(previous)
     }
 
     pub fn update_overlay(&self, generation: usize, active: bool, typed_search: bool) -> bool {
@@ -512,6 +510,88 @@ impl Drop for HookInterceptionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_restoration_discards_capture_from_an_invalidated_hidden_opening() {
+        use crate::input::{HookSettings, HookState, KeyEvent, Modifiers, MouseEvent};
+        let flags = Arc::new(HookFlags::new());
+        let generation = flags.load();
+        assert!(flags.begin_opening(generation, true));
+        let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
+        {
+            let _modal = HookInterceptionGuard::new(Arc::clone(&flags));
+            assert!(!flags.action_is_current(origin));
+        }
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        let mut hook = HookState::default();
+        let capture = flags.load();
+        hook.set_overlay_active(capture & OVERLAY_ACTIVE != 0);
+        let settings = HookSettings {
+            search_active: capture & SEARCH_ACTIVE != 0,
+            ..HookSettings::default()
+        };
+        assert!(
+            !hook
+                .process_key(
+                    KeyEvent::pressed(Key::Other(0x41), Modifiers::default()).with_text('a'),
+                    settings
+                )
+                .suppress
+        );
+        assert!(
+            !hook
+                .process_mouse(MouseEvent::Wheel(-120), settings)
+                .suppress
+        );
+    }
+
+    #[test]
+    fn resumed_visible_panel_keeps_capture_through_recovery_and_failed_post_cleanup() {
+        for recovery in [false, true] {
+            let flags = HookFlags::new();
+            flags.sync_overlay(true, true, true);
+            flags.suspend(true);
+            flags.sync_overlay(true, true, true);
+            flags.suspend(false);
+            if recovery {
+                flags.advance_generation();
+            }
+            assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
+            let generation = flags.load() & !OVERLAY_FLAGS;
+            assert!(flags.begin_opening(generation, true));
+            flags.withdraw_openings(generation, 1);
+            assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
+            flags.complete_overlay();
+            assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        }
+    }
+
+    #[test]
+    fn completion_during_recovery_clears_visibility_but_keeps_unapplied_ownership_until_invalidated()
+     {
+        for pending in [false, true] {
+            let flags = HookFlags::new();
+            flags.sync_overlay(true, true, true);
+            let generation = flags.load() & !OVERLAY_FLAGS;
+            if pending {
+                assert!(flags.begin_opening(generation, true));
+            }
+            flags.set_recovery_pending(true);
+            flags.complete_overlay();
+            assert_eq!(flags.value.load(Ordering::Acquire) & OVERLAY_VISIBLE, 0);
+            assert_eq!(
+                flags.load() & OVERLAY_FLAGS,
+                if pending {
+                    OVERLAY_ACTIVE | SEARCH_ACTIVE
+                } else {
+                    0
+                }
+            );
+            flags.advance_generation();
+            flags.set_recovery_pending(false);
+            assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        }
+    }
 
     #[test]
     fn completion_clears_old_query_presence_for_a_queued_mouse_opening() {
@@ -799,9 +879,7 @@ mod tests {
         flags.set(OVERLAY_ACTIVE, true);
         let completion_read = flags.load() & !OVERLAY_FLAGS;
         let observed = flags.value.load(Ordering::Acquire);
-        let Some(completed) = completed_state(observed, completion_read) else {
-            panic!("completion must initially be eligible");
-        };
+        let completed = completed_state(observed);
         // A's completion observed zero pending input. B is published before A can clear.
         let mut hook = HookState::default();
         let settings = HookSettings {
@@ -923,9 +1001,13 @@ mod tests {
     }
 
     #[test]
-    fn scoped_suspension_restores_every_flag_combination_with_new_generations() {
+    fn scoped_suspension_restores_only_visible_capture_with_new_generations() {
         for saved_flags in 0..=FLAG_BITS {
             let flags = Arc::new(HookFlags::with_value(saved_flags));
+            let visible = saved_flags & OVERLAY_ACTIVE != 0;
+            if visible {
+                flags.value.fetch_or(OVERLAY_VISIBLE, Ordering::AcqRel);
+            }
             let initial_generation = flags.load() & !FLAG_BITS;
             let guard = HookInterceptionGuard::new(Arc::clone(&flags));
             let suspended = flags.load();
@@ -935,7 +1017,14 @@ mod tests {
             flags.set(SEARCH_ACTIVE, true);
             flags.set(OVERLAY_ACTIVE, true);
             drop(guard);
-            assert_eq!(flags.load() & FLAG_BITS, saved_flags);
+            assert_eq!(
+                flags.load() & FLAG_BITS,
+                if visible {
+                    saved_flags
+                } else {
+                    saved_flags & INTERCEPTION_SUSPENDED
+                }
+            );
             assert_ne!(flags.load() & !FLAG_BITS, suspended & !FLAG_BITS);
             assert!(!flags.update_overlay(suspended & !OVERLAY_FLAGS, true, true));
         }
@@ -944,6 +1033,7 @@ mod tests {
     #[test]
     fn nested_scoped_suspension_restores_outer_state_without_resuming_it() {
         let flags = Arc::new(HookFlags::with_value(OVERLAY_FLAGS));
+        flags.sync_overlay(true, true, true);
         let outer = HookInterceptionGuard::new(Arc::clone(&flags));
         flags.set(SEARCH_ACTIVE, true);
         {
@@ -951,10 +1041,7 @@ mod tests {
             assert_eq!(flags.load() & FLAG_BITS, INTERCEPTION_SUSPENDED);
             flags.set(OVERLAY_ACTIVE, true);
         }
-        assert_eq!(
-            flags.load() & FLAG_BITS,
-            INTERCEPTION_SUSPENDED | SEARCH_ACTIVE
-        );
+        assert_eq!(flags.load() & FLAG_BITS, INTERCEPTION_SUSPENDED);
         drop(outer);
         assert_eq!(flags.load() & FLAG_BITS, OVERLAY_FLAGS);
     }
@@ -962,6 +1049,7 @@ mod tests {
     #[test]
     fn scoped_suspension_restores_flags_during_unwinding() {
         let flags = Arc::new(HookFlags::with_value(OVERLAY_FLAGS));
+        flags.sync_overlay(true, true, true);
         let result = std::panic::catch_unwind(|| {
             let _guard = HookInterceptionGuard::new(Arc::clone(&flags));
             panic!("modal call failed");
@@ -1044,6 +1132,8 @@ mod tests {
         let flags = HookFlags::new();
         for action in [
             InputAction::Switch(-1),
+            InputAction::CycleSelection(-1),
+            InputAction::CycleSelection(1),
             InputAction::MouseWheel(-1),
             InputAction::MouseWheelReleased,
             InputAction::RightButtonPressed,

@@ -1064,13 +1064,14 @@ mod tests {
                 LPARAM((&raw const data) as isize),
             );
         }
-        flags.set(SEARCH_ACTIVE, true);
+        // Search capture on resume belongs to the visible panel published by the UI.
+        flags.sync_overlay(true, true, false);
         flags.suspend(false);
         let context = CONTEXT.with(|slot| slot.borrow_mut().take());
         let Some(mut context) = context else {
             panic!("missing test context")
         };
-        assert_eq!(context.sync_interception(), SEARCH_ACTIVE);
+        assert_eq!(context.sync_interception(), OVERLAY_ACTIVE | SEARCH_ACTIVE);
         assert_eq!(context.keyboard_state.key_state(VK_SHIFT), 0x80);
         assert_eq!(context.keyboard_state.key_state(VK_CAPITAL), 0x81);
         let mut expected = KeyboardState::default();

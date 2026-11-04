@@ -372,7 +372,9 @@ impl SwitcherSession {
             InputAction::EditSearch(command) if self.settings.typed_search => {
                 self.edit_search(command)
             }
-            InputAction::Switch(delta) | InputAction::MouseWheel(delta) => {
+            InputAction::Switch(delta)
+            | InputAction::MouseWheel(delta)
+            | InputAction::CycleSelection(delta) => {
                 self.switcher.select_next(delta);
                 SwitcherEffect::Redraw
             }
