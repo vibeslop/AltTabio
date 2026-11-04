@@ -5,6 +5,73 @@ use std::cell::Cell;
 use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_RIGHTDOWN;
 
 #[test]
+fn ordinary_click_is_queued_until_the_physical_callback_has_returned() {
+    use windows::Win32::UI::WindowsAndMessaging::PM_REMOVE;
+
+    let mut message = MSG::default();
+    // SAFETY: this test thread owns its message queue and initializes it before posting.
+    let _queued = unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE) };
+    let mut context = test_context();
+    context.settings.right_button_wheel_switching = true;
+    // SAFETY: GetCurrentThreadId has no preconditions.
+    context.hook_thread_id = unsafe { GetCurrentThreadId() };
+    CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+    let data = MSLLHOOKSTRUCT::default();
+    for physical in [WM_RBUTTONDOWN, WM_RBUTTONUP] {
+        let outcome = process_mouse_message(
+            WPARAM(physical as usize),
+            LPARAM((&raw const data) as isize),
+        );
+        assert!(outcome.is_some_and(|outcome| outcome.suppress));
+    }
+    // The real callback only posts a request. Sending from it would block Windows input and leave
+    // no queued replay for the message loop to execute after the physical release returns.
+    // SAFETY: message is writable; PeekMessageW reads only this thread's replay requests.
+    assert!(unsafe {
+        PeekMessageW(
+            &raw mut message,
+            None,
+            WM_REPLAY_RIGHT_CLICK,
+            WM_REPLAY_RIGHT_CLICK,
+            PM_REMOVE,
+        )
+        .as_bool()
+    });
+    let sent = Cell::new(0);
+    assert!(handle_mouse_replay_with(message.message, || {
+        sent.set(sent.get() + 1);
+        true
+    }));
+    assert_eq!(sent.get(), 1);
+    // SAFETY: as above; a physical click must enqueue exactly one replay.
+    assert!(!unsafe {
+        PeekMessageW(
+            &raw mut message,
+            None,
+            WM_REPLAY_RIGHT_CLICK,
+            WM_REPLAY_RIGHT_CLICK,
+            PM_REMOVE,
+        )
+        .as_bool()
+    });
+    CONTEXT.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[test]
+fn failed_deferred_click_reports_an_error_and_unrelated_messages_do_not_replay() {
+    CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
+    assert!(!handle_mouse_replay_with(WM_RESET_GESTURES, || {
+        panic!("unrelated message replayed a click")
+    }));
+    assert!(handle_mouse_replay_with(WM_REPLAY_RIGHT_CLICK, || false));
+    assert_eq!(
+        process_with_context(|context| context.pending_errors & HOOK_ERROR_REPLAY_MOUSE),
+        Some(HOOK_ERROR_REPLAY_MOUSE)
+    );
+    CONTEXT.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[test]
 fn plain_right_click_replays_once_and_its_tag_bypasses_the_hook() {
     let mut context = test_context();
     context.settings.right_button_wheel_switching = true;

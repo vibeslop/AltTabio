@@ -1,4 +1,4 @@
-//! Replays an ordinary right click after the physical pair was withheld for a possible gesture.
+//! Replays an ordinary right click from the message loop, after the physical callback returns.
 
 use super::replay::REPLAYED_INPUT_MARKER;
 use windows::Win32::UI::Input::KeyboardAndMouse::{

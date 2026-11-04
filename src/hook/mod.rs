@@ -51,6 +51,7 @@ pub use replay::{send_activation_alt, send_shell_escape};
 // are distinct. The app window never receives them, so they may reuse numbers from `app_messages`.
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
+const WM_REPLAY_RIGHT_CLICK: u32 = WM_APP + 4;
 const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
@@ -337,6 +338,9 @@ fn run_hook_thread(
         if message.message == WM_REPORT_HOOK_ERRORS {
             continue;
         }
+        if handle_mouse_replay_with(message.message, mouse_replay::replay_right_click) {
+            continue;
+        }
         unsafe {
             // SAFETY: GetMessageW initialized `message` for this thread.
             let _translated = TranslateMessage(&raw const message);
@@ -503,13 +507,39 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
 }
 
 fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> {
-    process_mouse_message_with(wparam, lparam, mouse_replay::replay_right_click)
+    process_mouse_message_with(wparam, lparam, queue_right_click)
+}
+
+fn queue_right_click() -> bool {
+    process_with_context(|context| unsafe {
+        // SAFETY: the hook thread created its message queue before installing the hook. Only a
+        // scalar request is posted; no callback data or state borrow outlives this call.
+        PostThreadMessageW(
+            context.hook_thread_id,
+            WM_REPLAY_RIGHT_CLICK,
+            WPARAM(0),
+            LPARAM(0),
+        )
+        .is_ok()
+    }) == Some(true)
+}
+
+fn handle_mouse_replay_with(message: u32, replay_click: impl FnOnce() -> bool) -> bool {
+    if message != WM_REPLAY_RIGHT_CLICK {
+        return false;
+    }
+    // SendInput must run after the physical mouse callback has returned. Replaying inside that
+    // callback can stall input until the hook timeout and deliver the original release as well.
+    if !replay_click() {
+        record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
+    }
+    true
 }
 
 fn process_mouse_message_with(
     wparam: WPARAM,
     lparam: LPARAM,
-    replay_click: impl FnOnce() -> bool,
+    queue_click: impl FnOnce() -> bool,
 ) -> Option<HookOutcome> {
     // SAFETY: the hook passes a live MSLLHOOKSTRUCT for the callback duration.
     let data = unsafe { (lparam.0 as *const MSLLHOOKSTRUCT).as_ref() }?;
@@ -576,7 +606,7 @@ fn process_mouse_message_with(
         }
         (outcome, context.state.take_replayed_right_click())
     })?;
-    if replay && !replay_click() {
+    if replay && !queue_click() {
         record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
     }
     Some(outcome)
@@ -1056,6 +1086,7 @@ mod tests {
         let messages = [
             WM_RESET_GESTURES,
             WM_REPORT_HOOK_ERRORS,
+            WM_REPLAY_RIGHT_CLICK,
             WM_RECONCILE_KEYBOARD,
         ];
 
