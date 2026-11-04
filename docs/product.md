@@ -107,7 +107,7 @@ tccutil reset All com.vibeslop.AltTabio
 | Alt+Tab or Win+Tab | Open and move through the switcher |
 | Up, Down, Tab, or Shift+Tab | Change the selected window |
 | Left, Right, Home, or End | Edit an active query; otherwise navigate the windows |
-| Mouse wheel | Scroll the window list without changing the selected window |
+| Mouse wheel | Over the left list, scroll without changing selection; everywhere else, including outside the open switcher, select the previous or next window. Background apps do not scroll. |
 | Enter or left click | Activate the selected window |
 | 1-9 or numpad 1-9 | Activate that visible window when the query is empty; otherwise type the digit |
 | Type | Filter by title, application name, or number |

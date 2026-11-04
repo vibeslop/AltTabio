@@ -32,6 +32,7 @@ const ACTION_CLOSE_SELECTED: usize = 15;
 const ACTION_WINDOW_COMMAND: usize = 16;
 const ACTION_EDIT_SEARCH: usize = 17;
 const ACTION_NUMBER_KEY: usize = 18;
+const ACTION_OVERLAY_WHEEL: usize = 19;
 const ACTION_CODE_MASK: usize = 0xFF;
 const ACTION_EPOCH_MASK: usize = usize::MAX >> 8;
 static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
@@ -49,6 +50,7 @@ const fn action_wparam(code: usize, generation: usize) -> usize {
 pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
     let (code, value) = match action {
         InputAction::Switch(delta) => (ACTION_SWITCH, delta as isize),
+        InputAction::OverlayWheel(delta) => (ACTION_OVERLAY_WHEEL, delta as isize),
         InputAction::Navigate(delta) => (ACTION_NAVIGATE, delta as isize),
         InputAction::ActivateSelected => (ACTION_ACTIVATE_SELECTED, 0),
         InputAction::SelectFirst => (ACTION_SELECT_FIRST, 0),
@@ -83,6 +85,7 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
 pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
     match wparam & ACTION_CODE_MASK {
         ACTION_SWITCH => i32::try_from(lparam).ok().map(InputAction::Switch),
+        ACTION_OVERLAY_WHEEL => i32::try_from(lparam).ok().map(InputAction::OverlayWheel),
         ACTION_ACTIVATE_POSITION => usize::try_from(lparam)
             .ok()
             .map(InputAction::ActivateVisiblePosition),
@@ -300,6 +303,27 @@ impl Drop for HookInterceptionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_wheel_preserves_raw_deltas_and_the_interception_epoch() {
+        let flags = HookFlags::new();
+        for delta in [
+            i32::from(i16::MIN),
+            -120,
+            -30,
+            0,
+            30,
+            120,
+            i32::from(i16::MAX),
+        ] {
+            let action = InputAction::OverlayWheel(delta);
+            let (wparam, lparam) = encode_action(action, flags.load());
+            assert_eq!(decode_action(wparam, lparam), Some(action));
+            assert!(flags.action_is_current(wparam));
+            flags.advance_generation();
+            assert!(!flags.action_is_current(wparam));
+        }
+    }
 
     #[test]
     fn query_presence_tracks_search_without_invalidating_queued_actions() {

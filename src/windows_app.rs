@@ -29,7 +29,7 @@ use crate::win_events::{self, WinEventWatcher};
 use crate::win32::{ComApartment, module_instance, wide};
 use alttabio::dialog_state::DialogState;
 use alttabio::failure_run::FailureRun;
-use alttabio::overlay_pointer::CloseButtonInteraction;
+use alttabio::overlay_pointer::{CloseButtonInteraction, HoverSelection};
 use alttabio::overlay_window::OverlayFocus;
 use alttabio::settings::Settings;
 use alttabio::settings_change::{hook_settings, switcher_session_settings};
@@ -40,7 +40,7 @@ use appearance::apply_window_appearance;
 use shell_dismissal::PendingShellDismissal;
 use std::cell::{Cell, RefCell};
 use std::mem::size_of;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DestroyWindow, DispatchMessageW,
     GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_OK,
@@ -202,7 +202,7 @@ struct App {
     preview: Option<DwmPreview>,
     hooks: Option<HookThread>,
     tray: Option<TrayIcon>,
-    mouse_position: Option<POINT>,
+    hover_selection: HoverSelection,
     mouse_leave_tracked: bool,
     close_button: CloseButtonInteraction,
     task_refresh: TaskListRefresh,
@@ -258,7 +258,7 @@ impl App {
             preview: None,
             hooks: None,
             tray: None,
-            mouse_position: None,
+            hover_selection: HoverSelection::default(),
             mouse_leave_tracked: false,
             close_button: CloseButtonInteraction::default(),
             task_refresh: TaskListRefresh::default(),
