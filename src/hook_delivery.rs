@@ -33,13 +33,14 @@ pub fn deliver(
         if !flags.generation_is_current(generation) {
             return Delivery::Stale;
         }
-        let opens_overlay = matches!(action, InputAction::Switch(_));
-        if opens_overlay && !flags.update_overlay(generation, true, typed_search) {
+        let opens_overlay = matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_));
+        if opens_overlay && !flags.begin_opening(generation, typed_search) {
             return Delivery::OverlayRefused;
         }
         if !post(action) {
             if opens_overlay {
-                let _cleared = flags.update_overlay(generation, false, false);
+                flags.retire_openings(generation, 1);
+                flags.complete_overlay();
             }
             return Delivery::PostFailed;
         }
@@ -122,6 +123,54 @@ mod tests {
             panic!("an action crossed desktop recovery")
         });
         assert_eq!(delivery, Delivery::Stale);
+    }
+
+    #[test]
+    fn completion_preserves_pending_input_until_applied_or_cancelled() {
+        let (flags, generation) = current_flags();
+        for _ in 0..2 {
+            assert_eq!(
+                deliver(&flags, generation, true, alt_tab(), |_| true),
+                Delivery::Posted
+            );
+        }
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_ACTIVE | SEARCH_ACTIVE);
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+
+        assert_eq!(
+            deliver(&flags, generation, true, alt_tab(), |_| true),
+            Delivery::Posted
+        );
+        flags.cancel_overlay();
+        assert_eq!(
+            flags.load() & OVERLAY_FLAGS,
+            0,
+            "cancellation must disarm even with queued openings"
+        );
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
+    fn a_failed_post_keeps_an_earlier_pending_opening_armed() {
+        let (flags, generation) = current_flags();
+        assert_eq!(
+            deliver(&flags, generation, true, alt_tab(), |_| true),
+            Delivery::Posted
+        );
+        assert_eq!(
+            deliver(&flags, generation, true, alt_tab(), |_| false),
+            Delivery::PostFailed
+        );
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_ACTIVE | SEARCH_ACTIVE);
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
     }
 
     #[test]

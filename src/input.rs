@@ -1,11 +1,13 @@
 //! Pure state machines used by the low-level keyboard hook adapter.
 
 mod key;
+mod mouse;
 
 use crate::text_edit::TextCommand;
 use crate::window_command::WindowCommand;
 use key::KeySet;
 pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
+pub use mouse::MouseEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(
@@ -18,6 +20,7 @@ pub struct HookSettings {
     pub typed_search: bool,
     pub search_active: bool,
     pub filter_visible: bool,
+    pub right_button_wheel_switching: bool,
 }
 
 impl Default for HookSettings {
@@ -28,6 +31,7 @@ impl Default for HookSettings {
             typed_search: true,
             search_active: false,
             filter_visible: false,
+            right_button_wheel_switching: false,
         }
     }
 }
@@ -66,6 +70,10 @@ pub enum InputAction {
     Switch(i32),
     /// Raw wheel delta captured while the overlay is open; positive scrolls up.
     OverlayWheel(i32),
+    /// Whole wheel steps, negative for up and positive for down.
+    MouseWheel(i32),
+    MouseWheelReleased,
+    RightButtonPressed,
     Navigate(i32),
     ActivateSelected,
     SelectFirst,
@@ -82,6 +90,21 @@ pub enum InputAction {
     AppendSearchCharacter(char),
     BackspaceSearch,
     EditSearch(TextCommand),
+}
+
+impl InputAction {
+    /// Successful selection completes this session without cancelling later independent input.
+    #[must_use]
+    pub const fn completes_selection(self) -> bool {
+        matches!(
+            self,
+            Self::AltReleased
+                | Self::MouseWheelReleased
+                | Self::ActivateSelected
+                | Self::ActivateVisiblePosition(_)
+                | Self::NumberKey { .. }
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,6 +190,7 @@ pub struct HookState {
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
     interception: InterceptionState,
+    mouse: mouse::MouseGesture,
 }
 
 #[derive(Debug, Default)]
@@ -192,6 +216,12 @@ impl HookState {
     }
 
     pub fn set_overlay_active(&mut self, active: bool) {
+        if self.overlay_active && !active {
+            // UI selection can complete a sticky keyboard gesture. Pending openings keep
+            // interception armed, so this edge cannot retire a later queued gesture.
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+        }
         self.overlay_active = active;
     }
 
@@ -226,9 +256,40 @@ impl HookState {
     }
 
     pub fn reset_gestures(&mut self) {
+        self.mouse.cancel();
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
+    }
+
+    #[must_use]
+    pub fn process_mouse(&mut self, event: MouseEvent, settings: HookSettings) -> HookOutcome {
+        let outcome = self.mouse.process(
+            event,
+            settings.right_button_wheel_switching && !self.interception.suspended,
+        );
+        if !outcome.suppress
+            && outcome.actions().next().is_none()
+            && let MouseEvent::Wheel(delta) = event
+        {
+            return self.process_overlay_wheel(i32::from(delta));
+        }
+        if outcome
+            .actions()
+            .any(|action| matches!(action, InputAction::MouseWheel(_)))
+        {
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+        }
+        if event == MouseEvent::RightButtonPressed
+            && self.overlay_active
+            && settings.right_button_wheel_switching
+            && !self.interception.suspended
+        {
+            HookOutcome::one(outcome.suppress, InputAction::RightButtonPressed)
+        } else {
+            outcome
+        }
     }
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
@@ -242,6 +303,15 @@ impl HookState {
         } else {
             HookOutcome::default()
         }
+    }
+
+    #[must_use]
+    pub fn owns_right_button(&self) -> bool {
+        self.mouse.owns_button()
+    }
+
+    pub fn take_replayed_right_click(&mut self) -> bool {
+        self.mouse.take_replayed_click()
     }
 
     #[must_use]
@@ -459,13 +529,13 @@ impl HookState {
         } else {
             action
         };
-        if self.alt_switch_gesture_active && alt_down {
+        if (self.alt_switch_gesture_active && alt_down)
+            || self.win_switch_gesture_active
+            || self.mouse.is_active()
+        {
+            self.mouse.cancel();
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
-            self.suppress_owned_key_release(event.key);
-            return Some(HookOutcome::one(true, action));
-        }
-        if self.win_switch_gesture_active {
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -546,6 +616,7 @@ impl HookState {
         if !alt_tab && !windows_tab {
             return None;
         }
+        self.mouse.cancel();
         self.alt_switch_gesture_active = alt_tab;
         self.win_switch_gesture_active = windows_tab;
         if alt_tab {
@@ -697,11 +768,13 @@ impl HookState {
         if self.owned_key_release_pending(event.key) {
             return Some(HookOutcome::suppressed());
         }
-        if !self.switch_gesture_active() {
+        let mouse_enter = event.key == Key::Enter && self.mouse.is_active();
+        if !self.switch_gesture_active() && !mouse_enter {
             return None;
         }
 
         if event.key == Key::Enter {
+            self.mouse.cancel();
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
         }
@@ -726,6 +799,7 @@ impl HookState {
             return None;
         }
 
+        self.mouse.cancel();
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
         self.suppress_owned_key_release(event.key);
@@ -782,6 +856,7 @@ impl HookState {
         ) || event.modifiers.control
             || event.modifiers.shift
         {
+            self.mouse.cancel();
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
         }
@@ -807,6 +882,7 @@ impl HookState {
         } else {
             InputAction::AppendSearchCharacter(event.text.filter(|value| !value.is_control())?)
         };
+        self.mouse.cancel();
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
         self.suppress_owned_key_release(event.key);

@@ -20,6 +20,7 @@ unsafe extern "system" {
 pub(crate) const DRAW_TEXT_CENTER: u32 = 0x0001;
 pub(crate) const DRAW_TEXT_VCENTER: u32 = 0x0004;
 pub(crate) const DRAW_TEXT_SINGLE_LINE: u32 = 0x0020;
+pub(crate) const DRAW_TEXT_WORD_BREAK: u32 = 0x0010;
 pub(crate) const DRAW_TEXT_NO_PREFIX: u32 = 0x0800;
 pub(crate) const DRAW_TEXT_END_ELLIPSIS: u32 = 0x8000;
 

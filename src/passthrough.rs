@@ -47,6 +47,7 @@ impl PassthroughPolicy {
         HookSettings {
             replace_alt_tab: false,
             replace_win_tab: false,
+            right_button_wheel_switching: false,
             ..settings
         }
     }
@@ -133,6 +134,24 @@ mod tests {
                 .apply(HookSettings::default())
                 .replace_alt_tab
         );
+    }
+
+    #[test]
+    fn fullscreen_rdp_does_not_start_an_experimental_mouse_gesture() {
+        use crate::input::MouseEvent;
+        let settings = HookSettings {
+            right_button_wheel_switching: true,
+            ..HookSettings::default()
+        };
+        let settings = PassthroughPolicy::RemoteDesktopFullscreen.apply(settings);
+        let mut state = HookState::default();
+        for event in [
+            MouseEvent::RightButtonPressed,
+            MouseEvent::Wheel(120),
+            MouseEvent::RightButtonReleased,
+        ] {
+            assert_eq!(state.process_mouse(event, settings), HookOutcome::default());
+        }
     }
 
     #[test]

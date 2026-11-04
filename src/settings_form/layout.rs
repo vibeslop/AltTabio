@@ -108,6 +108,10 @@ impl SettingsLayout {
                         27
                     }
                     Control::Checkbox(option) if !option.help().is_empty() => 54,
+                    Control::Warning(_) => {
+                        *y += 14;
+                        72
+                    }
                     Control::AboutIdentity => {
                         *y += 5;
                         42

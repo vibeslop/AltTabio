@@ -5,6 +5,12 @@ pub struct Settings {
     pub general: GeneralSettings,
     pub appearance: AppearanceSettings,
     pub monitor: MonitorSettings,
+    pub experimental: ExperimentalSettings,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExperimentalSettings {
+    pub right_button_wheel_switching: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,6 +157,7 @@ impl Default for Settings {
                 monitor_mode: "CurrentByCursor".to_owned(),
                 use_current_monitor_filter: false,
             },
+            experimental: ExperimentalSettings::default(),
         }
     }
 }
@@ -306,6 +313,13 @@ impl SettingsDocument {
                     defaults.monitor.use_current_monitor_filter,
                 ),
             },
+            experimental: ExperimentalSettings {
+                right_button_wheel_switching: self.read_bool(
+                    "Experimental",
+                    "RmbWheelSwitching",
+                    defaults.experimental.right_button_wheel_switching,
+                ),
+            },
         }
     }
 
@@ -346,6 +360,12 @@ impl SettingsDocument {
             format!(
                 "UseCurrentMonitorFilter={}",
                 settings.monitor.use_current_monitor_filter
+            ),
+            String::new(),
+            "[Experimental]".to_owned(),
+            format!(
+                "RmbWheelSwitching={}",
+                settings.experimental.right_button_wheel_switching
             ),
         ];
 
@@ -400,7 +420,8 @@ fn same_key(left: &str, right: &str) -> bool {
 }
 
 fn is_known(entry: &Entry) -> bool {
-    const KNOWN: [(&str, &str); 22] = [
+    const KNOWN: [(&str, &str); 23] = [
+        ("Experimental", "RmbWheelSwitching"),
         ("General", "Autostart"),
         ("General", "ReplaceAltTab"),
         ("General", "ReplaceWinTab"),
@@ -573,7 +594,8 @@ mod tests {
                         Icon=Azure\nTheme=Auto\nCompactList=true\nLargeIcons=true\nShowNumbers=true\n\
                         ShowAppNames=false\nVisibleBorders=false\nPreview=true\n\
                         FullDesktopPreview=true\n\n[Monitor]\n\
-                        Mode=CurrentByCursor\nUseCurrentMonitorFilter=false\n";
+                        Mode=CurrentByCursor\nUseCurrentMonitorFilter=false\n\n\
+                        [Experimental]\nRmbWheelSwitching=false\n";
         let document = SettingsDocument::parse(contents);
 
         assert_eq!(document.render(&document.settings()), contents);
@@ -598,9 +620,40 @@ mod tests {
         );
         assert_eq!(document.settings(), Settings::default());
         let rendered = document.render(&document.settings());
-        assert!(!rendered.contains("RmbWheelSwitching"));
+        assert!(
+            !SettingsDocument::parse(&rendered)
+                .settings()
+                .experimental
+                .right_button_wheel_switching
+        );
+        assert_eq!(rendered.matches("RmbWheelSwitching=").count(), 1);
         assert!(!rendered.contains("ReleaseRmbSwitches"));
         assert!(rendered.contains("FutureSetting=keep"));
+    }
+
+    #[test]
+    fn experimental_mouse_switching_requires_an_explicit_valid_opt_in() {
+        for contents in [
+            "",
+            "[Experimental]\nRmbWheelSwitching=invalid\n",
+            "[General]\nRmbWheelSwitching=true\n",
+        ] {
+            assert!(
+                !SettingsDocument::parse(contents)
+                    .settings()
+                    .experimental
+                    .right_button_wheel_switching
+            );
+        }
+        let document = SettingsDocument::parse(
+            "[Experimental]\nRmbWheelSwitching=true\nFutureExperiment=keep\n",
+        );
+        let settings = document.settings();
+        assert!(settings.experimental.right_button_wheel_switching);
+        let rendered = document.render(&settings);
+        assert_eq!(SettingsDocument::parse(&rendered).settings(), settings);
+        assert_eq!(rendered.matches("RmbWheelSwitching=").count(), 1);
+        assert!(rendered.contains("FutureExperiment=keep"));
     }
 
     #[test]

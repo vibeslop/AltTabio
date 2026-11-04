@@ -23,6 +23,14 @@ pub struct DeferredSwitch {
 
 impl DeferredSwitch {
     #[must_use]
+    pub fn pending_openings(&self) -> usize {
+        self.actions
+            .iter()
+            .filter(|action| matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_)))
+            .count()
+    }
+
+    #[must_use]
     pub fn new(first: InputAction) -> Self {
         Self {
             actions: vec![first],
@@ -55,6 +63,7 @@ impl DeferredSwitch {
                 matches!(
                     action,
                     InputAction::Switch(_)
+                        | InputAction::MouseWheel(_)
                         | InputAction::Navigate(_)
                         | InputAction::SelectFirst
                         | InputAction::SelectLast

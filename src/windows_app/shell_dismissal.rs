@@ -23,6 +23,7 @@ impl App {
     ) {
         // SAFETY: this timer belongs to the live overlay; no callback pointer is retained.
         if unsafe { SetTimer(Some(self.hwnd), SHELL_DISMISS_TIMER_ID, 16, None) } == 0 {
+            self.retire_hook_opening(first, origin);
             eprintln!(
                 "Could not start the shell dismissal timer: {}",
                 Error::from_thread()
@@ -49,9 +50,15 @@ impl App {
         let Some(pending) = &mut self.pending_shell else {
             return false;
         };
+        let openings = pending.input.pending_openings();
+        let origin = pending.origin;
         if pending.input.push(action) {
             self.preview_shell_switch();
         } else {
+            if let Some(hooks) = &self.hooks {
+                hooks.retire_openings(origin, openings);
+            }
+            self.retire_hook_opening(action, origin);
             self.hide_overlay();
         }
         true
@@ -61,14 +68,18 @@ impl App {
         let Some(pending) = &mut self.pending_shell else {
             return;
         };
+        let origin = pending.origin;
         for action in pending.input.take_preview_actions() {
-            self.apply_input_action(action);
+            self.apply_hook_action(action, origin);
         }
     }
 
     pub(super) fn stop_shell_dismissal(&mut self) {
-        if self.pending_shell.take().is_none() {
+        let Some(pending) = self.pending_shell.take() else {
             return;
+        };
+        if let Some(hooks) = &self.hooks {
+            hooks.retire_openings(pending.origin, pending.input.pending_openings());
         }
         self.kill_shell_dismissal_timer();
     }
@@ -99,6 +110,8 @@ impl App {
             } else {
                 false
             };
+        let openings = pending.input.pending_openings();
+        let origin = pending.origin;
         let poll = pending
             .input
             .poll(shell_has_focus, pending.started.elapsed());
@@ -111,6 +124,9 @@ impl App {
                 }
             }
             DeferredSwitchPoll::Cancel => {
+                if let Some(hooks) = &self.hooks {
+                    hooks.retire_openings(origin, openings);
+                }
                 eprintln!("Start/Search did not relinquish foreground within the switch deadline");
                 self.hide_overlay();
             }
@@ -120,7 +136,7 @@ impl App {
                     self.focus_overlay();
                 }
                 for action in actions {
-                    self.handle_input_action(action);
+                    self.apply_hook_action(action, origin);
                 }
             }
         }

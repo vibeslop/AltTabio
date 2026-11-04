@@ -13,6 +13,7 @@ pub fn hook_settings(settings: &Settings) -> HookSettings {
         typed_search: settings.general.typed_search,
         search_active: false,
         filter_visible: false,
+        right_button_wheel_switching: settings.experimental.right_button_wheel_switching,
     }
 }
 
@@ -512,6 +513,7 @@ mod tests {
         settings.general.replace_alt_tab = false;
         settings.general.replace_win_tab = true;
         settings.general.typed_search = false;
+        settings.experimental.right_button_wheel_switching = true;
 
         assert_eq!(
             hook_settings(&settings),
@@ -521,6 +523,7 @@ mod tests {
                 typed_search: false,
                 search_active: false,
                 filter_visible: false,
+                right_button_wheel_switching: true,
             }
         );
     }

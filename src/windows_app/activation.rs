@@ -1,5 +1,6 @@
 use super::App;
 use alttabio::activation::activation_target;
+use alttabio::input::InputAction;
 use std::ffi::c_void;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -8,11 +9,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 impl App {
-    pub(super) fn activate_target(&mut self, target: isize) {
+    pub(super) fn activate_target(&mut self, target: isize, action: InputAction) {
         let target = HWND(target as *mut c_void);
-        if !activate_and_hide(target, || self.hide_overlay()) {
-            // The completed gesture has released ownership. Reopening here leaves an
-            // overlay with no matching Alt release left to dismiss it.
+        if !activate_and_hide(target, || {
+            if action.completes_selection() {
+                self.finish_overlay();
+            } else {
+                self.hide_overlay();
+            }
+        }) {
+            // The selection is complete. Reopening here would leave an overlay without
+            // a matching completion event to dismiss it.
             eprintln!("Could not activate the selected window");
         }
     }

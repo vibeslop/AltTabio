@@ -4,7 +4,7 @@ use super::drawing::{inset, polyline, rounded};
 use super::paint_state::PaintState;
 use crate::native_drawing::{
     DRAW_TEXT_CENTER, DRAW_TEXT_END_ELLIPSIS, DRAW_TEXT_NO_PREFIX, DRAW_TEXT_SINGLE_LINE,
-    DRAW_TEXT_VCENTER, draw_text_with_font, fill_color, frame_color,
+    DRAW_TEXT_VCENTER, DRAW_TEXT_WORD_BREAK, draw_text_with_font, fill_color, frame_color,
 };
 use alttabio::dialog_layout::{Point, hairline, scale};
 use alttabio::settings_form::{Category, Control, Selector, SettingOption};
@@ -187,6 +187,7 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
             },
             fonts.of(control),
         ),
+        Control::Warning(_) => paint_warning(dc, client, control, state),
         Control::AboutDescription => text(
             dc,
             control.text(),
@@ -225,6 +226,25 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
             )
         }
     }
+}
+
+fn paint_warning(dc: HDC, client: RECT, control: Control, state: &PaintState) -> Result<()> {
+    let fonts = state
+        .fonts
+        .as_ref()
+        .ok_or_else(|| Error::from_hresult(E_FAIL))?;
+    draw_text_with_font(
+        dc,
+        control.text(),
+        RECT {
+            left: client.left + scale(4, state.dpi),
+            right: client.right - scale(4, state.dpi),
+            ..client
+        },
+        state.palette.secondary,
+        DRAW_TEXT_NO_PREFIX | DRAW_TEXT_WORD_BREAK,
+        fonts.help.0,
+    )
 }
 
 fn paint_identity(

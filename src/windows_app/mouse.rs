@@ -46,18 +46,27 @@ impl App {
             x: coordinates.x,
             y: coordinates.y,
         };
-        self.handle_wheel_at(delta, screen_point);
+        self.handle_wheel_at(delta, screen_point, false);
     }
 
     pub(super) fn handle_overlay_wheel(&mut self, delta: i32) {
         if self.is_visible()
             && let Some(point) = self.read_mouse_position()
         {
-            self.handle_wheel_at(delta, point);
+            self.handle_wheel_at(delta, point, false);
         }
     }
 
-    fn handle_wheel_at(&mut self, delta: i32, screen_point: POINT) {
+    /// A held-right-button gesture uses the same routing as ordinary captured wheel input.
+    pub(super) fn handle_gesture_wheel(&mut self, steps: i32) -> bool {
+        if !self.is_visible() {
+            return false;
+        }
+        self.read_mouse_position()
+            .is_some_and(|point| self.handle_wheel_at(steps.saturating_mul(-120), point, true))
+    }
+
+    fn handle_wheel_at(&mut self, delta: i32, screen_point: POINT, gesture: bool) -> bool {
         let mut point = screen_point;
         let converted = unsafe {
             // SAFETY: the overlay HWND is live and `point` is writable for this call.
@@ -65,10 +74,10 @@ impl App {
         };
         if !converted.as_bool() {
             eprintln!("Could not convert wheel coordinates to the overlay client area");
-            return;
+            return false;
         }
         let Some(client) = self.client_size() else {
-            return;
+            return false;
         };
         let dpi = unsafe {
             // SAFETY: the overlay HWND is live and the call returns a scalar DPI value.
@@ -86,13 +95,18 @@ impl App {
             self.settings.appearance.compact_list,
             self.session.filter_visible(),
         );
-        let effect = self
-            .session
-            .handle_mouse_wheel(behavior, delta, visible_rows);
+        let effect = if gesture {
+            self.session
+                .handle_gesture_wheel(behavior, delta, visible_rows)
+        } else {
+            self.session
+                .handle_mouse_wheel(behavior, delta, visible_rows)
+        };
         if effect == SwitcherEffect::Redraw {
             self.close_button.update_hover(None);
             self.request_redraw();
         }
+        true
     }
 
     pub(super) fn handle_mouse_move(&mut self, lparam: LPARAM) {
@@ -289,7 +303,10 @@ impl App {
     }
 
     fn prepare_task_context_menu(&mut self, lparam: LPARAM) -> Option<HWND> {
-        if !self.is_visible() || self.dialog_state().blocks_switcher() {
+        if !self.is_visible()
+            || self.session.mouse_switching()
+            || self.dialog_state().blocks_switcher()
+        {
             return None;
         }
         let hit = self.hit_test(lparam)?;

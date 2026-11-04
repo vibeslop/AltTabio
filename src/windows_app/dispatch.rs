@@ -133,14 +133,17 @@ impl App {
         }
         match message {
             WM_HOOK_ACTION => {
-                if !self.dialog_state().blocks_switcher()
+                let current = !self.dialog_state().blocks_switcher()
                     && self
                         .hooks
                         .as_ref()
-                        .is_some_and(|hooks| hooks.action_is_current(wparam))
-                    && let Some(action) = decode_action(wparam, lparam)
-                {
-                    self.handle_hook_input(action, wparam);
+                        .is_some_and(|hooks| hooks.action_is_current(wparam));
+                if let Some(action) = decode_action(wparam, lparam) {
+                    if current {
+                        self.handle_hook_input(action, wparam);
+                    } else {
+                        self.retire_hook_opening(action, wparam);
+                    }
                 }
                 Some(LRESULT(0))
             }
@@ -228,15 +231,36 @@ impl App {
             self.handle_overlay_wheel(delta);
             return;
         }
+        if let InputAction::MouseWheel(steps) = action
+            && self.handle_gesture_wheel(steps)
+        {
+            self.retire_hook_opening(action, origin);
+            return;
+        }
         if self.pending_shell.is_none()
             && !self.is_visible()
-            && matches!(action, InputAction::Switch(_))
+            && matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_))
             && let Some(window) = shell_menu::foreground_menu()
         {
             self.begin_shell_dismissal(window, action, origin);
             return;
         }
-        self.handle_input_action(action);
+        if !self.defer_to_shell_dismissal(action) {
+            self.apply_hook_action(action, origin);
+        }
+    }
+
+    pub(super) fn retire_hook_opening(&self, action: InputAction, origin: WPARAM) {
+        if matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_))
+            && let Some(hooks) = &self.hooks
+        {
+            hooks.retire_openings(origin, 1);
+        }
+    }
+
+    pub(super) fn apply_hook_action(&mut self, action: InputAction, origin: WPARAM) {
+        self.retire_hook_opening(action, origin);
+        self.apply_input_action(action);
     }
 
     pub(super) fn apply_input_action(&mut self, action: InputAction) {
@@ -255,7 +279,7 @@ impl App {
             SwitcherEffect::Open { selection_delta } => self.show_overlay(selection_delta),
             SwitcherEffect::Hide => self.hide_overlay(),
             SwitcherEffect::Redraw => self.request_redraw(),
-            SwitcherEffect::Activate(target) => self.activate_target(target),
+            SwitcherEffect::Activate(target) => self.activate_target(target, action),
             SwitcherEffect::Execute(request) => {
                 let outcome = self.execute_window_command(request);
                 self.task_refresh.apply_command_outcome(outcome);
