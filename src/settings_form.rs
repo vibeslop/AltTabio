@@ -139,15 +139,17 @@ pub enum Category {
     Switching,
     Appearance,
     Display,
+    Experimental,
     About,
 }
 
 impl Category {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::General,
         Self::Switching,
         Self::Appearance,
         Self::Display,
+        Self::Experimental,
         Self::About,
     ];
 
@@ -158,6 +160,7 @@ impl Category {
             Self::Switching => "Switching",
             Self::Appearance => "Appearance",
             Self::Display => "Display",
+            Self::Experimental => "Experimental",
             Self::About => "About",
         }
     }
@@ -169,6 +172,7 @@ impl Category {
             Self::Switching => "Choose how you move between windows.",
             Self::Appearance => "The look of your switcher.",
             Self::Display => "Windows across your monitors.",
+            Self::Experimental => "These features may not work reliably.",
             Self::About => "",
         }
     }
@@ -211,6 +215,7 @@ impl Category {
                 C(FullDesktopPreview),
             ],
             Self::Display => &[C(CurrentMonitorFilter)],
+            Self::Experimental => &[],
             Self::About => &[
                 AboutIdentity,
                 AboutDescription,

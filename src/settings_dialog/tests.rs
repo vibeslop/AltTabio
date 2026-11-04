@@ -83,6 +83,37 @@ fn tab_moves_from_the_selected_category_into_its_settings() -> Result<()> {
 }
 
 #[test]
+fn experimental_navigation_preserves_unsaved_edits() -> Result<()> {
+    let dialog = dialog()?;
+    let window = dialog.window();
+    let host = dialog.host()?;
+    let baseline = host.state_mut()?.settings.clone();
+    host.state_mut()?.select_category(Category::Switching)?;
+    let toggle = host
+        .state_mut()?
+        .controls
+        .checkbox(SettingOption::MouseOverSelection);
+    // SAFETY: the test owns this hidden native checkbox and its notification recipient.
+    unsafe { SendMessageW(toggle, BM_CLICK, None, None) };
+    let edited = is_checked(toggle);
+    navigate(window, Category::Experimental)?;
+    pump(window);
+    assert_eq!(host.state_mut()?.pages.category, Category::Experimental);
+    assert_eq!(host.state_mut()?.settings, baseline);
+    host.state_mut()?.select_category(Category::Switching)?;
+    assert_eq!(is_checked(toggle), edited);
+    assert!(is_control_enabled(
+        host.state_mut()?
+            .controls
+            .get(Control::Button(DialogButton::Ok))
+    ));
+    host.state_mut()?.cancel();
+    assert_eq!(host.state_mut()?.settings, baseline);
+    dialog.destroy()?;
+    Ok(())
+}
+
+#[test]
 fn native_pages_preserve_values_forward_notifications_and_scroll_without_moving_headers()
 -> Result<()> {
     let dialog = dialog()?;

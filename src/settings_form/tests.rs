@@ -157,7 +157,7 @@ fn resizing_keeps_page_headings_and_content_beside_the_sidebar() {
         for category in Category::ALL {
             let standard =
                 SettingsLayout::for_client(Size::new(728, 600).scaled(dpi), dpi, category);
-            let first_row = category.controls()[0];
+            let first_row = category.controls().first();
             for width in [640, 1000, 1920, 3840] {
                 let resized =
                     SettingsLayout::for_client(Size::new(width, 600).scaled(dpi), dpi, category);
@@ -166,11 +166,13 @@ fn resizing_keeps_page_headings_and_content_beside_the_sidebar() {
                     Control::PageHeading.rect(&standard).x,
                     "{category:?} heading at {width}px, {dpi} DPI"
                 );
-                assert_eq!(
-                    first_row.rect(&resized).x,
-                    first_row.rect(&standard).x,
-                    "{category:?} content at {width}px, {dpi} DPI"
-                );
+                if let Some(first_row) = first_row {
+                    assert_eq!(
+                        first_row.rect(&resized).x,
+                        first_row.rect(&standard).x,
+                        "{category:?} content at {width}px, {dpi} DPI"
+                    );
+                }
             }
         }
     }
