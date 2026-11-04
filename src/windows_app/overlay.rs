@@ -54,8 +54,7 @@ impl App {
             self.focus_overlay();
         }
         self.sync_content_size();
-        self.set_hook_search_active(true);
-        self.set_hook_overlay_active(true);
+        self.sync_hook_overlay();
         self.request_redraw();
     }
 
@@ -79,13 +78,24 @@ impl App {
     }
 
     pub(super) fn hide_overlay(&mut self) {
+        self.reset_hook_gestures();
+        self.hide_overlay_contents();
+    }
+
+    /// Successful selection must preserve independent gestures already queued by the hook.
+    pub(super) fn finish_overlay(&mut self) {
+        if let Some(hooks) = &self.hooks {
+            hooks.complete_overlay();
+        }
+        self.hide_overlay_contents();
+    }
+
+    fn hide_overlay_contents(&mut self) {
         self.overlay_focus.reset();
         self.hide_filter_feedback();
         self.stop_shell_dismissal();
         self.task_refresh.clear_notices();
         self.session.hide();
-        self.set_hook_search_active(false);
-        self.reset_hook_gestures();
         if let Some(preview) = &mut self.preview {
             preview.clear();
         }
@@ -106,7 +116,6 @@ impl App {
             // SAFETY: the HWND is live and owned by this UI thread.
             let _was_visible = ShowWindow(self.hwnd, SW_HIDE);
         }
-        self.set_hook_overlay_active(false);
         if self.exit_when_hidden {
             self.request_close("the preview window");
         }
@@ -155,7 +164,7 @@ impl App {
     }
 
     pub(super) fn request_redraw(&mut self) {
-        self.set_hook_search_active(self.is_visible());
+        self.sync_hook_overlay();
         self.sync_filter_popup();
         let source = self
             .session

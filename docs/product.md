@@ -44,6 +44,7 @@ It is a practical answer for people searching for:
 - Select and edit the query with the mouse, Shift and Ctrl navigation, and standard copy, cut, paste, undo, and redo shortcuts
 - Keys 1-9 switch to the corresponding visible window when the query is empty; otherwise they enter digits
 - Keyboard and mouse control
+- Experimental right-button + scroll switching, disabled by default. It may open slowly or fail to open in some applications and may interfere with context menus or mouse gestures.
 - Close, minimize, maximize, restore, end-process, and run-another-instance commands
 - Optional current-monitor filter for multi-monitor setups
 - Light, dark, or follow-Windows theme

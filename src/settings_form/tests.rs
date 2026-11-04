@@ -2,7 +2,7 @@ use super::*;
 use crate::dialog_layout::{Size, scale};
 #[test]
 fn every_checkbox_reads_only_its_bound_setting() {
-    let fields: [fn(&mut Settings) -> &mut bool; 15] = [
+    let fields: [fn(&mut Settings) -> &mut bool; 16] = [
         |s| &mut s.general.autostart,
         |s| &mut s.general.replace_alt_tab,
         |s| &mut s.general.replace_win_tab,
@@ -18,6 +18,7 @@ fn every_checkbox_reads_only_its_bound_setting() {
         |s| &mut s.appearance.preview,
         |s| &mut s.appearance.full_desktop_preview,
         |s| &mut s.monitor.use_current_monitor_filter,
+        |s| &mut s.experimental.right_button_wheel_switching,
     ];
     let baseline = Settings::default();
     for (index, field) in fields.into_iter().enumerate() {
@@ -50,6 +51,23 @@ fn theme_entries_name_their_values_and_fall_back_to_auto() {
         assert_eq!(THEME_CHOICES.index_of(theme), index);
     }
     assert_eq!(THEME_CHOICES.value_at(usize::MAX), Theme::Auto);
+}
+
+#[test]
+fn rmb_option_keeps_its_warning_with_the_opt_in() {
+    assert!(!SettingOption::RmbWheelSwitching.read(&Settings::default()));
+    for dpi in [96, 120, 144, 168, 192] {
+        let layout = SettingsLayout::for_client(
+            Size::new(640, 420).scaled(dpi),
+            dpi,
+            Category::Experimental,
+        );
+        let toggle = Control::Checkbox(SettingOption::RmbWheelSwitching).rect(&layout);
+        let warning = Control::Warning(SettingOption::RmbWheelSwitching).rect(&layout);
+        // Absolute positions round independently at fractional display scales.
+        assert!(warning.y >= toggle.bottom() + scale(14, dpi) - 1);
+        assert!(warning.bottom() <= layout.viewport.height);
+    }
 }
 
 #[test]

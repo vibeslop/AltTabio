@@ -14,8 +14,8 @@ pub enum Delivery {
     Stale,
     /// The overlay could not be armed for this generation, so its opening action was withheld.
     OverlayRefused,
-    /// Posting an action failed. If it would have opened the overlay, the arming was withdrawn.
-    PostFailed,
+    /// Posting failed. The caller must withdraw any registered opening outside the callback.
+    PostFailed { pending_opening: bool },
 }
 
 /// Posts the outcome's actions in order. Posting can race with a modal boundary, so the
@@ -33,15 +33,14 @@ pub fn deliver(
         if !flags.generation_is_current(generation) {
             return Delivery::Stale;
         }
-        let opens_overlay = matches!(action, InputAction::Switch(_));
-        if opens_overlay && !flags.update_overlay(generation, true, typed_search) {
+        let opens_overlay = matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_));
+        if opens_overlay && !flags.begin_opening(generation, typed_search) {
             return Delivery::OverlayRefused;
         }
         if !post(action) {
-            if opens_overlay {
-                let _cleared = flags.update_overlay(generation, false, false);
-            }
-            return Delivery::PostFailed;
+            return Delivery::PostFailed {
+                pending_opening: opens_overlay,
+            };
         }
     }
     Delivery::Posted
@@ -125,10 +124,69 @@ mod tests {
     }
 
     #[test]
+    fn completion_preserves_pending_input_until_applied_or_cancelled() {
+        let (flags, generation) = current_flags();
+        for _ in 0..2 {
+            assert_eq!(
+                deliver(&flags, generation, true, alt_tab(), |_| true),
+                Delivery::Posted
+            );
+        }
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_ACTIVE | SEARCH_ACTIVE);
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+
+        assert_eq!(
+            deliver(&flags, generation, true, alt_tab(), |_| true),
+            Delivery::Posted
+        );
+        flags.cancel_overlay();
+        assert_eq!(
+            flags.load() & OVERLAY_FLAGS,
+            0,
+            "cancellation must disarm even with queued openings"
+        );
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
+    fn a_failed_post_keeps_an_earlier_pending_opening_armed() {
+        let (flags, generation) = current_flags();
+        assert_eq!(
+            deliver(&flags, generation, true, alt_tab(), |_| true),
+            Delivery::Posted
+        );
+        assert_eq!(
+            deliver(&flags, generation, true, alt_tab(), |_| false),
+            Delivery::PostFailed {
+                pending_opening: true
+            }
+        );
+        flags.withdraw_openings(generation, 1);
+        assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_ACTIVE | SEARCH_ACTIVE);
+        flags.retire_openings(generation, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+    }
+
+    #[test]
     fn a_failed_post_withdraws_the_overlay_it_armed() {
         let (flags, generation) = current_flags();
         let delivery = deliver(&flags, generation, true, alt_tab(), |_| false);
-        assert_eq!(delivery, Delivery::PostFailed);
+        assert_eq!(
+            delivery,
+            Delivery::PostFailed {
+                pending_opening: true
+            }
+        );
+        // Callback delivery keeps the receipt until the hook message loop withdraws it.
+        assert_ne!(flags.load() & OVERLAY_FLAGS, 0);
+        flags.withdraw_openings(generation, 1);
         assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
         assert!(flags.generation_is_current(generation));
     }

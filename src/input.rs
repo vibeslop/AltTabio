@@ -1,11 +1,13 @@
 //! Pure state machines used by the low-level keyboard hook adapter.
 
 mod key;
+mod mouse;
 
 use crate::text_edit::TextCommand;
 use crate::window_command::WindowCommand;
 use key::KeySet;
 pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
+pub use mouse::MouseEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(
@@ -18,6 +20,7 @@ pub struct HookSettings {
     pub typed_search: bool,
     pub search_active: bool,
     pub filter_visible: bool,
+    pub right_button_wheel_switching: bool,
 }
 
 impl Default for HookSettings {
@@ -28,6 +31,7 @@ impl Default for HookSettings {
             typed_search: true,
             search_active: false,
             filter_visible: false,
+            right_button_wheel_switching: false,
         }
     }
 }
@@ -64,8 +68,14 @@ impl ReplayedKeyEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputAction {
     Switch(i32),
+    /// Cycle an existing panel without opening a new session after a queued completion.
+    CycleSelection(i32),
     /// Raw wheel delta captured while the overlay is open; positive scrolls up.
     OverlayWheel(i32),
+    /// Whole wheel steps, negative for up and positive for down.
+    MouseWheel(i32),
+    MouseWheelReleased,
+    RightButtonPressed,
     Navigate(i32),
     ActivateSelected,
     SelectFirst,
@@ -82,6 +92,26 @@ pub enum InputAction {
     AppendSearchCharacter(char),
     BackspaceSearch,
     EditSearch(TextCommand),
+    /// The UI resolves navigation against the query at this action's place in the queue.
+    SearchNavigation {
+        command: TextCommand,
+        modified: bool,
+    },
+}
+
+impl InputAction {
+    /// Successful selection completes this session without cancelling later independent input.
+    #[must_use]
+    pub const fn completes_selection(self) -> bool {
+        matches!(
+            self,
+            Self::AltReleased
+                | Self::MouseWheelReleased
+                | Self::ActivateSelected
+                | Self::ActivateVisiblePosition(_)
+                | Self::NumberKey { .. }
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,6 +197,7 @@ pub struct HookState {
     alt_switch_gesture_active: bool,
     win_switch_gesture_active: bool,
     interception: InterceptionState,
+    mouse: mouse::MouseGesture,
 }
 
 #[derive(Debug, Default)]
@@ -192,6 +223,17 @@ impl HookState {
     }
 
     pub fn set_overlay_active(&mut self, active: bool) {
+        if !active {
+            // Completion or a refused opening ends sticky keyboard capture. Pending openings
+            // keep interception armed, so this cannot retire a later queued gesture.
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+            if self.mouse.is_active() {
+                // Keep the swallowed button's release debt, pending clicks and sub-notch
+                // accumulation. Only a selection without a visible/pending opening ends.
+                self.mouse.cancel();
+            }
+        }
         self.overlay_active = active;
     }
 
@@ -226,9 +268,40 @@ impl HookState {
     }
 
     pub fn reset_gestures(&mut self) {
+        self.mouse.cancel();
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
+    }
+
+    #[must_use]
+    pub fn process_mouse(&mut self, event: MouseEvent, settings: HookSettings) -> HookOutcome {
+        let outcome = self.mouse.process(
+            event,
+            settings.right_button_wheel_switching && !self.interception.suspended,
+        );
+        if !outcome.suppress
+            && outcome.actions().next().is_none()
+            && let MouseEvent::Wheel(delta) = event
+        {
+            return self.process_overlay_wheel(i32::from(delta));
+        }
+        if outcome
+            .actions()
+            .any(|action| matches!(action, InputAction::MouseWheel(_)))
+        {
+            self.alt_switch_gesture_active = false;
+            self.win_switch_gesture_active = false;
+        }
+        if event == MouseEvent::RightButtonPressed
+            && self.overlay_active
+            && settings.right_button_wheel_switching
+            && !self.interception.suspended
+        {
+            HookOutcome::one(outcome.suppress, InputAction::RightButtonPressed)
+        } else {
+            outcome
+        }
     }
 
     pub fn take_replayed_key_events(&mut self) -> [Option<ReplayedKeyEvent>; 3] {
@@ -242,6 +315,15 @@ impl HookState {
         } else {
             HookOutcome::default()
         }
+    }
+
+    #[must_use]
+    pub fn owns_right_button(&self) -> bool {
+        self.mouse.owns_button()
+    }
+
+    pub fn take_replayed_right_click(&mut self) -> bool {
+        self.mouse.take_replayed_click()
     }
 
     #[must_use]
@@ -332,7 +414,7 @@ impl HookState {
             return outcome;
         }
 
-        if let Some(outcome) = self.process_arrow(event) {
+        if let Some(outcome) = self.process_navigation(event, alt_down) {
             return outcome;
         }
 
@@ -459,13 +541,15 @@ impl HookState {
         } else {
             action
         };
-        if self.alt_switch_gesture_active && alt_down {
+        if (self.alt_switch_gesture_active && alt_down)
+            || self.win_switch_gesture_active
+            || self.mouse.is_active()
+            || self.overlay_active
+        {
+            self.mouse.cancel();
             self.alt_switch_gesture_active = false;
-            self.win_switch_gesture_active = false;
-            self.suppress_owned_key_release(event.key);
-            return Some(HookOutcome::one(true, action));
-        }
-        if self.win_switch_gesture_active {
+            // An unavailable position leaves the panel open. Keep sticky Win+Tab number
+            // routing until the UI acknowledges completion through set_overlay_active.
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -546,6 +630,7 @@ impl HookState {
         if !alt_tab && !windows_tab {
             return None;
         }
+        self.mouse.cancel();
         self.alt_switch_gesture_active = alt_tab;
         self.win_switch_gesture_active = windows_tab;
         if alt_tab {
@@ -672,16 +757,28 @@ impl HookState {
         suppressed
     }
 
-    fn process_arrow(&mut self, event: KeyEvent) -> Option<HookOutcome> {
-        let action = overlay_key_action(OverlayKeyEvent {
+    fn process_navigation(&mut self, event: KeyEvent, alt_down: bool) -> Option<HookOutcome> {
+        let mut action = overlay_key_action(OverlayKeyEvent {
             key: event.key,
             repeated: false,
             shift: self.shift_down(),
         })?;
-        if !matches!(action, InputAction::Navigate(_)) {
+        if let InputAction::Switch(delta) = action {
+            if alt_down
+                || windows_modifier_mask(event.modifiers) != 0
+                || self.pending_windows_keys != 0
+            {
+                return None;
+            }
+            action = InputAction::CycleSelection(delta);
+        }
+        if !matches!(
+            action,
+            InputAction::Navigate(_) | InputAction::CycleSelection(_)
+        ) {
             return None;
         }
-        if event.transition == KeyTransition::Pressed && self.switch_gesture_active() {
+        if event.transition == KeyTransition::Pressed && self.overlay_controls_active() {
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -697,11 +794,12 @@ impl HookState {
         if self.owned_key_release_pending(event.key) {
             return Some(HookOutcome::suppressed());
         }
-        if !self.switch_gesture_active() {
+        if !self.overlay_controls_active() {
             return None;
         }
 
         if event.key == Key::Enter {
+            self.mouse.cancel();
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
         }
@@ -726,6 +824,7 @@ impl HookState {
             return None;
         }
 
+        self.mouse.cancel();
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
         self.suppress_owned_key_release(event.key);
@@ -738,7 +837,7 @@ impl HookState {
         if !matches!(action, InputAction::SelectFirst | InputAction::SelectLast) {
             return None;
         }
-        if event.transition == KeyTransition::Pressed && self.switch_gesture_active() {
+        if event.transition == KeyTransition::Pressed && self.overlay_controls_active() {
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -763,16 +862,22 @@ impl HookState {
             event.modifiers.shift,
             self.owned_key_is_down(Key::RightAlt),
         )?;
-        // An empty query has no caret or selection to move. Keep modified navigation on the
-        // switcher route too, including its paired release and final Alt-release activation.
-        if !settings.filter_visible
-            && self.switch_gesture_active()
+        // Rendered query presence can belong to an older queued session. Let the UI decide
+        // navigation versus query editing, including whether release activation stays owned.
+        if self.overlay_controls_active()
             && matches!(
                 event.key,
                 Key::LeftArrow | Key::RightArrow | Key::Home | Key::End
             )
         {
-            return None;
+            self.suppress_owned_key_release(event.key);
+            return Some(HookOutcome::one(
+                true,
+                InputAction::SearchNavigation {
+                    command,
+                    modified: event.modifiers.control || event.modifiers.shift,
+                },
+            ));
         }
         // Plain navigation also moves through windows when the query is empty. Preserve the
         // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
@@ -782,6 +887,7 @@ impl HookState {
         ) || event.modifiers.control
             || event.modifiers.shift
         {
+            self.mouse.cancel();
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
         }
@@ -807,6 +913,7 @@ impl HookState {
         } else {
             InputAction::AppendSearchCharacter(event.text.filter(|value| !value.is_control())?)
         };
+        self.mouse.cancel();
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
         self.suppress_owned_key_release(event.key);
@@ -846,6 +953,10 @@ impl HookState {
 
     const fn switch_gesture_active(&self) -> bool {
         self.alt_switch_gesture_active || self.win_switch_gesture_active
+    }
+
+    const fn overlay_controls_active(&self) -> bool {
+        self.switch_gesture_active() || self.overlay_active || self.mouse.is_active()
     }
 }
 
@@ -2590,6 +2701,9 @@ mod tests {
 
     #[test]
     fn modified_navigation_edits_a_nonempty_query_and_pins_the_panel() {
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
         let settings = HookSettings {
             search_active: true,
             filter_visible: true,
@@ -2614,25 +2728,38 @@ mod tests {
                         .unwrap_or_else(|| {
                             panic!("navigation key has no editing command: {key:?}")
                         });
+                let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                    typed_search: true,
+                    release_alt_switches: true,
+                });
+                session.open([SwitchTask::new(1, 10, "One", "one")], None);
+                for character in "One".chars() {
+                    let _edit = session.handle_input(InputAction::AppendSearchCharacter(character));
+                }
+                let action = InputAction::SearchNavigation {
+                    command,
+                    modified: true,
+                };
                 assert_eq!(
                     state.process_key(KeyEvent::pressed(key, modifiers), settings),
-                    HookOutcome::one(true, InputAction::EditSearch(command))
+                    HookOutcome::one(true, action)
                 );
+                assert_eq!(session.handle_input(action), SwitcherEffect::Redraw);
                 assert!(
                     state
                         .process_key(KeyEvent::released(key, modifiers), settings)
                         .suppress
                 );
-                assert!(
-                    state
-                        .process_key(
-                            KeyEvent::released(Key::LeftAlt, Modifiers::default()),
-                            settings
-                        )
-                        .actions()
-                        .next()
-                        .is_none()
+                let release = state.process_key(
+                    KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+                    settings,
                 );
+                assert_eq!(release.actions().next(), Some(InputAction::AltReleased));
+                assert_eq!(
+                    session.handle_input(InputAction::AltReleased),
+                    SwitcherEffect::None
+                );
+                assert!(session.is_visible());
             }
         }
     }
@@ -3085,7 +3212,13 @@ mod tests {
             ),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::Navigate(1)), None],
+                actions: [
+                    Some(InputAction::SearchNavigation {
+                        command: TextCommand::Right,
+                        modified: false
+                    }),
+                    None
+                ],
             }
         );
         assert!(

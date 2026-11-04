@@ -150,6 +150,13 @@ pub enum WheelBehavior {
 }
 
 #[derive(Debug)]
+enum MouseSelection {
+    Inactive,
+    Active,
+    Pinned,
+}
+
+#[derive(Debug)]
 pub struct SwitcherSession {
     switcher: Switcher,
     settings: SwitcherSessionSettings,
@@ -157,6 +164,8 @@ pub struct SwitcherSession {
     context_menu_target: Option<WindowTarget>,
     wheel_remainder: i32,
     wheel_behavior: Option<WheelBehavior>,
+    mouse_selection: MouseSelection,
+    release_pinned: bool,
 }
 
 impl SwitcherSession {
@@ -175,6 +184,8 @@ impl SwitcherSession {
             context_menu_target: None,
             wheel_remainder: 0,
             wheel_behavior: None,
+            mouse_selection: MouseSelection::Inactive,
+            release_pinned: false,
         }
     }
 
@@ -185,6 +196,7 @@ impl SwitcherSession {
     ) {
         self.wheel_remainder = 0;
         self.wheel_behavior = None;
+        self.release_pinned = false;
         self.switcher.clear_filter();
         self.switcher.set_tasks(tasks);
         if let Some(delta) = selection_delta {
@@ -225,7 +237,7 @@ impl SwitcherSession {
     }
 
     pub fn open_context_menu(&mut self) -> bool {
-        if !self.visible || self.context_menu_open() {
+        if !self.visible || self.mouse_switching() || self.context_menu_open() {
             return false;
         }
         self.context_menu_target = self.switcher.selected_task().map(WindowTarget::from_task);
@@ -246,6 +258,8 @@ impl SwitcherSession {
     }
 
     pub fn hide(&mut self) {
+        self.mouse_selection = MouseSelection::Inactive;
+        self.release_pinned = false;
         self.wheel_remainder = 0;
         self.wheel_behavior = None;
         self.visible = false;
@@ -272,6 +286,20 @@ impl SwitcherSession {
 
     pub fn select_filter_position(&mut self, position: usize, extend: bool) {
         self.switcher.filter.select_at(position, extend);
+    }
+
+    /// Keep right-button-release activation while routing a gesture through the overlay's panes.
+    #[must_use]
+    pub fn handle_gesture_wheel(
+        &mut self,
+        behavior: WheelBehavior,
+        delta: i32,
+        visible_rows: usize,
+    ) -> SwitcherEffect {
+        if self.visible && !self.context_menu_open() {
+            self.start_mouse_wheel();
+        }
+        self.handle_mouse_wheel(behavior, delta, visible_rows)
     }
 
     /// The list scrolls independently of selection; the preview navigates selected windows.
@@ -335,11 +363,14 @@ impl SwitcherSession {
         if self.context_menu_open() {
             return SwitcherEffect::None;
         }
+        self.track_switch_gesture(action);
         if !self.visible {
             return match action {
-                InputAction::Switch(delta) => SwitcherEffect::Open {
-                    selection_delta: Some(delta),
-                },
+                InputAction::Switch(delta) | InputAction::MouseWheel(delta) => {
+                    SwitcherEffect::Open {
+                        selection_delta: Some(delta),
+                    }
+                }
                 _ => SwitcherEffect::None,
             };
         }
@@ -348,7 +379,12 @@ impl SwitcherSession {
             InputAction::EditSearch(command) if self.settings.typed_search => {
                 self.edit_search(command)
             }
-            InputAction::Switch(delta) => {
+            InputAction::SearchNavigation { command, modified } if self.settings.typed_search => {
+                self.navigate_search(command, modified)
+            }
+            InputAction::Switch(delta)
+            | InputAction::MouseWheel(delta)
+            | InputAction::CycleSelection(delta) => {
                 self.switcher.select_next(delta);
                 SwitcherEffect::Redraw
             }
@@ -366,6 +402,8 @@ impl SwitcherSession {
             }
             InputAction::DismissOverlay => {
                 self.visible = false;
+                self.mouse_selection = MouseSelection::Inactive;
+                self.release_pinned = false;
                 SwitcherEffect::Hide
             }
             InputAction::CloseSelected => self.command(WindowCommand::Close),
@@ -386,7 +424,18 @@ impl SwitcherSession {
                 }
             }
             InputAction::ActivateSelected => self.activate_selected(),
-            InputAction::AltReleased if self.settings.release_alt_switches => {
+            InputAction::RightButtonPressed => {
+                // A press prepares a new gesture; only scrolling resumes release activation.
+                self.mouse_selection = MouseSelection::Inactive;
+                SwitcherEffect::None
+            }
+            InputAction::MouseWheelReleased if self.mouse_switching() => {
+                self.mouse_selection = MouseSelection::Inactive;
+                self.activate_from_release()
+            }
+            InputAction::AltReleased
+                if self.settings.release_alt_switches && !self.release_pinned =>
+            {
                 self.activate_from_release()
             }
             InputAction::AppendSearchCharacter(character) if self.settings.typed_search => {
@@ -399,9 +448,39 @@ impl SwitcherSession {
             }
             InputAction::AltReleased
             | InputAction::OverlayWheel(_)
+            | InputAction::MouseWheelReleased
             | InputAction::AppendSearchCharacter(_)
             | InputAction::BackspaceSearch
-            | InputAction::EditSearch(_) => SwitcherEffect::None,
+            | InputAction::EditSearch(_)
+            | InputAction::SearchNavigation { .. } => SwitcherEffect::None,
+        }
+    }
+
+    fn navigate_search(
+        &mut self,
+        command: crate::text_edit::TextCommand,
+        modified: bool,
+    ) -> SwitcherEffect {
+        if !self.switcher.filter().is_empty() && modified {
+            self.release_pinned = true;
+            self.mouse_selection = MouseSelection::Pinned;
+        }
+        self.edit_search(command)
+    }
+
+    fn track_switch_gesture(&mut self, action: InputAction) {
+        if !self.visible {
+            self.mouse_selection = if matches!(action, InputAction::MouseWheel(_)) {
+                MouseSelection::Active
+            } else {
+                MouseSelection::Inactive
+            };
+        } else if matches!(action, InputAction::MouseWheel(_)) {
+            self.start_mouse_wheel();
+        }
+        if matches!(action, InputAction::Switch(_)) {
+            self.release_pinned = false;
+            self.mouse_selection = MouseSelection::Inactive;
         }
     }
 
@@ -409,13 +488,28 @@ impl SwitcherSession {
         use crate::text_edit::TextCommand as C;
         if self.switcher.filter().is_empty() {
             match command {
-                C::Left | C::Right => {
-                    self.switcher
-                        .select_bounded(if command == C::Left { -1 } else { 1 });
+                C::Left
+                | C::SelectLeft
+                | C::WordLeft
+                | C::SelectWordLeft
+                | C::Right
+                | C::SelectRight
+                | C::WordRight
+                | C::SelectWordRight => {
+                    self.switcher.select_bounded(
+                        if matches!(
+                            command,
+                            C::Left | C::SelectLeft | C::WordLeft | C::SelectWordLeft
+                        ) {
+                            -1
+                        } else {
+                            1
+                        },
+                    );
                     return SwitcherEffect::Redraw;
                 }
-                C::Start | C::End => {
-                    if command == C::Start {
+                C::Start | C::SelectStart | C::End | C::SelectEnd => {
+                    if matches!(command, C::Start | C::SelectStart) {
                         self.switcher.select_first();
                     } else {
                         self.switcher.select_last();
@@ -443,7 +537,21 @@ impl SwitcherSession {
             return SwitcherEffect::None;
         };
         self.visible = false;
+        self.mouse_selection = MouseSelection::Inactive;
+        self.release_pinned = false;
         SwitcherEffect::Activate(target)
+    }
+
+    #[must_use]
+    pub const fn mouse_switching(&self) -> bool {
+        matches!(self.mouse_selection, MouseSelection::Active)
+    }
+
+    fn start_mouse_wheel(&mut self) {
+        if !matches!(self.mouse_selection, MouseSelection::Pinned) {
+            self.mouse_selection = MouseSelection::Active;
+            self.release_pinned = false;
+        }
     }
 
     fn command(&self, command: WindowCommand) -> SwitcherEffect {
@@ -690,6 +798,124 @@ fn step_index(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn query_navigation_stays_pinned_until_a_new_mouse_wheel_gesture() {
+        use super::*;
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        session.open([SwitchTask::new(1, 10, "One", "one")], None);
+        for character in "One".chars() {
+            let _edit = session.handle_input(InputAction::AppendSearchCharacter(character));
+        }
+        let _navigation = session.handle_input(InputAction::SearchNavigation {
+            command: crate::text_edit::TextCommand::SelectLeft,
+            modified: true,
+        });
+        let _press = session.handle_input(InputAction::RightButtonPressed);
+        assert_eq!(
+            session.handle_input(InputAction::AltReleased),
+            SwitcherEffect::None,
+            "an ordinary right press cannot revive cancelled keyboard completion"
+        );
+        assert!(session.is_visible());
+        let _wheel = session.handle_gesture_wheel(WheelBehavior::SelectWindow, -120, 3);
+        assert_eq!(
+            session.handle_input(InputAction::MouseWheelReleased),
+            SwitcherEffect::Activate(10)
+        );
+    }
+
+    #[test]
+    fn experimental_mouse_actions_open_step_and_activate_only_their_own_session() {
+        use super::*;
+        use crate::hook_flags::{HookFlags, decode_action, encode_action};
+        use crate::input::{HookSettings, HookState, MouseEvent};
+
+        let settings = HookSettings {
+            right_button_wheel_switching: true,
+            ..HookSettings::default()
+        };
+        let mut hook = HookState::default();
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        let flags = HookFlags::new();
+        let mut activated = None;
+        for event in [
+            MouseEvent::RightButtonPressed,
+            MouseEvent::Wheel(-120),
+            MouseEvent::Wheel(-120),
+            MouseEvent::RightButtonReleased,
+        ] {
+            let outcome = hook.process_mouse(event, settings);
+            for action in outcome.actions() {
+                let (wparam, lparam) = encode_action(action, flags.load());
+                assert!(flags.action_is_current(wparam));
+                let Some(action) = decode_action(wparam, lparam) else {
+                    panic!("mouse action roundtrip failed");
+                };
+                match session.handle_input(action) {
+                    SwitcherEffect::Open { selection_delta } => {
+                        session.open(
+                            [
+                                SwitchTask::new(1, 10, "One", "one"),
+                                SwitchTask::new(2, 20, "Two", "two"),
+                                SwitchTask::new(3, 30, "Three", "three"),
+                            ],
+                            selection_delta,
+                        );
+                        assert!(
+                            !session.open_context_menu(),
+                            "the physical button release must not open the overlay menu"
+                        );
+                    }
+                    SwitcherEffect::Redraw => {}
+                    SwitcherEffect::Activate(target) => activated = Some(target),
+                    other => panic!("unexpected mouse effect: {other:?}"),
+                }
+            }
+        }
+        assert_eq!(activated, Some(30));
+        assert!(!session.is_visible());
+        assert!(!session.mouse_switching());
+        session.open([SwitchTask::new(1, 10, "One", "one")], None);
+        assert_eq!(
+            session.handle_input(InputAction::MouseWheelReleased),
+            SwitcherEffect::None
+        );
+        assert!(
+            session.is_visible(),
+            "a stray RMB release must not complete a keyboard session"
+        );
+        assert!(session.open_context_menu());
+    }
+
+    #[test]
+    fn cancelling_a_mouse_session_never_commits_on_release() {
+        use super::*;
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        assert!(matches!(
+            session.handle_input(InputAction::MouseWheel(-1)),
+            SwitcherEffect::Open { .. }
+        ));
+        session.open([SwitchTask::new(1, 10, "One", "one")], None);
+        assert_eq!(
+            session.handle_input(InputAction::DismissOverlay),
+            SwitcherEffect::Hide
+        );
+        assert!(!session.mouse_switching());
+        assert_eq!(
+            session.handle_input(InputAction::MouseWheelReleased),
+            SwitcherEffect::None
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1313,6 +1539,23 @@ mod tests {
         );
         assert_eq!(session.switcher().visible_range(5), 1..6);
         assert_eq!(session.switcher().selected_visible_index(), Some(1));
+    }
+
+    #[test]
+    fn gesture_wheel_respects_the_list_and_keeps_release_activation() {
+        let mut session = long_list_session();
+        assert!(!session.mouse_switching());
+        assert_eq!(
+            session.handle_gesture_wheel(WheelBehavior::ScrollList, -120, 5),
+            SwitcherEffect::Redraw
+        );
+        assert!(session.mouse_switching());
+        assert_eq!(session.switcher().selected_visible_index(), Some(0));
+        assert_eq!(session.switcher().visible_range(5), 1..6);
+        assert_eq!(
+            session.handle_input(InputAction::MouseWheelReleased),
+            SwitcherEffect::Activate(1)
+        );
     }
 
     #[test]

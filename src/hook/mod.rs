@@ -3,18 +3,21 @@
 
 mod delivery;
 mod keyboard_state;
+mod mouse_replay;
+#[cfg(test)]
+mod mouse_tests;
 mod recovery;
 mod replay;
 
 use crate::app_messages::WM_OUTSIDE_POINTER;
-use crate::win32::module_instance;
+use crate::win32::{high_word, module_instance};
 use alttabio::hook_flags::{
-    FILTER_VISIBLE, HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED, OVERLAY_ACTIVE,
-    OVERLAY_FLAGS, SEARCH_ACTIVE,
+    FILTER_VISIBLE, HookActionGuard, HookFlags, HookInterceptionGuard, INTERCEPTION_SUSPENDED,
+    OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE,
 };
 use alttabio::input::{
     HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
-    decode_virtual_key,
+    MouseEvent, decode_virtual_key,
 };
 use alttabio::passthrough::PassthroughPolicy;
 use delivery::post_actions;
@@ -24,7 +27,7 @@ use replay::{is_own_replayed_input, replay_key_events};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -38,7 +41,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_QUIT,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::Error;
 
@@ -48,10 +51,13 @@ pub use replay::{send_activation_alt, send_shell_escape};
 // are distinct. The app window never receives them, so they may reuse numbers from `app_messages`.
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
+const WM_REPLAY_RIGHT_CLICK: u32 = WM_APP + 4;
 const WM_RECONCILE_KEYBOARD: u32 = WM_APP + 20;
 
 const HOOK_ERROR_REPLAY_INPUT: u8 = 1;
 const HOOK_ERROR_POST_ACTION: u8 = 2;
+const HOOK_ERROR_REPLAY_MOUSE: u8 = 4;
+static RIGHT_BUTTON_RELEASE: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 struct HookContext {
     target: HWND,
@@ -61,10 +67,12 @@ struct HookContext {
     target_thread_id: u32,
     hook_thread_id: u32,
     pending_errors: u8,
+    failed_openings: Option<(usize, usize)>,
     flags: Arc<HookFlags>,
     interception_generation: usize,
     keyboard_state: KeyboardState,
     recovering: bool,
+    right_button_release: Arc<AtomicBool>,
 }
 
 impl HookContext {
@@ -130,6 +138,8 @@ impl HookThread {
             PassthroughPolicy::INITIAL.bypasses_local_switching(),
         ));
         let hook_remote_desktop_passthrough = Arc::clone(&remote_desktop_passthrough);
+        let right_button_release =
+            Arc::clone(RIGHT_BUTTON_RELEASE.get_or_init(|| Arc::new(AtomicBool::new(false))));
         let (sender, receiver) = mpsc::sync_channel(1);
         let join_handle = thread::Builder::new()
             .name("alttabio-hooks".to_owned())
@@ -144,10 +154,12 @@ impl HookThread {
                         remote_desktop_passthrough: hook_remote_desktop_passthrough,
                         hook_thread_id: 0,
                         pending_errors: 0,
+                        failed_openings: None,
                         flags: hook_flags,
                         interception_generation: 0,
                         keyboard_state,
                         recovering: false,
+                        right_button_release,
                     },
                     &sender,
                 ) && sender.send(Err(error)).is_err()
@@ -175,12 +187,20 @@ impl HookThread {
         }
     }
 
-    pub fn set_search_state(&self, active: bool, filtered: bool) {
-        self.flags.set_search_state(active, filtered);
+    pub fn sync_overlay(&self, visible: bool, typed_search: bool, filtered: bool) {
+        self.flags.sync_overlay(visible, typed_search, filtered);
     }
 
-    pub fn set_overlay_active(&self, active: bool) {
-        self.flags.set(OVERLAY_ACTIVE, active);
+    pub fn complete_overlay(&self) {
+        self.flags.complete_overlay();
+    }
+
+    pub fn retire_openings(&self, origin: WPARAM, count: usize) {
+        self.flags.retire_action_openings(origin.0, count);
+    }
+
+    pub fn applying_action(&self, origin: WPARAM, action: InputAction) -> Option<HookActionGuard> {
+        HookActionGuard::new(Arc::clone(&self.flags), origin.0, action)
     }
 
     /// Cancels interception across modal boundaries without touching the UI's restored flags.
@@ -210,6 +230,9 @@ impl HookThread {
     }
 
     pub fn reset_gestures(&self) -> Result<(), String> {
+        // Retire already-posted input before the UI can drain another gesture action.
+        // The next callback also observes this boundary if posting the wake-up fails.
+        self.flags.cancel_overlay();
         unsafe {
             // SAFETY: `thread_id` identifies the live hook thread whose queue is created before
             // `HookThread::start` returns. The message carries no borrowed data.
@@ -253,6 +276,7 @@ fn run_hook_thread(
         // queue exists before another thread posts WM_QUIT.
         let _queue_ready = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
     }
+    let mouse_replay = mouse_replay::ReplayWorker::start()?;
 
     hook_context.hook_thread_id = thread_id;
     publish_recovery_flags(Some(Arc::clone(&hook_context.flags)));
@@ -311,10 +335,13 @@ fn run_hook_thread(
             continue;
         }
         if message.message == WM_RESET_GESTURES {
-            reset_context();
+            handle_gesture_reset();
             continue;
         }
         if message.message == WM_REPORT_HOOK_ERRORS {
+            continue;
+        }
+        if handle_mouse_replay_with(message.message, || mouse_replay.request()) {
             continue;
         }
         unsafe {
@@ -327,6 +354,7 @@ fn run_hook_thread(
     remove_hook(mouse, "mouse");
     remove_hook(keyboard, "keyboard");
     drop(recovery);
+    drop(mouse_replay);
     CONTEXT.with(|context| *context.borrow_mut() = None);
     publish_recovery_flags(None);
     loop_result
@@ -405,12 +433,9 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     }
 
     std::panic::catch_unwind(|| {
-        finish_callback_with(
-            process_mouse_message(wparam, lparam),
-            post_actions,
-            reset_context,
-            || call_next(code, wparam, lparam),
-        )
+        finish_mouse_callback_with(process_mouse_message(wparam, lparam), post_actions, || {
+            call_next(code, wparam, lparam)
+        })
     })
     .unwrap_or_else(|_| call_next(code, wparam, lparam))
 }
@@ -481,28 +506,59 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     Some(outcome)
 }
 
-// The open overlay owns wheel input. Button input remains owned by Windows.
 fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> {
+    process_mouse_message_with(wparam, lparam, queue_right_click)
+}
+
+fn queue_right_click() -> bool {
+    process_with_context(|context| unsafe {
+        // SAFETY: the hook thread created its message queue before installing the hook. Only a
+        // scalar request is posted; no callback data or state borrow outlives this call.
+        PostThreadMessageW(
+            context.hook_thread_id,
+            WM_REPLAY_RIGHT_CLICK,
+            WPARAM(0),
+            LPARAM(0),
+        )
+        .is_ok()
+    }) == Some(true)
+}
+
+fn handle_mouse_replay_with(message: u32, replay_click: impl FnOnce() -> bool) -> bool {
+    if message != WM_REPLAY_RIGHT_CLICK {
+        return false;
+    }
+    // The message loop only schedules the worker. SendInput must leave the hook thread free to
+    // service callbacks, including when another hook forwards our injected events back to us.
+    if !replay_click() {
+        record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
+    }
+    true
+}
+
+fn process_mouse_message_with(
+    wparam: WPARAM,
+    lparam: LPARAM,
+    queue_click: impl FnOnce() -> bool,
+) -> Option<HookOutcome> {
     // SAFETY: the hook passes a live MSLLHOOKSTRUCT for the callback duration.
     let data = unsafe { (lparam.0 as *const MSLLHOOKSTRUCT).as_ref() }?;
     if is_own_replayed_input(data.dwExtraInfo) {
         return None;
     }
-    if wparam.0 == WM_MOUSEWHEEL as usize {
-        return process_with_context(|context| {
+    let message = u32::try_from(wparam.0).ok()?;
+    if message == WM_LBUTTONDOWN {
+        let _posted = process_with_context(|context| {
             let flags = context.sync_interception();
             context
                 .state
                 .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
-            let delta = crate::win32::high_word(data.mouseData as usize).cast_signed();
-            context.state.process_overlay_wheel(i32::from(delta))
-        });
-    }
-    if wparam.0 != WM_LBUTTONDOWN as usize {
-        return None;
-    }
-    let _posted = process_with_context(|context| {
-        if context.sync_interception() & OVERLAY_ACTIVE != 0 {
+            let _click = context
+                .state
+                .process_mouse(MouseEvent::LeftButtonPressed, context.settings);
+            if flags & OVERLAY_ACTIVE == 0 {
+                return;
+            }
             // SAFETY: the hook owner retains the target HWND. Only scalar screen coordinates
             // cross this callback; hit testing runs on the application thread.
             if unsafe {
@@ -517,9 +573,43 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> 
             {
                 context.record_error(HOOK_ERROR_POST_ACTION);
             }
+        });
+        return None;
+    }
+    let event = match message {
+        WM_RBUTTONDOWN => MouseEvent::RightButtonPressed,
+        WM_RBUTTONUP => MouseEvent::RightButtonReleased,
+        WM_MOUSEWHEEL => MouseEvent::Wheel(high_word(data.mouseData as usize).cast_signed()),
+        _ => return None,
+    };
+    let (outcome, replay) = process_with_context(|context| {
+        let flags = context.sync_interception();
+        context
+            .state
+            .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
+        let settings = PassthroughPolicy::from_bypass_flag(
+            context.remote_desktop_passthrough.load(Ordering::Acquire),
+        )
+        .apply(context.settings);
+        let owned = context.state.owns_right_button();
+        let mut outcome = context.state.process_mouse(event, settings);
+        if event == MouseEvent::RightButtonPressed {
+            context
+                .right_button_release
+                .store(context.state.owns_right_button(), Ordering::Release);
+        } else if event == MouseEvent::RightButtonReleased
+            && context.right_button_release.swap(false, Ordering::AcqRel)
+            && !owned
+        {
+            // A hook restart cancelled the gesture but still owes its swallowed press a release.
+            outcome.suppress = true;
         }
-    });
-    None
+        (outcome, context.state.take_replayed_right_click())
+    })?;
+    if replay && !queue_click() {
+        record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
+    }
+    Some(outcome)
 }
 
 fn process_with_context<T>(process: impl FnOnce(&mut HookContext) -> T) -> Option<T> {
@@ -552,6 +642,31 @@ fn finish_callback_with(
     }
 }
 
+fn finish_mouse_callback_with(
+    outcome: Option<HookOutcome>,
+    post: impl FnOnce(HookOutcome) -> bool,
+    call_next: impl FnOnce() -> LRESULT,
+) -> LRESULT {
+    let Some(outcome) = outcome else {
+        return call_next();
+    };
+    // Posting reports failures and schedules receipt cleanup outside the callback. Retain
+    // the gesture: an earlier accepted opening may still need its physical release. If no
+    // opening survives cleanup, the next input synchronization retires capture instead.
+    let _posted = post(outcome);
+    if outcome.suppress {
+        LRESULT(1)
+    } else {
+        call_next()
+    }
+}
+
+fn handle_gesture_reset() {
+    // A callback may have already observed the boundary and started a fresh gesture.
+    // Synchronizing again is harmless; unconditionally resetting would cancel that gesture.
+    let _flags = process_with_context(HookContext::sync_interception);
+}
+
 fn reset_context() {
     let _outcome = process_with_context(|context| {
         context.state.reset_gestures();
@@ -564,13 +679,21 @@ fn record_callback_error(error: u8) {
 }
 
 fn report_callback_errors() {
-    let pending = process_with_context(|context| core::mem::take(&mut context.pending_errors))
-        .unwrap_or_default();
+    let pending = process_with_context(|context| {
+        if let Some((generation, count)) = context.failed_openings.take() {
+            context.flags.withdraw_openings(generation, count);
+        }
+        core::mem::take(&mut context.pending_errors)
+    })
+    .unwrap_or_default();
     if pending & HOOK_ERROR_REPLAY_INPUT != 0 {
         eprintln!("Could not replay a suppressed input sequence from the input hook");
     }
     if pending & HOOK_ERROR_POST_ACTION != 0 {
         eprintln!("Could not post an input action from the input hook");
+    }
+    if pending & HOOK_ERROR_REPLAY_MOUSE != 0 {
+        eprintln!("Could not replay a right click or balance a partially inserted press");
     }
 }
 
@@ -598,10 +721,12 @@ fn test_context() -> HookContext {
         target_thread_id: 0,
         hook_thread_id: 0,
         pending_errors: 0,
+        failed_openings: None,
         flags: Arc::new(HookFlags::default()),
         interception_generation: 0,
         keyboard_state: KeyboardState::default(),
         recovering: false,
+        right_button_release: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -645,7 +770,63 @@ mod tests {
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_LSHIFT, VK_SHIFT};
 
     #[test]
-    fn right_button_and_wheel_input_never_changes_overlay_or_keyboard_ownership() {
+    fn mouse_switch_release_does_not_open_the_original_apps_menu_or_restore_its_focus() {
+        use std::cell::Cell;
+        let mut context = test_context();
+        context.settings.right_button_wheel_switching = true;
+        let flags = Arc::clone(&context.flags);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        let original_pressed = Cell::new(false);
+        let original_menus = Cell::new(0);
+        let selected_is_foreground = Cell::new(false);
+        for message in [WM_RBUTTONDOWN, WM_MOUSEWHEEL, WM_RBUTTONUP] {
+            let data = MSLLHOOKSTRUCT {
+                mouseData: 0xff88_0000,
+                ..Default::default()
+            };
+            let outcome =
+                process_mouse_message(WPARAM(message as usize), LPARAM((&raw const data) as isize));
+            finish_callback_with(
+                outcome,
+                |outcome| {
+                    for action in outcome.actions() {
+                        if matches!(action, InputAction::MouseWheel(_)) {
+                            flags.set(OVERLAY_ACTIVE, true);
+                        }
+                        if action == InputAction::MouseWheelReleased {
+                            selected_is_foreground.set(true);
+                        }
+                    }
+                    true
+                },
+                reset_context,
+                || {
+                    if message == WM_RBUTTONDOWN {
+                        original_pressed.set(true);
+                    }
+                    if message == WM_RBUTTONUP && original_pressed.replace(false) {
+                        // A capture-owning recipient opens its menu and restores focus after UP.
+                        original_menus.set(original_menus.get() + 1);
+                        selected_is_foreground.set(false);
+                    }
+                    LRESULT(0)
+                },
+            );
+        }
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+        assert_eq!(
+            original_menus.get(),
+            0,
+            "the gesture delivered a native right click to the original app"
+        );
+        assert!(
+            selected_is_foreground.get(),
+            "the original app took focus back after release"
+        );
+    }
+
+    #[test]
+    fn disabled_rmb_keeps_buttons_native_and_preserves_overlay_wheel_ownership() {
         use windows::Win32::UI::WindowsAndMessaging::{
             WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
         };
@@ -661,7 +842,21 @@ mod tests {
                     mouseData: 120 << 16,
                     ..Default::default()
                 };
-                process_mouse_message(WPARAM(message as usize), LPARAM((&raw const data) as isize));
+                let outcome = process_mouse_message(
+                    WPARAM(message as usize),
+                    LPARAM((&raw const data) as isize),
+                )
+                .unwrap_or_else(|| panic!("missing mouse outcome"));
+                let captured_wheel = overlay && message == WM_MOUSEWHEEL;
+                assert_eq!(outcome.suppress, captured_wheel);
+                assert_eq!(
+                    outcome.actions().collect::<Vec<_>>(),
+                    if captured_wheel {
+                        vec![InputAction::OverlayWheel(120)]
+                    } else {
+                        Vec::new()
+                    }
+                );
                 assert_eq!(flags.load(), before);
                 assert_eq!(
                     process_with_context(|context| context.pending_errors),
@@ -673,6 +868,66 @@ mod tests {
     }
 
     #[test]
+    fn opted_in_mouse_callbacks_decode_steps_and_own_the_button_release() {
+        let mut context = test_context();
+        context.settings.right_button_wheel_switching = true;
+        let flags = Arc::clone(&context.flags);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        for (message, mouse_data, expected, suppress) in [
+            (WM_RBUTTONDOWN, 0, None, true),
+            (
+                WM_MOUSEWHEEL,
+                0xff88_0000,
+                Some(InputAction::MouseWheel(1)),
+                true,
+            ),
+            (WM_RBUTTONUP, 0, Some(InputAction::MouseWheelReleased), true),
+        ] {
+            let data = MSLLHOOKSTRUCT {
+                mouseData: mouse_data,
+                ..Default::default()
+            };
+            let Some(outcome) =
+                process_mouse_message(WPARAM(message as usize), LPARAM((&raw const data) as isize))
+            else {
+                panic!("missing mouse outcome");
+            };
+            assert_eq!(outcome.actions().next(), expected);
+            assert_eq!(outcome.suppress, suppress);
+            // The next native callback observes the receipt armed by actual delivery.
+            assert_eq!(
+                alttabio::hook_delivery::deliver(
+                    &flags,
+                    flags.load() & !OVERLAY_FLAGS,
+                    true,
+                    outcome,
+                    |_| true,
+                ),
+                alttabio::hook_delivery::Delivery::Posted
+            );
+        }
+        let down = MSLLHOOKSTRUCT::default();
+        let _down = process_mouse_message(
+            WPARAM(WM_RBUTTONDOWN as usize),
+            LPARAM((&raw const down) as isize),
+        );
+        flags.suspend(true);
+        flags.suspend(false);
+        let wheel = MSLLHOOKSTRUCT {
+            mouseData: 120 << 16,
+            ..Default::default()
+        };
+        assert_eq!(
+            process_mouse_message(
+                WPARAM(WM_MOUSEWHEEL as usize),
+                LPARAM((&raw const wheel) as isize)
+            ),
+            Some(HookOutcome::default())
+        );
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    #[test]
     fn swallowed_and_replayed_toggles_follow_actual_chain_delivery() {
         let mut context = test_context();
         let settings = context.settings;
@@ -680,9 +935,21 @@ mod tests {
             KeyEvent::pressed(Key::LeftWindows, Modifiers::default()),
             settings,
         );
-        let _tab = context
+        let opening = context
             .state
             .process_key(KeyEvent::pressed(Key::Tab, Modifiers::default()), settings);
+        // Match actual delivery: a sticky gesture owns later keys only after its opening
+        // armed capture. An unpublished opening must not leave sticky capture behind.
+        assert_eq!(
+            alttabio::hook_delivery::deliver(
+                &context.flags,
+                context.interception_generation,
+                settings.typed_search,
+                opening,
+                |_| true,
+            ),
+            alttabio::hook_delivery::Delivery::Posted
+        );
         CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
         for message in [WM_KEYDOWN, WM_KEYDOWN, WM_KEYUP] {
             let data = KBDLLHOOKSTRUCT {
@@ -793,13 +1060,14 @@ mod tests {
                 LPARAM((&raw const data) as isize),
             );
         }
-        flags.set(SEARCH_ACTIVE, true);
+        // Search capture on resume belongs to the visible panel published by the UI.
+        flags.sync_overlay(true, true, false);
         flags.suspend(false);
         let context = CONTEXT.with(|slot| slot.borrow_mut().take());
         let Some(mut context) = context else {
             panic!("missing test context")
         };
-        assert_eq!(context.sync_interception(), SEARCH_ACTIVE);
+        assert_eq!(context.sync_interception(), OVERLAY_ACTIVE | SEARCH_ACTIVE);
         assert_eq!(context.keyboard_state.key_state(VK_SHIFT), 0x80);
         assert_eq!(context.keyboard_state.key_state(VK_CAPITAL), 0x81);
         let mut expected = KeyboardState::default();
@@ -848,6 +1116,7 @@ mod tests {
         let messages = [
             WM_RESET_GESTURES,
             WM_REPORT_HOOK_ERRORS,
+            WM_REPLAY_RIGHT_CLICK,
             WM_RECONCILE_KEYBOARD,
         ];
 

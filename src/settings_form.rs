@@ -10,7 +10,7 @@ pub const SELECTOR_WIDTH: i32 = 160;
 pub const MIN_CLIENT_WIDTH: i32 = 640;
 pub const MIN_CLIENT_HEIGHT: i32 = 420;
 pub const REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
-const OPTION_COUNT: usize = 15;
+const OPTION_COUNT: usize = 16;
 
 /// A native control identity. Page controls live in a clipping, scrolling viewport.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,6 +24,7 @@ pub enum Control {
     Label(Selector),
     Selector(Selector),
     Checkbox(SettingOption),
+    Warning(SettingOption),
     AboutIdentity,
     AboutDescription,
     AboutRepository,
@@ -64,7 +65,7 @@ impl Control {
         match self {
             Self::Section(section) => Some(section.category()),
             Self::Label(_) | Self::Selector(_) => Some(Category::Appearance),
-            Self::Checkbox(option) => Some(option.category()),
+            Self::Checkbox(option) | Self::Warning(option) => Some(option.category()),
             Self::AboutIdentity
             | Self::AboutDescription
             | Self::AboutRepository
@@ -95,6 +96,7 @@ impl Control {
             Self::Section(section) => section.title(),
             Self::Label(selector) => selector.label(),
             Self::Checkbox(option) => option.label(),
+            Self::Warning(option) => option.warning(),
             Self::AboutIdentity => concat!("AltTabio\nVersion ", env!("CARGO_PKG_VERSION")),
             Self::AboutDescription => "Open-source window switcher for Windows and macOS.",
             Self::AboutRepository => "GitHub",
@@ -218,7 +220,10 @@ impl Category {
                 C(FullDesktopPreview),
             ],
             Self::Display => &[C(CurrentMonitorFilter)],
-            Self::Experimental => &[],
+            Self::Experimental => &[
+                C(SettingOption::RmbWheelSwitching),
+                Control::Warning(SettingOption::RmbWheelSwitching),
+            ],
             Self::About => &[
                 AboutIdentity,
                 AboutDescription,
@@ -302,6 +307,7 @@ setting_options! {
     Preview: Appearance, appearance.preview, "Live window preview";
     FullDesktopPreview: Appearance, appearance.full_desktop_preview, "Preview in desktop position";
     CurrentMonitorFilter: Display, monitor.use_current_monitor_filter, "Only show windows on the current monitor";
+    RmbWheelSwitching: Experimental, experimental.right_button_wheel_switching, "Right-button + scroll switching";
 }
 
 impl SettingOption {
@@ -312,6 +318,17 @@ impl SettingOption {
             Self::TypedSearch => "Find a window by typing while the switcher is open.",
             Self::MouseOverSelection => "Select a window when the pointer moves over it.",
             Self::FullDesktopPreview => "Show the window where it sits on the desktop.",
+            Self::RmbWheelSwitching => "Hold RMB and scroll up or down to switch windows.",
+            _ => "",
+        }
+    }
+
+    #[must_use]
+    pub const fn warning(self) -> &'static str {
+        match self {
+            Self::RmbWheelSwitching => {
+                "In some applications, the switcher may open slowly or fail to open. May also interfere with context menus or mouse gestures."
+            }
             _ => "",
         }
     }

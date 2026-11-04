@@ -23,6 +23,14 @@ pub struct DeferredSwitch {
 
 impl DeferredSwitch {
     #[must_use]
+    pub fn pending_openings(&self) -> usize {
+        self.actions
+            .iter()
+            .filter(|action| matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_)))
+            .count()
+    }
+
+    #[must_use]
     pub fn new(first: InputAction) -> Self {
         Self {
             actions: vec![first],
@@ -55,6 +63,10 @@ impl DeferredSwitch {
                 matches!(
                     action,
                     InputAction::Switch(_)
+                        | InputAction::CycleSelection(_)
+                        | InputAction::SearchNavigation { .. }
+                        | InputAction::MouseWheel(_)
+                        | InputAction::OverlayWheel(_)
                         | InputAction::Navigate(_)
                         | InputAction::SelectFirst
                         | InputAction::SelectLast
@@ -87,6 +99,26 @@ impl DeferredSwitch {
 mod tests {
     use super::*;
     use crate::switcher::{SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings};
+
+    #[test]
+    fn ordinary_wheel_previews_only_before_a_focus_dependent_action() {
+        let mut deferred = DeferredSwitch::new(InputAction::MouseWheel(1));
+        assert!(deferred.push(InputAction::OverlayWheel(-120)));
+        assert!(deferred.push(InputAction::MouseWheelReleased));
+        assert!(deferred.push(InputAction::OverlayWheel(-120)));
+        assert_eq!(
+            deferred.take_preview_actions(),
+            [InputAction::MouseWheel(1), InputAction::OverlayWheel(-120)]
+        );
+        assert!(deferred.take_preview_actions().is_empty());
+        assert_eq!(
+            deferred.poll(false, Duration::ZERO),
+            DeferredSwitchPoll::Ready(vec![
+                InputAction::MouseWheelReleased,
+                InputAction::OverlayWheel(-120)
+            ])
+        );
+    }
 
     #[test]
     fn preview_cycles_before_shell_releases_focus_but_activation_waits() {
