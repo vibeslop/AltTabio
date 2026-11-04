@@ -4,7 +4,9 @@ use crate::win32::point_from_lparam;
 use alttabio::input::InputAction;
 use alttabio::overlay_pointer::{close_target_for_hit, select_hovered_position};
 use alttabio::switcher::SwitcherEffect;
-use alttabio::task_list_hit::{TaskListHit, hit_test_pixels, pointer_in_list_pixels};
+use alttabio::task_list_hit::{
+    TaskListHit, hit_test_pixels, pointer_in_list_pixels, wheel_behavior_at_pixels,
+};
 use alttabio::task_refresh::ContextMenuCommandOutcome;
 use alttabio::window_command::WindowCommand;
 use std::mem::size_of;
@@ -38,15 +40,56 @@ impl AppHost {
 }
 
 impl App {
-    pub(super) fn handle_mouse_wheel(&mut self, delta: i32) {
+    pub(super) fn handle_mouse_wheel(&mut self, delta: i32, lparam: LPARAM) {
+        let coordinates = point_from_lparam(lparam);
+        let screen_point = POINT {
+            x: coordinates.x,
+            y: coordinates.y,
+        };
+        self.handle_wheel_at(delta, screen_point);
+    }
+
+    pub(super) fn handle_overlay_wheel(&mut self, delta: i32) {
+        if self.is_visible()
+            && let Some(point) = self.read_mouse_position()
+        {
+            self.handle_wheel_at(delta, point);
+        }
+    }
+
+    fn handle_wheel_at(&mut self, delta: i32, screen_point: POINT) {
+        let mut point = screen_point;
+        let converted = unsafe {
+            // SAFETY: the overlay HWND is live and `point` is writable for this call.
+            ScreenToClient(self.hwnd, &raw mut point)
+        };
+        if !converted.as_bool() {
+            eprintln!("Could not convert wheel coordinates to the overlay client area");
+            return;
+        }
+        let Some(client) = self.client_size() else {
+            return;
+        };
+        let dpi = unsafe {
+            // SAFETY: the overlay HWND is live and the call returns a scalar DPI value.
+            GetDpiForWindow(self.hwnd)
+        };
+        let behavior = wheel_behavior_at_pixels(
+            client,
+            (point.x, point.y),
+            dpi,
+            self.settings.appearance.compact_list,
+        );
+        self.hover_selection
+            .after_wheel((screen_point.x, screen_point.y));
         let visible_rows = self.renderer.visible_row_count(
             self.settings.appearance.compact_list,
             self.session.filter_visible(),
         );
-        if self.session.handle_mouse_wheel(delta, visible_rows) == SwitcherEffect::Redraw {
-            // A queued or synthetic mouse move at this position must not select the row that
-            // scrolling just moved under the pointer.
-            self.mouse_position = self.read_mouse_position();
+        let effect = self
+            .session
+            .handle_mouse_wheel(behavior, delta, visible_rows);
+        if effect == SwitcherEffect::Redraw {
             self.close_button.update_hover(None);
             self.request_redraw();
         }
@@ -56,10 +99,13 @@ impl App {
         let Some(cursor) = self.read_mouse_position() else {
             return;
         };
+        let dpi = unsafe {
+            // SAFETY: the overlay HWND is live and the call returns a scalar DPI value.
+            GetDpiForWindow(self.hwnd)
+        };
         let pointer_moved = self
-            .mouse_position
-            .is_some_and(|previous| previous != cursor);
-        self.mouse_position = Some(cursor);
+            .hover_selection
+            .pointer_moved((cursor.x, cursor.y), dpi);
         self.track_mouse_leave();
 
         let mut hit = self.hit_test(lparam);
@@ -236,7 +282,8 @@ impl App {
     }
 
     pub(super) fn reset_mouse_selection(&mut self) {
-        self.mouse_position = self.read_mouse_position();
+        let position = self.read_mouse_position().map(|point| (point.x, point.y));
+        self.hover_selection.reset(position);
         self.mouse_leave_tracked = false;
         self.close_button.reset();
     }

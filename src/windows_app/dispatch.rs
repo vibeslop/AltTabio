@@ -86,7 +86,7 @@ impl App {
             }
             WM_MOUSEWHEEL => {
                 let delta = high_word(wparam.0).cast_signed();
-                self.handle_mouse_wheel(i32::from(delta));
+                self.handle_mouse_wheel(i32::from(delta), lparam);
                 Some(LRESULT(0))
             }
             WM_SIZE => {
@@ -222,6 +222,10 @@ impl App {
     }
 
     fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
+        if let InputAction::OverlayWheel(delta) = action {
+            self.handle_overlay_wheel(delta);
+            return;
+        }
         if self.pending_shell.is_none()
             && !self.is_visible()
             && matches!(action, InputAction::Switch(_))

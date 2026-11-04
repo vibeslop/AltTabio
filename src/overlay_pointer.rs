@@ -1,9 +1,45 @@
 //! Pointer interaction with the overlay's task list: hover selection and the close button.
 
 use crate::close_button::CloseButtonVisualState;
+use crate::overlay_layout::layout_scale;
 use crate::switcher::Switcher;
 use crate::task_list_hit::TaskListHit;
 use crate::window_command::WindowCommand;
+
+/// Wheel input owns selection until the pointer moves at least four logical pixels.
+#[derive(Default)]
+pub struct HoverSelection {
+    previous: Option<(i32, i32)>,
+    wheel_anchor: Option<(i32, i32)>,
+}
+
+impl HoverSelection {
+    pub fn reset(&mut self, position: Option<(i32, i32)>) {
+        self.previous = position;
+        self.wheel_anchor = None;
+    }
+
+    pub fn after_wheel(&mut self, position: (i32, i32)) {
+        self.previous = Some(position);
+        self.wheel_anchor = Some(position);
+    }
+
+    /// Tiny movements after scrolling must not retarget the row now under the pointer.
+    #[must_use]
+    pub fn pointer_moved(&mut self, position: (i32, i32), window_dpi: u32) -> bool {
+        let moved = self.previous.is_some_and(|previous| previous != position);
+        self.previous = Some(position);
+        if let Some(anchor) = self.wheel_anchor {
+            let dx = f64::from(position.0) - f64::from(anchor.0);
+            let dy = f64::from(position.1) - f64::from(anchor.1);
+            if dx.hypot(dy) < 4.0 * f64::from(layout_scale(window_dpi)) {
+                return false;
+            }
+            self.wheel_anchor = None;
+        }
+        moved
+    }
+}
 
 /// Targets are window handles, so a press stays bound to the window it started on even if the
 /// selection moves under the pointer.
@@ -95,6 +131,36 @@ pub fn close_target_for_hit(switcher: &Switcher, hit: Option<TaskListHit>) -> Op
 mod tests {
     use super::*;
     use crate::switcher::SwitchTask;
+
+    #[test]
+    fn wheel_blocks_stationary_and_jittering_hover_until_deliberate_motion() {
+        for dpi in [96, 120, 144, 192] {
+            let mut hover = HoverSelection::default();
+            hover.reset(Some((-500, 100)));
+            assert!(!hover.pointer_moved((-500, 100), dpi));
+            assert!(hover.pointer_moved((-499, 100), dpi));
+            hover.after_wheel((-500, 100));
+            for point in [(-500, 100), (-499, 100), (-500, 102), (-502, 101)] {
+                assert!(!hover.pointer_moved(point, dpi));
+            }
+            assert!(hover.pointer_moved((-480, 100), dpi));
+            assert!(hover.pointer_moved((-479, 100), dpi));
+            assert!(!hover.pointer_moved((-479, 100), dpi));
+        }
+    }
+
+    #[test]
+    fn every_wheel_event_reanchors_hover_including_partial_notches() {
+        let mut hover = HoverSelection::default();
+        hover.after_wheel((100, 100));
+        assert!(!hover.pointer_moved((102, 100), 96));
+        hover.after_wheel((102, 100));
+        assert!(!hover.pointer_moved((104, 100), 96));
+        assert!(hover.pointer_moved((106, 100), 96));
+        hover.after_wheel((106, 100));
+        hover.reset(Some((106, 100)));
+        assert!(hover.pointer_moved((107, 100), 96));
+    }
 
     #[test]
     fn close_hit_resolves_only_for_the_current_selected_window() {

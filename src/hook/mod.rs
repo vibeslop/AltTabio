@@ -37,7 +37,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
     KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_QUIT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::Error;
 
@@ -404,8 +405,12 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     }
 
     std::panic::catch_unwind(|| {
-        process_mouse_message(wparam, lparam);
-        call_next(code, wparam, lparam)
+        finish_callback_with(
+            process_mouse_message(wparam, lparam),
+            post_actions,
+            reset_context,
+            || call_next(code, wparam, lparam),
+        )
     })
     .unwrap_or_else(|_| call_next(code, wparam, lparam))
 }
@@ -476,15 +481,26 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
     Some(outcome)
 }
 
-// Mouse input is always forwarded. Only outside left-clicks need an overlay notification.
-fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) {
-    if wparam.0 != WM_LBUTTONDOWN as usize {
-        return;
-    }
+// The open overlay owns wheel input. Button input remains owned by Windows.
+fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcome> {
     // SAFETY: the hook passes a live MSLLHOOKSTRUCT for the callback duration.
-    let Some(data) = (unsafe { (lparam.0 as *const MSLLHOOKSTRUCT).as_ref() }) else {
-        return;
-    };
+    let data = unsafe { (lparam.0 as *const MSLLHOOKSTRUCT).as_ref() }?;
+    if is_own_replayed_input(data.dwExtraInfo) {
+        return None;
+    }
+    if wparam.0 == WM_MOUSEWHEEL as usize {
+        return process_with_context(|context| {
+            let flags = context.sync_interception();
+            context
+                .state
+                .set_overlay_active(flags & OVERLAY_ACTIVE != 0);
+            let delta = crate::win32::high_word(data.mouseData as usize).cast_signed();
+            context.state.process_overlay_wheel(i32::from(delta))
+        });
+    }
+    if wparam.0 != WM_LBUTTONDOWN as usize {
+        return None;
+    }
     let _posted = process_with_context(|context| {
         if context.sync_interception() & OVERLAY_ACTIVE != 0 {
             // SAFETY: the hook owner retains the target HWND. Only scalar screen coordinates
@@ -503,6 +519,7 @@ fn process_mouse_message(wparam: WPARAM, lparam: LPARAM) {
             }
         }
     });
+    None
 }
 
 fn process_with_context<T>(process: impl FnOnce(&mut HookContext) -> T) -> Option<T> {
@@ -591,6 +608,38 @@ fn test_context() -> HookContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_overlay_wheel_is_posted_once_without_forwarding_to_background() {
+        let context = test_context();
+        context.flags.set(OVERLAY_ACTIVE, true);
+        CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
+        let data = MSLLHOOKSTRUCT {
+            mouseData: 0xffe2_0000,
+            ..Default::default()
+        };
+        let outcome = process_mouse_message(
+            WPARAM(WM_MOUSEWHEEL as usize),
+            LPARAM((&raw const data) as isize),
+        );
+        let mut posts = 0;
+        let result = finish_callback_with(
+            outcome,
+            |outcome| {
+                posts += 1;
+                assert_eq!(
+                    outcome.actions().collect::<Vec<_>>(),
+                    [InputAction::OverlayWheel(-30)]
+                );
+                true
+            },
+            || panic!("successful wheel delivery reset the hook"),
+            || panic!("wheel reached the background application's hook chain"),
+        );
+        assert_eq!(result, LRESULT(1));
+        assert_eq!(posts, 1);
+        CONTEXT.with(|slot| *slot.borrow_mut() = None);
+    }
     use alttabio::input::Key;
     use replay::REPLAYED_INPUT_MARKER;
     use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_LSHIFT, VK_SHIFT};

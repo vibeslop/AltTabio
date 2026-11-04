@@ -2,7 +2,7 @@
 
 use crate::filter_feedback::list_height;
 use crate::overlay_layout::{LogicalRect, for_compact_list, layout_scale};
-use crate::switcher::Switcher;
+use crate::switcher::{Switcher, WheelBehavior};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskListHit {
@@ -41,6 +41,21 @@ pub fn pointer_in_list_pixels(
         bottom: client_pixels.1 as f32 / scale,
     }
     .contains(point_pixels.0 as f32 / scale, point_pixels.1 as f32 / scale)
+}
+
+/// The list scrolls; every other pointer location navigates the selected window.
+#[must_use]
+pub fn wheel_behavior_at_pixels(
+    client_pixels: (i32, i32),
+    point_pixels: (i32, i32),
+    window_dpi: u32,
+    compact_list: bool,
+) -> WheelBehavior {
+    if pointer_in_list_pixels(client_pixels, point_pixels, window_dpi, compact_list) {
+        WheelBehavior::ScrollList
+    } else {
+        WheelBehavior::SelectWindow
+    }
 }
 
 #[must_use]
@@ -130,6 +145,22 @@ mod tests {
                 let gap_y = ((layout.list_top() + layout.row_height + 0.5) * scale) as i32;
                 for point in [(0, 0), (20, gap_y), (divider - 1, 899), (20, 899)] {
                     assert!(pointer_in_list_pixels(client, point, dpi, compact));
+                    assert_eq!(
+                        wheel_behavior_at_pixels(client, point, dpi, compact),
+                        WheelBehavior::ScrollList
+                    );
+                }
+                for point in [(divider, 20), (1_199, 899)] {
+                    assert_eq!(
+                        wheel_behavior_at_pixels(client, point, dpi, compact),
+                        WheelBehavior::SelectWindow
+                    );
+                }
+                for point in [(-1, 20), (20, -1), (1_200, 20), (20, 900)] {
+                    assert_eq!(
+                        wheel_behavior_at_pixels(client, point, dpi, compact),
+                        WheelBehavior::SelectWindow
+                    );
                 }
                 for point in [(-1, 20), (20, -1), (divider, 20), (1_200, 20), (20, 900)] {
                     assert!(!pointer_in_list_pixels(client, point, dpi, compact));
