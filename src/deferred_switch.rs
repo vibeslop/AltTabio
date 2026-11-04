@@ -64,6 +64,7 @@ impl DeferredSwitch {
                     action,
                     InputAction::Switch(_)
                         | InputAction::CycleSelection(_)
+                        | InputAction::SearchNavigation { .. }
                         | InputAction::MouseWheel(_)
                         | InputAction::OverlayWheel(_)
                         | InputAction::Navigate(_)

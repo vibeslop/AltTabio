@@ -302,12 +302,203 @@ mod tests {
     }
 
     #[test]
+    fn queued_modified_navigation_uses_the_target_sessions_query() {
+        use crate::input::{Key, Modifiers};
+        for complete in [true, false] {
+            for more_wheel in [false, true] {
+                for (key, control, shift) in [
+                    (Key::LeftArrow, false, true),
+                    (Key::LeftArrow, true, false),
+                    (Key::Home, false, true),
+                    (Key::Home, true, false),
+                ] {
+                    assert_queued_query_navigation(
+                        complete,
+                        more_wheel,
+                        key,
+                        Modifiers {
+                            control,
+                            shift,
+                            ..Modifiers::default()
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn assert_queued_query_navigation(
+        complete: bool,
+        more_wheel: bool,
+        key: crate::input::Key,
+        modifiers: crate::input::Modifiers,
+    ) {
+        use crate::hook_flags::HookFlags;
+        use crate::input::{Key, KeyEvent, Modifiers};
+        use crate::switcher::{SwitchTask, SwitcherSession, SwitcherSessionSettings};
+        use std::sync::Arc;
+
+        let flags = Arc::new(HookFlags::new());
+        let tasks = [
+            SwitchTask::new(1, 10, "One", "one"),
+            SwitchTask::new(2, 20, "Two", "two"),
+            SwitchTask::new(3, 30, "Three", "three"),
+        ];
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        session.open(tasks.clone(), None);
+        for character in "One".chars() {
+            let _edit = session.handle_input(InputAction::AppendSearchCharacter(character));
+        }
+        flags.sync_overlay(true, true, true);
+        let mut hook = HookState::default();
+        hook.set_overlay_active(true);
+        let settings = HookSettings {
+            search_active: true,
+            filter_visible: true,
+            ..ENABLED
+        };
+        let mut queue = Vec::new();
+        if complete {
+            for event in [
+                KeyEvent::pressed(Key::Enter, Modifiers::default()),
+                KeyEvent::released(Key::Enter, Modifiers::default()),
+            ] {
+                post_query_outcome(&flags, hook.process_key(event, settings), &mut queue);
+            }
+        }
+        post_query_outcome(
+            &flags,
+            hook.process_mouse(MouseEvent::RightButtonPressed, settings),
+            &mut queue,
+        );
+        post_query_outcome(
+            &flags,
+            hook.process_mouse(MouseEvent::Wheel(-120), settings),
+            &mut queue,
+        );
+        if modifiers.shift {
+            post_query_outcome(
+                &flags,
+                hook.process_key(KeyEvent::pressed(Key::LeftShift, modifiers), settings),
+                &mut queue,
+            );
+        }
+        post_query_outcome(
+            &flags,
+            hook.process_key(KeyEvent::pressed(key, modifiers), settings),
+            &mut queue,
+        );
+        post_query_outcome(
+            &flags,
+            hook.process_key(KeyEvent::released(key, modifiers), settings),
+            &mut queue,
+        );
+        if modifiers.shift {
+            post_query_outcome(
+                &flags,
+                hook.process_key(
+                    KeyEvent::released(Key::LeftShift, Modifiers::default()),
+                    settings,
+                ),
+                &mut queue,
+            );
+        }
+        if more_wheel {
+            post_query_outcome(
+                &flags,
+                hook.process_mouse(MouseEvent::Wheel(-120), settings),
+                &mut queue,
+            );
+        }
+        let release = hook.process_mouse(MouseEvent::RightButtonReleased, settings);
+        assert!(release.suppress);
+        post_query_outcome(&flags, release, &mut queue);
+
+        // Every physical event above was posted against A's rendered query before any UI work.
+        let activations = apply_queued_query_actions(&flags, &mut session, &tasks, queue);
+        if complete {
+            assert_eq!(activations, [10, if more_wheel { 20 } else { 10 }]);
+            assert!(!session.is_visible());
+        } else {
+            assert!(
+                activations.is_empty(),
+                "query editing must keep the panel open even after more wheel input"
+            );
+            assert!(session.is_visible());
+            assert_eq!(session.switcher().filter(), "One");
+        }
+    }
+
+    fn post_query_outcome(
+        flags: &crate::hook_flags::HookFlags,
+        outcome: HookOutcome,
+        queue: &mut Vec<(usize, isize)>,
+    ) {
+        use crate::hook_delivery::{Delivery, deliver};
+        use crate::hook_flags::{OVERLAY_FLAGS, encode_action};
+        let generation = flags.load() & !OVERLAY_FLAGS;
+        assert_eq!(
+            deliver(flags, generation, true, outcome, |action| {
+                queue.push(encode_action(action, generation));
+                true
+            }),
+            Delivery::Posted
+        );
+    }
+
+    fn apply_queued_query_actions(
+        flags: &std::sync::Arc<crate::hook_flags::HookFlags>,
+        session: &mut crate::switcher::SwitcherSession,
+        tasks: &[crate::switcher::SwitchTask],
+        queue: Vec<(usize, isize)>,
+    ) -> Vec<isize> {
+        use crate::hook_flags::{HookActionGuard, decode_action};
+        use crate::switcher::{SwitcherEffect, WheelBehavior};
+        use std::sync::Arc;
+        let mut activations = Vec::new();
+        for (origin, payload) in queue {
+            let Some(action) = decode_action(origin, payload) else {
+                panic!("queued action must decode");
+            };
+            let Some(_applying) = HookActionGuard::new(Arc::clone(flags), origin, action) else {
+                continue;
+            };
+            let effect = match action {
+                InputAction::MouseWheel(steps) if session.is_visible() => {
+                    session.handle_gesture_wheel(WheelBehavior::SelectWindow, steps * -120, 3)
+                }
+                InputAction::OverlayWheel(delta) if session.is_visible() => {
+                    session.handle_mouse_wheel(WheelBehavior::SelectWindow, delta, 3)
+                }
+                _ => session.handle_input(action),
+            };
+            match effect {
+                SwitcherEffect::Open { selection_delta } => {
+                    session.open(tasks.iter().cloned(), selection_delta);
+                    flags.sync_overlay(true, true, false);
+                }
+                SwitcherEffect::Activate(target) => {
+                    activations.push(target);
+                    flags.complete_overlay();
+                }
+                SwitcherEffect::Redraw => {
+                    flags.sync_overlay(session.is_visible(), true, session.filter_visible());
+                }
+                SwitcherEffect::None => {}
+                effect => panic!("unexpected queued effect: {effect:?}"),
+            }
+        }
+        activations
+    }
+
+    #[test]
     fn mouse_panel_owns_navigation_before_shell_focus_transfers() {
         use crate::deferred_switch::{DeferredSwitch, DeferredSwitchPoll};
         use crate::input::{Key, KeyEvent, Modifiers};
-        use crate::switcher::{
-            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
-        };
+        use crate::switcher::SwitcherEffect;
         use std::time::Duration;
         for typed_search in [false, true] {
             for (key, shift, navigation, selected) in [
@@ -329,19 +520,7 @@ mod tests {
                 let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
                 let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
                 hook.set_overlay_active(true);
-                let mut session = SwitcherSession::new(SwitcherSessionSettings {
-                    typed_search,
-                    release_alt_switches: true,
-                });
-                let _opening = session.handle_input(InputAction::MouseWheel(1));
-                session.open(
-                    [
-                        SwitchTask::new(1, 10, "One", "one"),
-                        SwitchTask::new(2, 20, "Two", "two"),
-                        SwitchTask::new(3, 30, "Three", "three"),
-                    ],
-                    Some(1),
-                );
+                let mut session = mouse_preview_session(typed_search);
                 let mut deferred = DeferredSwitch::new(InputAction::MouseWheel(1));
                 let _previewed = deferred.take_preview_actions();
                 let modifiers = Modifiers {
@@ -354,6 +533,24 @@ mod tests {
                 }
                 let press = hook.process_key(KeyEvent::pressed(key, modifiers), settings);
                 assert!(press.suppress, "pending mouse panel must own {key:?}");
+                let navigation = if typed_search
+                    && matches!(key, Key::LeftArrow | Key::RightArrow | Key::Home | Key::End)
+                {
+                    let Some(command) = crate::text_edit::TextCommand::for_key(
+                        u32::from(key.virtual_key()),
+                        false,
+                        shift,
+                        false,
+                    ) else {
+                        panic!("navigation command must exist");
+                    };
+                    InputAction::SearchNavigation {
+                        command,
+                        modified: shift,
+                    }
+                } else {
+                    navigation
+                };
                 assert_eq!(press.actions().next(), Some(navigation));
                 for action in press.actions() {
                     assert!(deferred.push(action));
@@ -394,6 +591,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn mouse_preview_session(typed_search: bool) -> crate::switcher::SwitcherSession {
+        use crate::switcher::{SwitchTask, SwitcherSession, SwitcherSessionSettings};
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search,
+            release_alt_switches: true,
+        });
+        let _opening = session.handle_input(InputAction::MouseWheel(1));
+        session.open(
+            [
+                SwitchTask::new(1, 10, "One", "one"),
+                SwitchTask::new(2, 20, "Two", "two"),
+                SwitchTask::new(3, 30, "Three", "three"),
+            ],
+            Some(1),
+        );
+        session
     }
 
     #[test]

@@ -42,6 +42,7 @@ const ACTION_EDIT_SEARCH: usize = 17;
 const ACTION_NUMBER_KEY: usize = 18;
 const ACTION_OVERLAY_WHEEL: usize = 19;
 const ACTION_CYCLE_SELECTION: usize = 20;
+const ACTION_SEARCH_NAVIGATION: usize = 21;
 const ACTION_CODE_MASK: usize = 0xFF;
 // Keep the epoch within 32 bits so an epoch and opening count fit one atomic word.
 const ACTION_EPOCH_MASK: usize = (usize::MAX >> 8) & u32::MAX as usize;
@@ -89,6 +90,10 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
         ),
         InputAction::BackspaceSearch => (ACTION_BACKSPACE_SEARCH, 0),
         InputAction::EditSearch(command) => (ACTION_EDIT_SEARCH, isize::from(command as u8)),
+        InputAction::SearchNavigation { command, modified } => (
+            ACTION_SEARCH_NAVIGATION,
+            isize::from(command as u8) | (isize::from(modified) << 8),
+        ),
     };
     (action_wparam(code, generation), value)
 }
@@ -118,6 +123,18 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
             .ok()
             .and_then(crate::text_edit::TextCommand::from_code)
             .map(InputAction::EditSearch),
+        ACTION_SEARCH_NAVIGATION => {
+            let value = u16::try_from(lparam).ok()?;
+            if value & !0x01FF != 0 {
+                return None;
+            }
+            Some(InputAction::SearchNavigation {
+                command: crate::text_edit::TextCommand::from_code(
+                    u8::try_from(value & 0xFF).ok()?,
+                )?,
+                modified: value & 0x0100 != 0,
+            })
+        }
         ACTION_NAVIGATE => i32::try_from(lparam).ok().map(InputAction::Navigate),
         ACTION_ACTIVATE_SELECTED => Some(InputAction::ActivateSelected),
         ACTION_SELECT_FIRST => Some(InputAction::SelectFirst),
@@ -611,6 +628,7 @@ mod tests {
         // The searched session completes before the queued fresh session reaches the UI.
         flags.complete_overlay();
         let capture = flags.load();
+        assert_eq!(capture & FILTER_VISIBLE, 0);
         hook.set_overlay_active(capture & OVERLAY_ACTIVE != 0);
         let left = hook.process_key(
             KeyEvent::pressed(Key::LeftArrow, Modifiers::default()),
@@ -620,7 +638,34 @@ mod tests {
                 ..settings
             },
         );
-        assert_eq!(left.actions().next(), Some(InputAction::Navigate(-1)));
+        let action = InputAction::SearchNavigation {
+            command: crate::text_edit::TextCommand::Left,
+            modified: false,
+        };
+        assert_eq!(left.actions().next(), Some(action));
+        let mut session =
+            crate::switcher::SwitcherSession::new(crate::switcher::SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+        session.open(
+            [
+                crate::switcher::SwitchTask::new(1, 10, "One", "one"),
+                crate::switcher::SwitchTask::new(2, 20, "Two", "two"),
+            ],
+            Some(1),
+        );
+        assert_eq!(
+            session.handle_input(action),
+            crate::switcher::SwitcherEffect::Redraw
+        );
+        assert_eq!(
+            session
+                .switcher()
+                .selected_task()
+                .map(|task| task.window_handle),
+            Some(10)
+        );
     }
 
     #[test]
@@ -1134,6 +1179,14 @@ mod tests {
             InputAction::Switch(-1),
             InputAction::CycleSelection(-1),
             InputAction::CycleSelection(1),
+            InputAction::SearchNavigation {
+                command: crate::text_edit::TextCommand::SelectLeft,
+                modified: true,
+            },
+            InputAction::SearchNavigation {
+                command: crate::text_edit::TextCommand::Left,
+                modified: false,
+            },
             InputAction::MouseWheel(-1),
             InputAction::MouseWheelReleased,
             InputAction::RightButtonPressed,

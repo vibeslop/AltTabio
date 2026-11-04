@@ -92,6 +92,11 @@ pub enum InputAction {
     AppendSearchCharacter(char),
     BackspaceSearch,
     EditSearch(TextCommand),
+    /// The UI resolves navigation against the query at this action's place in the queue.
+    SearchNavigation {
+        command: TextCommand,
+        modified: bool,
+    },
 }
 
 impl InputAction {
@@ -857,16 +862,22 @@ impl HookState {
             event.modifiers.shift,
             self.owned_key_is_down(Key::RightAlt),
         )?;
-        // An empty query has no caret or selection to move. Keep modified navigation on the
-        // switcher route too, including its paired release and final Alt-release activation.
-        if !settings.filter_visible
-            && self.overlay_controls_active()
+        // Rendered query presence can belong to an older queued session. Let the UI decide
+        // navigation versus query editing, including whether release activation stays owned.
+        if self.overlay_controls_active()
             && matches!(
                 event.key,
                 Key::LeftArrow | Key::RightArrow | Key::Home | Key::End
             )
         {
-            return None;
+            self.suppress_owned_key_release(event.key);
+            return Some(HookOutcome::one(
+                true,
+                InputAction::SearchNavigation {
+                    command,
+                    modified: event.modifiers.control || event.modifiers.shift,
+                },
+            ));
         }
         // Plain navigation also moves through windows when the query is empty. Preserve the
         // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
@@ -2690,6 +2701,9 @@ mod tests {
 
     #[test]
     fn modified_navigation_edits_a_nonempty_query_and_pins_the_panel() {
+        use crate::switcher::{
+            SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+        };
         let settings = HookSettings {
             search_active: true,
             filter_visible: true,
@@ -2714,25 +2728,38 @@ mod tests {
                         .unwrap_or_else(|| {
                             panic!("navigation key has no editing command: {key:?}")
                         });
+                let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                    typed_search: true,
+                    release_alt_switches: true,
+                });
+                session.open([SwitchTask::new(1, 10, "One", "one")], None);
+                for character in "One".chars() {
+                    let _edit = session.handle_input(InputAction::AppendSearchCharacter(character));
+                }
+                let action = InputAction::SearchNavigation {
+                    command,
+                    modified: true,
+                };
                 assert_eq!(
                     state.process_key(KeyEvent::pressed(key, modifiers), settings),
-                    HookOutcome::one(true, InputAction::EditSearch(command))
+                    HookOutcome::one(true, action)
                 );
+                assert_eq!(session.handle_input(action), SwitcherEffect::Redraw);
                 assert!(
                     state
                         .process_key(KeyEvent::released(key, modifiers), settings)
                         .suppress
                 );
-                assert!(
-                    state
-                        .process_key(
-                            KeyEvent::released(Key::LeftAlt, Modifiers::default()),
-                            settings
-                        )
-                        .actions()
-                        .next()
-                        .is_none()
+                let release = state.process_key(
+                    KeyEvent::released(Key::LeftAlt, Modifiers::default()),
+                    settings,
                 );
+                assert_eq!(release.actions().next(), Some(InputAction::AltReleased));
+                assert_eq!(
+                    session.handle_input(InputAction::AltReleased),
+                    SwitcherEffect::None
+                );
+                assert!(session.is_visible());
             }
         }
     }
@@ -3185,7 +3212,13 @@ mod tests {
             ),
             HookOutcome {
                 suppress: true,
-                actions: [Some(InputAction::Navigate(1)), None],
+                actions: [
+                    Some(InputAction::SearchNavigation {
+                        command: TextCommand::Right,
+                        modified: false
+                    }),
+                    None
+                ],
             }
         );
         assert!(
