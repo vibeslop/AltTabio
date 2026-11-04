@@ -274,6 +274,7 @@ fn run_hook_thread(
         // queue exists before another thread posts WM_QUIT.
         let _queue_ready = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
     }
+    let mouse_replay = mouse_replay::ReplayWorker::start()?;
 
     hook_context.hook_thread_id = thread_id;
     publish_recovery_flags(Some(Arc::clone(&hook_context.flags)));
@@ -338,7 +339,7 @@ fn run_hook_thread(
         if message.message == WM_REPORT_HOOK_ERRORS {
             continue;
         }
-        if handle_mouse_replay_with(message.message, mouse_replay::replay_right_click) {
+        if handle_mouse_replay_with(message.message, || mouse_replay.request()) {
             continue;
         }
         unsafe {
@@ -351,6 +352,7 @@ fn run_hook_thread(
     remove_hook(mouse, "mouse");
     remove_hook(keyboard, "keyboard");
     drop(recovery);
+    drop(mouse_replay);
     CONTEXT.with(|context| *context.borrow_mut() = None);
     publish_recovery_flags(None);
     loop_result
@@ -528,8 +530,8 @@ fn handle_mouse_replay_with(message: u32, replay_click: impl FnOnce() -> bool) -
     if message != WM_REPLAY_RIGHT_CLICK {
         return false;
     }
-    // SendInput must run after the physical mouse callback has returned. Replaying inside that
-    // callback can stall input until the hook timeout and deliver the original release as well.
+    // The message loop only schedules the worker. SendInput must leave the hook thread free to
+    // service callbacks, including when another hook forwards our injected events back to us.
     if !replay_click() {
         record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
     }
