@@ -83,48 +83,6 @@ fn tab_moves_from_the_selected_category_into_its_settings() -> Result<()> {
 }
 
 #[test]
-fn experimental_switch_stays_off_until_the_dialog_is_accepted() -> Result<()> {
-    let dialog = dialog()?;
-    let host = dialog.host()?;
-    host.state_mut()?.select_category(Category::Experimental)?;
-    let toggle = host
-        .state_mut()?
-        .controls
-        .checkbox(SettingOption::RmbWheelSwitching);
-    assert!(!is_checked(toggle));
-    let warning = Control::Warning(SettingOption::RmbWheelSwitching);
-    assert!(warning.text().contains("fail to open"));
-    assert_eq!(warning.category(), Some(Category::Experimental));
-    // SAFETY: the test owns this hidden native button and its parent viewport.
-    unsafe { SendMessageW(toggle, BM_CLICK, None, None) };
-    assert!(is_checked(toggle));
-    assert!(
-        !host
-            .state_mut()?
-            .settings
-            .experimental
-            .right_button_wheel_switching
-    );
-    host.state_mut()?.cancel();
-    assert!(
-        !host
-            .state_mut()?
-            .settings
-            .experimental
-            .right_button_wheel_switching
-    );
-    host.state_mut()?.accept();
-    assert!(
-        host.state_mut()?
-            .settings
-            .experimental
-            .right_button_wheel_switching
-    );
-    dialog.destroy()?;
-    Ok(())
-}
-
-#[test]
 fn category_navigation_preserves_unsaved_edits() -> Result<()> {
     let dialog = dialog()?;
     let window = dialog.window();
@@ -370,6 +328,61 @@ fn render_control(window: HWND) -> Result<RenderTarget> {
         );
     }
     Ok(image)
+}
+
+#[test]
+fn rmb_option_is_reachable_in_experimental_and_stays_off_until_accepted() -> Result<()> {
+    let dialog = dialog()?;
+    let window = dialog.window();
+    let host = dialog.host()?;
+    let navigation = host
+        .state_mut()?
+        .controls
+        .get(Control::Navigation(Category::Experimental));
+    assert!(
+        !navigation.is_invalid(),
+        "the RMB option must expose its page"
+    );
+    // SAFETY: click this hidden dialog's own sidebar button, then consume its navigation request.
+    unsafe { SendMessageW(navigation, BM_CLICK, None, None) };
+    pump(window);
+    assert_eq!(host.state_mut()?.pages.category, Category::Experimental);
+    let toggle = host
+        .state_mut()?
+        .controls
+        .checkbox(SettingOption::RmbWheelSwitching);
+    assert!(!toggle.is_invalid());
+    assert!(!is_checked(toggle));
+    let warning = Control::Warning(SettingOption::RmbWheelSwitching);
+    assert!(warning.text().contains("fail to open"));
+    assert_eq!(warning.category(), Some(Category::Experimental));
+    // SAFETY: the test owns this hidden native button and its parent viewport.
+    unsafe { SendMessageW(toggle, BM_CLICK, None, None) };
+    assert!(is_checked(toggle));
+    assert!(
+        !host
+            .state_mut()?
+            .settings
+            .experimental
+            .right_button_wheel_switching
+    );
+    host.state_mut()?.cancel();
+    assert!(
+        !host
+            .state_mut()?
+            .settings
+            .experimental
+            .right_button_wheel_switching
+    );
+    host.state_mut()?.accept();
+    assert!(
+        host.state_mut()?
+            .settings
+            .experimental
+            .right_button_wheel_switching
+    );
+    dialog.destroy()?;
+    Ok(())
 }
 
 #[test]

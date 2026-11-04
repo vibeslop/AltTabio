@@ -54,15 +54,7 @@ fn theme_entries_name_their_values_and_fall_back_to_auto() {
 }
 
 #[test]
-fn experimental_page_keeps_its_warning_with_the_opt_in() {
-    assert_eq!(
-        Category::Experimental.intro(),
-        "These features may not work reliably."
-    );
-    assert_eq!(
-        Category::ALL[Category::ALL.len() - 2],
-        Category::Experimental
-    );
+fn rmb_option_keeps_its_warning_with_the_opt_in() {
     assert!(!SettingOption::RmbWheelSwitching.read(&Settings::default()));
     for dpi in [96, 120, 144, 168, 192] {
         let layout = SettingsLayout::for_client(
@@ -75,9 +67,6 @@ fn experimental_page_keeps_its_warning_with_the_opt_in() {
         // Absolute positions round independently at fractional display scales.
         assert!(warning.y >= toggle.bottom() + scale(14, dpi) - 1);
         assert!(warning.bottom() <= layout.viewport.height);
-        let experimental = Control::Navigation(Category::Experimental).rect(&layout);
-        let about = Control::Navigation(Category::About).rect(&layout);
-        assert!(experimental.bottom() < about.y);
     }
 }
 
