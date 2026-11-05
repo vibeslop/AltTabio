@@ -33,7 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNORMAL, SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenu, WM_CLOSE,
 };
-use windows::core::{BSTR, Interface, PCWSTR, PWSTR, w};
+use windows::core::{BSTR, Interface, PCWSTR};
 
 pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let created = unsafe {

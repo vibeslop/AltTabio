@@ -149,9 +149,9 @@ fn validate_autostart_target_with(
     mut is_replaceable: impl FnMut(&Path) -> Result<bool, String>,
 ) -> Result<(), String> {
     if is_replaceable(executable)? {
-        Err(format!(
-            "Autostart was not enabled because non-elevated processes can replace {}. Move AltTabio to an administrator-writable-only folder first.",
-            executable.display()
+        Err(alttabio::localization::message(
+            "Autostart was not enabled because non-elevated processes can replace {path}. Move AltTabio to an administrator-writable-only folder first.",
+            &[("path", &executable.display().to_string())],
         ))
     } else {
         Ok(())
@@ -260,9 +260,9 @@ fn path_component_is_replaceable(path: &Path, token: HANDLE) -> Result<bool, Str
         )
     })?;
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-        return Err(format!(
-            "The installation path contains a reparse point: {}. Use a protected folder without links or mounted folders.",
-            path.display()
+        return Err(alttabio::localization::message(
+            "The installation path contains a reparse point: {path}. Use a protected folder without links or mounted folders.",
+            &[("path", &path.display().to_string())],
         ));
     }
     if token_has_access(path, token, WRITE_DAC.0)? || token_has_access(path, token, WRITE_OWNER.0)?
@@ -815,5 +815,24 @@ mod tests {
         let result = validate_autostart_target_with(executable, |_| Ok(true));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn autostart_safety_guidance_is_localized_and_keeps_the_path() {
+        use alttabio::localization::{Language, PreviewLanguage};
+
+        let executable = Path::new(r"C:\FixtureApps\{path}\中文\AltTabio.exe");
+        let preview = PreviewLanguage::new(Language::English);
+        for (language, guidance) in [
+            (Language::Russian, "Сначала переместите AltTabio"),
+            (Language::SimplifiedChinese, "请先将 AltTabio 移至"),
+        ] {
+            preview.set(language);
+            let Err(report) = validate_autostart_target_with(executable, |_| Ok(true)) else {
+                panic!("an unsafe autostart target must be rejected");
+            };
+            assert!(report.contains(guidance));
+            assert!(report.contains(&executable.display().to_string()));
+        }
     }
 }

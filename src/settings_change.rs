@@ -1,6 +1,7 @@
 //! Applying a confirmed Settings dialog to the subsystems that read it.
 
 use crate::input::HookSettings;
+use crate::localization::message;
 use crate::settings::Settings;
 use crate::switcher::SwitcherSessionSettings;
 
@@ -68,12 +69,15 @@ impl SettingsChange<'_> {
         if self.autostart_changed() {
             effects.set_autostart(self.next.general.autostart)?;
         }
-        if let Err(mut message) = effects.save(self.next) {
+        if let Err(mut report) = effects.save(self.next) {
             if let Err(rollback_error) = self.restore_autostart(effects) {
-                message.push_str("\n\nAutostart rollback also failed: ");
-                message.push_str(&rollback_error);
+                report.push_str("\n\n");
+                report.push_str(&message(
+                    "Autostart rollback also failed: {error}",
+                    &[("error", &rollback_error)],
+                ));
             }
-            return Err(message);
+            return Err(report);
         }
 
         let previous_hooks = hook_settings(self.previous);
@@ -87,20 +91,32 @@ impl SettingsChange<'_> {
         let hooks_rollback = effects.restart_hooks(previous_hooks);
         let settings_rollback = effects.save(self.previous);
         let autostart_rollback = self.restore_autostart(effects);
-        let mut message = format!("The new input-hook settings could not be activated. {error}");
+        let mut report = message(
+            "The new input-hook settings could not be activated. {error}",
+            &[("error", &error)],
+        );
         if let Err(rollback_error) = hooks_rollback {
-            message.push_str("\n\nThe previous input hooks could not be restored. ");
-            message.push_str(&rollback_error);
+            report.push_str("\n\n");
+            report.push_str(&message(
+                "The previous input hooks could not be restored. {error}",
+                &[("error", &rollback_error)],
+            ));
         }
         if let Err(rollback_error) = settings_rollback {
-            message.push_str("\n\nSettings rollback also failed: ");
-            message.push_str(&rollback_error);
+            report.push_str("\n\n");
+            report.push_str(&message(
+                "Settings rollback also failed: {error}",
+                &[("error", &rollback_error)],
+            ));
         }
         if let Err(rollback_error) = autostart_rollback {
-            message.push_str("\n\nAutostart rollback also failed: ");
-            message.push_str(&rollback_error);
+            report.push_str("\n\n");
+            report.push_str(&message(
+                "Autostart rollback also failed: {error}",
+                &[("error", &rollback_error)],
+            ));
         }
-        Err(message)
+        Err(report)
     }
 
     /// A disabled setting with this installation's leftover task still needs it removed.
@@ -520,6 +536,49 @@ mod tests {
                     .to_owned()
             )
         );
+    }
+
+    #[test]
+    fn rollback_explanations_are_localized_and_keep_diagnostics() {
+        use crate::localization::{Language, PreviewLanguage};
+
+        let (previous, next) = full_change();
+        let preview = PreviewLanguage::new(Language::English);
+        for (language, heading) in [
+            (
+                Language::Russian,
+                "Не удалось применить новые настройки перехвата ввода.",
+            ),
+            (Language::SimplifiedChinese, "无法启用新的输入钩子设置。"),
+        ] {
+            preview.set(language);
+            let (result, _) = apply(
+                &previous,
+                &next,
+                AUTOSTART_ON,
+                true,
+                &[
+                    Effect::Hooks(Version::Next),
+                    Effect::Hooks(Version::Previous),
+                    Effect::Save(Version::Previous),
+                    Effect::Autostart(true),
+                ],
+            );
+            let Err(report) = result else {
+                panic!("the injected hook failure must be reported");
+            };
+            assert!(report.starts_with(heading));
+            for diagnostic in [
+                "Hooks(Next) failed",
+                "Hooks(Previous) failed",
+                "Save(Previous) failed",
+                "Autostart(true) failed",
+            ] {
+                assert!(report.contains(diagnostic));
+            }
+            assert!(!report.contains("could not be restored"));
+            assert!(!report.contains("rollback also failed"));
+        }
     }
 
     #[test]
