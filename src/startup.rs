@@ -24,13 +24,15 @@ use windows::Win32::Storage::FileSystem::{
     FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::System::TaskScheduler::{ITaskFolder, ITaskService, TaskScheduler};
+use windows::Win32::System::TaskScheduler::{
+    IExecAction, ITaskDefinition, ITaskFolder, ITaskService, TASK_ACTION_EXEC, TaskScheduler,
+};
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
-use windows::core::{BOOL, BSTR, HRESULT, PCWSTR};
+use windows::core::{BOOL, BSTR, HRESULT, Interface, PCWSTR};
 
 mod migration;
 pub(crate) use migration::repair_legacy_task_timeout;
@@ -82,19 +84,31 @@ fn task_status(
         Err(error) if task_is_missing(&error) => {
             return Ok(AutostartState {
                 enabled: false,
-                task_exists: false,
+                owned_task_exists: false,
             });
         }
         Err(error) => return Err(format!("Autostart status query failed: {error}")),
     };
-    let xml = unsafe {
-        // SAFETY: the task interface is live on its COM thread; the result owns its string.
-        task.Xml()
+    let definition = unsafe {
+        // SAFETY: the registered task is live on this COM thread; the result owns its reference.
+        task.Definition()
     }
-    .map_err(|error| format!("Autostart task XML could not be read: {error}"))?;
+    .map_err(|error| format!("Autostart task definition could not be read: {error}"))?;
+    let owned_task_exists = task_targets_executable(&definition, executable)
+        .map_err(|error| format!("Autostart task ownership could not be read: {error}"))?;
+    let enabled = if owned_task_exists {
+        unsafe {
+            // SAFETY: task is a live COM interface and Enabled returns an owned scalar value.
+            task.Enabled()
+        }
+        .map_err(|error| format!("Autostart task enabled state could not be read: {error}"))?
+        .as_bool()
+    } else {
+        false
+    };
     Ok(AutostartState {
-        enabled: task_targets_executable(&xml.to_string(), executable)?,
-        task_exists: true,
+        enabled,
+        owned_task_exists,
     })
 }
 
@@ -106,7 +120,7 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
         let task_file = AutostartTaskFile::create(&executable)?;
         run_owned(create_arguments(&task_file.path))?
     } else {
-        if !status()?.task_exists {
+        if !status()?.owned_task_exists {
             return Ok(());
         }
         run(&["/Delete", "/TN", "AltTabio", "/F"])?
@@ -364,44 +378,43 @@ impl Drop for OwnedSecurityDescriptor {
     }
 }
 
-fn task_targets_executable(xml: &str, executable: &Path) -> Result<bool, String> {
-    let settings = element_contents(xml, "Settings")
-        .ok_or_else(|| "Autostart task XML has no Settings element".to_owned())?;
-    let enabled = element_contents(settings, "Enabled").map_or(Ok(true), |value| {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" => Ok(true),
-            "false" | "0" => Ok(false),
-            value => Err(format!(
-                "Autostart task XML has an invalid Enabled value: {value}"
-            )),
+fn task_targets_executable(
+    definition: &ITaskDefinition,
+    executable: &Path,
+) -> windows::core::Result<bool> {
+    unsafe {
+        // SAFETY: the definition and its owned action interfaces stay on this initialized COM
+        // thread. Each initialized output owns its returned value, and no pointer is retained.
+        let actions = definition.Actions()?;
+        let mut count = 0;
+        actions.Count(&raw mut count)?;
+        if count != 1 {
+            return Ok(false);
         }
-    })?;
-    if !enabled {
-        return Ok(false);
+        let action = actions.get_Item(1)?;
+        let mut kind = TASK_ACTION_EXEC;
+        action.Type(&raw mut kind)?;
+        if kind != TASK_ACTION_EXEC {
+            return Ok(false);
+        }
+        let executable_action: IExecAction = action.cast()?;
+        let mut command = BSTR::new();
+        executable_action.Path(&raw mut command)?;
+        let command = command.to_string();
+        Ok(paths_match(
+            Path::new(command.trim().trim_matches('"')),
+            executable,
+        ))
     }
-
-    let action = element_contents(xml, "Exec")
-        .and_then(|action| element_contents(action, "Command"))
-        .ok_or_else(|| "Autostart task XML has no executable command".to_owned())?;
-    let action = decode_xml_text(action.trim().trim_matches('"'));
-    Ok(paths_match(&PathBuf::from(action), executable))
 }
 
+#[cfg(test)]
 fn element_contents<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
     let opening = format!("<{name}>");
     let closing = format!("</{name}>");
     let start = xml.find(&opening)? + opening.len();
     let end = xml.get(start..)?.find(&closing)? + start;
     xml.get(start..end)
-}
-
-fn decode_xml_text(value: &str) -> String {
-    value
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 fn paths_match(left: &Path, right: &Path) -> bool {
@@ -568,7 +581,13 @@ mod tests {
     {
         let executable = Path::new(r"C:\Apps & Tools\中文\AltTabio.exe");
         let xml = autostart_task_xml(executable)?;
-        assert!(task_targets_executable(&xml, executable)?);
+        let _apartment =
+            crate::win32::ComApartment::initialize().map_err(|error| error.to_string())?;
+        let service = connect_scheduler().map_err(|error| error.to_string())?;
+        let definition = unregistered_task(&service, &xml)?;
+        assert!(
+            task_targets_executable(&definition, executable).map_err(|error| error.to_string())?
+        );
         assert_eq!(element_contents(&xml, "ExecutionTimeLimit"), Some("PT0S"));
         assert_eq!(element_contents(&xml, "RunLevel"), Some("HighestAvailable"));
         assert_eq!(
@@ -626,7 +645,7 @@ mod tests {
             task_status(&folder, &name, &executable)?,
             AutostartState {
                 enabled: false,
-                task_exists: false
+                owned_task_exists: false
             },
         );
         let mut arguments = create_arguments(&task_file.path);
@@ -640,14 +659,14 @@ mod tests {
             task_status(&folder, &name, &executable)?,
             AutostartState {
                 enabled: true,
-                task_exists: true
+                owned_task_exists: true
             },
         );
         assert_eq!(
             task_status(&folder, &name, Path::new(r"C:\Other\AltTabio.exe"))?,
             AutostartState {
                 enabled: false,
-                task_exists: true
+                owned_task_exists: false
             },
         );
         let output = run(&["/Query", "/TN", &task_name, "/XML"])?;
@@ -661,7 +680,7 @@ mod tests {
             element_contents(settings, "ExecutionTimeLimit"),
             Some("PT0S")
         );
-        assert!(task_targets_executable(&xml, &executable)?);
+        assert!(task_status(&folder, &name, &executable)?.enabled);
         assert_eq!(element_contents(&xml, "RunLevel"), Some("HighestAvailable"));
         assert_eq!(
             element_contents(&xml, "LogonType"),
@@ -681,7 +700,7 @@ mod tests {
             task_status(&folder, &name, &executable)?,
             AutostartState {
                 enabled: false,
-                task_exists: true
+                owned_task_exists: true
             },
         );
         drop(task_guard);
@@ -689,7 +708,7 @@ mod tests {
             task_status(&folder, &name, &executable)?,
             AutostartState {
                 enabled: false,
-                task_exists: false
+                owned_task_exists: false
             },
         );
         Ok(())
@@ -710,31 +729,83 @@ mod tests {
         }
     }
 
-    #[test]
-    fn task_status_requires_an_enabled_task_targeting_the_current_executable() {
-        let executable = Path::new(r"C:\Apps & Tools\AltTabio.exe");
-        let matching = r"<Task><Settings></Settings><Actions><Exec><Command>C:\Apps &amp; Tools\AltTabio.exe</Command></Exec></Actions></Task>";
-        let disabled = r"<Task><Settings><Enabled>false</Enabled></Settings><Actions><Exec><Command>C:\Apps &amp; Tools\AltTabio.exe</Command></Exec></Actions></Task>";
-        let stale = r"<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>C:\Old\AltTabio.exe</Command></Exec></Actions></Task>";
-
-        assert_eq!(task_targets_executable(matching, executable), Ok(true));
-        assert_eq!(task_targets_executable(disabled, executable), Ok(false));
-        assert_eq!(task_targets_executable(stale, executable), Ok(false));
+    fn unregistered_task(service: &ITaskService, xml: &str) -> Result<ITaskDefinition, String> {
+        let definition = unsafe {
+            // SAFETY: the test initialized COM and the owned service returns a new definition.
+            service.NewTask(0)
+        }
+        .map_err(|error| error.to_string())?;
+        unsafe {
+            // SAFETY: definition is live on this COM thread and synchronously copies XML. This
+            // creates an in-memory definition only; it never registers or runs a task.
+            definition.SetXmlText(&BSTR::from(xml))
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(definition)
     }
 
     #[test]
-    fn malformed_task_status_is_reported_instead_of_assumed_enabled() {
+    fn task_ownership_requires_the_current_executable_even_when_disabled() -> Result<(), String> {
+        let _apartment =
+            crate::win32::ComApartment::initialize().map_err(|error| error.to_string())?;
+        let service = connect_scheduler().map_err(|error| error.to_string())?;
+        let executable = Path::new(r"C:\Apps & Tools\中文\AltTabio.exe");
+        for enabled in [true, false] {
+            let xml = autostart_task_xml(executable)?.replace(
+                "<Settings>",
+                &format!("<Settings><Enabled>{enabled}</Enabled>"),
+            );
+            let definition = unregistered_task(&service, &xml)?;
+            assert!(
+                task_targets_executable(&definition, executable)
+                    .map_err(|error| error.to_string())?
+            );
+            assert!(
+                !task_targets_executable(&definition, Path::new(r"C:\Other\AltTabio.exe"))
+                    .map_err(|error| error.to_string())?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_non_executable_and_multi_action_tasks_are_not_owned() -> Result<(), String> {
+        use windows::Win32::System::TaskScheduler::TASK_ACTION_COM_HANDLER;
+        let _apartment =
+            crate::win32::ComApartment::initialize().map_err(|error| error.to_string())?;
+        let service = connect_scheduler().map_err(|error| error.to_string())?;
+        let executable = Path::new(r"C:\Apps\AltTabio.exe");
+        let definition = unsafe {
+            // SAFETY: this test initialized COM and creates only an unregistered definition.
+            service.NewTask(0)
+        }
+        .map_err(|error| error.to_string())?;
         assert!(
-            task_targets_executable("<Task><Settings></Settings></Task>", Path::new("app.exe"))
-                .is_err()
+            !task_targets_executable(&definition, executable).map_err(|error| error.to_string())?
         );
+        unsafe {
+            // SAFETY: these interfaces remain live on this COM thread. Creating an action only
+            // adds it to the in-memory definition; no COM handler is activated.
+            definition
+                .Actions()
+                .and_then(|actions| actions.Create(TASK_ACTION_COM_HANDLER))
+        }
+        .map_err(|error| error.to_string())?;
         assert!(
-            task_targets_executable(
-                "<Task><Settings><Enabled>maybe</Enabled></Settings></Task>",
-                Path::new("app.exe")
-            )
-            .is_err()
+            !task_targets_executable(&definition, executable).map_err(|error| error.to_string())?
         );
+        let definition = unregistered_task(&service, &autostart_task_xml(executable)?)?;
+        unsafe {
+            // SAFETY: this modifies only the unregistered definition owned by this test.
+            definition
+                .Actions()
+                .and_then(|actions| actions.Create(TASK_ACTION_EXEC))
+        }
+        .map_err(|error| error.to_string())?;
+        assert!(
+            !task_targets_executable(&definition, executable).map_err(|error| error.to_string())?
+        );
+        Ok(())
     }
 
     #[test]

@@ -68,7 +68,7 @@ impl AppHost {
                 );
                 AutostartState {
                     enabled: dialog_settings.general.autostart,
-                    task_exists: false,
+                    owned_task_exists: false,
                 }
             }
         };

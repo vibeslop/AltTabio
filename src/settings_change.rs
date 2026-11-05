@@ -25,12 +25,13 @@ pub const fn switcher_session_settings(settings: &Settings) -> SwitcherSessionSe
     }
 }
 
-/// Autostart as the system reported it when the dialog opened. It can disagree with the stored
+/// Autostart for this installation as reported when the dialog opened. It can differ from the stored
 /// setting when the scheduled task was changed outside `AltTabio`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AutostartState {
     pub enabled: bool,
-    pub task_exists: bool,
+    /// A task with a single executable action targeting this installation exists, even if disabled.
+    pub owned_task_exists: bool,
 }
 
 /// The side effects of a settings change, injected so their order and rollback can be tested.
@@ -102,10 +103,10 @@ impl SettingsChange<'_> {
         Err(message)
     }
 
-    /// A disabled setting with a leftover task still needs the task removed.
+    /// A disabled setting with this installation's leftover task still needs it removed.
     const fn autostart_changed(&self) -> bool {
         self.next.general.autostart != self.autostart.enabled
-            || (!self.next.general.autostart && self.autostart.task_exists)
+            || (!self.next.general.autostart && self.autostart.owned_task_exists)
     }
 
     fn restore_autostart(&self, effects: &mut impl SettingsEffects) -> Result<(), String> {
@@ -190,7 +191,7 @@ mod tests {
 
     const AUTOSTART_ON: AutostartState = AutostartState {
         enabled: true,
-        task_exists: true,
+        owned_task_exists: true,
     };
 
     /// Turns autostart off and changes the hooks, so every step has something to apply.
@@ -272,7 +273,7 @@ mod tests {
 
     #[test]
     fn autostart_is_written_only_when_it_disagrees_with_the_system() {
-        for (requested, enabled, task_exists, written) in [
+        for (requested, enabled, owned_task_exists, written) in [
             (true, false, false, true),
             (true, false, true, true),
             (false, true, true, true),
@@ -285,7 +286,7 @@ mod tests {
             next.general.autostart = requested;
             let autostart = AutostartState {
                 enabled,
-                task_exists,
+                owned_task_exists,
             };
 
             let (result, applied) = apply(&previous, &next, autostart, true, &[]);
@@ -294,9 +295,23 @@ mod tests {
             assert_eq!(
                 applied.contains(&Effect::Autostart(requested)),
                 written,
-                "requested {requested}, enabled {enabled}, task exists {task_exists}"
+                "requested {requested}, enabled {enabled}, task exists {owned_task_exists}"
             );
         }
+    }
+
+    #[test]
+    fn saving_unrelated_settings_preserves_another_installations_task() {
+        let (previous, mut next) = appearance_change();
+        next.general.autostart = false;
+        let foreign_task = AutostartState {
+            enabled: false,
+            owned_task_exists: false,
+        };
+        assert_eq!(
+            apply(&previous, &next, foreign_task, true, &[]),
+            (Ok(()), vec![Effect::Save(Version::Next)])
+        );
     }
 
     #[test]
