@@ -8,7 +8,8 @@ mod view;
 
 use super::screen::{cursor_screen, frame_contains};
 use alttabio::close_button::CloseButtonVisualState;
-use alttabio::panel_layout::{CORNER_RADIUS, Layout, WindowState};
+use alttabio::panel_layout::{CORNER_RADIUS, Layout, WindowState, constrain_frame};
+use alttabio::preview_layout::Rect;
 use alttabio::theme::{ResolvedTheme, SwitcherTokens};
 use alttabio::window_command::WindowCommand;
 use draw::rgba;
@@ -18,7 +19,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSBackingStoreType, NSColor, NSEvent, NSGlassEffectView, NSGlassEffectViewStyle, NSImage,
-    NSPanel, NSPopUpMenuWindowLevel, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSPanel, NSPopUpMenuWindowLevel, NSScreen, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
     NSVisualEffectState, NSVisualEffectView, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
     NSWindowStyleMask,
 };
@@ -191,10 +192,19 @@ impl Overlay {
         }
     }
 
-    /// The largest panel the cursor's display takes.
+    fn layout_screen(&self) -> Option<Retained<NSScreen>> {
+        if self.panel.isVisible() {
+            self.panel.screen().or_else(|| cursor_screen(self.mtm))
+        } else {
+            cursor_screen(self.mtm)
+        }
+    }
+
+    /// The largest panel its display takes. A hidden panel opens on the cursor's display;
+    /// a visible panel stays on its own display while the cursor moves elsewhere.
     #[must_use]
     pub fn max_size(&self) -> (f64, f64) {
-        cursor_screen(self.mtm).map_or((1000.0, 700.0), |screen| {
+        self.layout_screen().map_or((1000.0, 700.0), |screen| {
             let area = screen.visibleFrame().size;
             ((area.width * 0.9).round(), (area.height * 0.8).round())
         })
@@ -204,13 +214,15 @@ impl Overlay {
     pub fn show(&self, size: (f64, f64)) {
         if let Some(screen) = cursor_screen(self.mtm) {
             let area = screen.visibleFrame();
-            let (width, height) = (size.0.min(area.size.width), size.1.min(area.size.height));
-            let frame = NSRect::new(
-                NSPoint::new(
-                    (area.origin.x + (area.size.width - width) / 2.0).round(),
-                    (area.origin.y + (area.size.height - height) / 2.0).round(),
+            let frame = constrained_frame(
+                NSRect::new(
+                    NSPoint::new(
+                        area.origin.x + (area.size.width - size.0) / 2.0,
+                        area.origin.y + (area.size.height - size.1) / 2.0,
+                    ),
+                    NSSize::new(size.0, size.1),
                 ),
-                NSSize::new(width, height),
+                area,
             );
             self.panel.setFrame_display(frame, false);
         }
@@ -222,15 +234,18 @@ impl Overlay {
     /// stays where it was when the window list grows.
     pub fn resize(&self, size: (f64, f64)) {
         let frame = self.panel.frame();
-        if (frame.size.width - size.0).abs() < 0.5 && (frame.size.height - size.1).abs() < 0.5 {
-            return;
-        }
         let center_x = frame.origin.x + frame.size.width / 2.0;
         let top = frame.origin.y + frame.size.height;
         let resized = NSRect::new(
             NSPoint::new((center_x - size.0 / 2.0).round(), (top - size.1).round()),
             NSSize::new(size.0, size.1),
         );
+        let resized = self.layout_screen().map_or(resized, |screen| {
+            constrained_frame(resized, screen.visibleFrame())
+        });
+        if frame == resized {
+            return;
+        }
         self.panel.setFrame_display(resized, true);
         self.view.updateTrackingAreas();
     }
@@ -292,6 +307,27 @@ impl Overlay {
     ) -> Option<WindowCommand> {
         menu::show(self.mtm, &self.view, NSPoint::new(x, y), window, app_name)
     }
+}
+
+fn constrained_frame(frame: NSRect, area: NSRect) -> NSRect {
+    let frame = constrain_frame(
+        Rect::new(
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+        ),
+        Rect::new(
+            area.origin.x,
+            area.origin.y,
+            area.size.width,
+            area.size.height,
+        ),
+    );
+    NSRect::new(
+        NSPoint::new(frame.left, frame.top),
+        NSSize::new(frame.width, frame.height),
+    )
 }
 
 #[cfg(test)]

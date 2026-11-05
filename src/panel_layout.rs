@@ -94,15 +94,29 @@ impl Layout {
     )]
     pub fn new(apps: usize, windows: usize, preview: bool, bounds: (f64, f64)) -> Self {
         let apps = apps.max(1);
+        let bounds = (bounds.0.max(0.0).floor(), bounds.1.max(0.0).floor());
+        let maximum = (bounds.0 - PADDING * 2.0).max(0.0);
+        // Keep useful list and preview widths; the list takes the full panel below this limit.
+        let preview = preview && maximum >= LIST_WIDTH_BESIDE_PREVIEW + PREVIEW_GAP + PREVIEW_WIDTH;
         let minimum = if preview {
             LIST_WIDTH_BESIDE_PREVIEW + PREVIEW_GAP + PREVIEW_WIDTH
         } else {
             MIN_CONTENT_WIDTH
-        };
-        let maximum = (bounds.0 - PADDING * 2.0).max(minimum);
+        }
+        .min(maximum);
         let content = (apps as f64 * TILE_MAX).clamp(minimum, maximum);
-        let tile = (content / apps as f64).clamp(TILE_MIN, TILE_MAX).floor();
-        let tile_slots = ((content / tile).floor() as usize).clamp(1, apps);
+        // Leave space for one row even when the display is shorter than the normal minimum.
+        let tile_max = TILE_MAX
+            .min(content)
+            .min((bounds.1 - PADDING * 2.0 - NAME_HEIGHT - LIST_GAP - ROW_HEIGHT).max(0.0));
+        let tile = (content / apps as f64)
+            .clamp(TILE_MIN.min(tile_max), tile_max)
+            .floor();
+        let tile_slots = if tile > 0.0 {
+            ((content / tile).floor() as usize).clamp(1, apps)
+        } else {
+            0
+        };
         let list = windows.clamp(1, MAX_ROWS) as f64 * ROW_HEIGHT;
         let list = if preview {
             list.max(PREVIEW_MIN_HEIGHT)
@@ -110,11 +124,11 @@ impl Layout {
             list
         };
         let above = PADDING + tile + NAME_HEIGHT + LIST_GAP;
-        let height = (above + list + PADDING).min(bounds.1.max(above + ROW_HEIGHT + PADDING));
-        let row_slots = (((height - above - PADDING) / ROW_HEIGHT).floor() as usize).max(1);
+        let height = (above + list + PADDING).min(bounds.1);
+        let row_slots = ((height - above - PADDING).max(0.0) / ROW_HEIGHT).floor() as usize;
         Self {
-            width: (content + PADDING * 2.0).round(),
-            height: height.round(),
+            width: (content + PADDING * 2.0).min(bounds.0),
+            height,
             tile,
             tile_slots,
             row_slots,
@@ -129,7 +143,7 @@ impl Layout {
 
     #[must_use]
     pub fn content_width(&self) -> f64 {
-        self.width - PADDING * 2.0
+        (self.width - PADDING * 2.0).max(0.0)
     }
 
     #[must_use]
@@ -240,6 +254,29 @@ impl Layout {
             return Some(Hit::CloseButton(row));
         }
         Some(Hit::Row(row))
+    }
+}
+
+/// Fits a panel frame inside the display's visible rectangle. Both rectangles use the same
+/// coordinate axes; the origin may be on any display. Clamp after rounding to keep fractional
+/// display edges inside the bounds too.
+#[must_use]
+pub fn constrain_frame(frame: Rect, bounds: Rect) -> Rect {
+    let width = frame.width.max(0.0).min(bounds.width.max(0.0));
+    let height = frame.height.max(0.0).min(bounds.height.max(0.0));
+    Rect {
+        left: frame
+            .left
+            .round()
+            .max(bounds.left)
+            .min(bounds.right() - width),
+        top: frame
+            .top
+            .round()
+            .max(bounds.top)
+            .min(bounds.bottom() - height),
+        width,
+        height,
     }
 }
 
@@ -414,6 +451,90 @@ mod tests {
         assert!(short.height <= 300.0);
         assert!(short.row_slots < MAX_ROWS);
         assert!(short.row_slots >= 1);
+    }
+
+    #[test]
+    fn a_narrow_display_omits_the_preview_and_keeps_the_list_and_tiles_inside() {
+        for width in [320.0, 479.9, 640.0, 775.9] {
+            let layout = Layout::new(30, 20, true, (width, 600.0));
+            assert!(layout.width <= width);
+            assert!(layout.preview_rect().is_none());
+            assert!(layout.tile_slots > 0 && layout.tile_slots < 30);
+            let last_tile = layout.tile_rect(layout.tile_slots - 1);
+            assert!(last_tile.right() <= layout.width - PADDING);
+            let row = layout.row_rect(0);
+            assert!(row.right() <= layout.width - PADDING);
+            let close = close_button_rect(row);
+            assert!(close.left >= row.left && close.right() <= row.right());
+            assert_eq!(
+                layout.hit(
+                    layout.tile_slots,
+                    1,
+                    Some(0),
+                    close.left + 1.0,
+                    close.top + 1.0
+                ),
+                Some(Hit::CloseButton(0))
+            );
+        }
+    }
+
+    #[test]
+    fn the_preview_returns_as_soon_as_both_columns_fit() {
+        let width = PADDING * 2.0 + LIST_WIDTH_BESIDE_PREVIEW + PREVIEW_GAP + PREVIEW_WIDTH;
+        let layout = Layout::new(2, 1, true, (width, 600.0));
+        let Some(preview) = layout.preview_rect() else {
+            panic!("the preview should fit at its width threshold");
+        };
+        assert!((preview.right() - (width - PADDING)).abs() < f64::EPSILON);
+        assert!((layout.list_rect().width - LIST_WIDTH_BESIDE_PREVIEW).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_fitting_frame_keeps_its_position_and_size() {
+        let requested = Rect::new(100.0, 300.0, 600.0, 400.0);
+        let resized = constrain_frame(requested, Rect::new(0.0, 0.0, 1000.0, 900.0));
+        assert_eq!(resized, requested);
+    }
+
+    #[test]
+    fn oversized_frames_fit_displays_with_positive_and_negative_origins() {
+        for bounds in [
+            Rect::new(-1280.0, -200.0, 640.0, 480.0),
+            Rect::new(1920.25, -100.75, 640.5, 480.5),
+        ] {
+            let fitted = constrain_frame(Rect::new(0.0, 0.0, 1000.0, 900.0), bounds);
+            assert_eq!(fitted, bounds);
+            let shifted = constrain_frame(
+                Rect::new(bounds.right() - 10.0, bounds.bottom() - 10.0, 320.0, 240.0),
+                bounds,
+            );
+            assert!(shifted.left >= bounds.left && shifted.right() <= bounds.right());
+            assert!(shifted.top >= bounds.top && shifted.bottom() <= bounds.bottom());
+        }
+    }
+
+    #[test]
+    fn a_display_change_repositions_a_frame_even_when_its_size_still_fits() {
+        let moved = constrain_frame(
+            Rect::new(-100.0, -50.0, 480.0, 300.0),
+            Rect::new(100.0, 200.0, 640.0, 480.0),
+        );
+        assert_eq!(moved, Rect::new(100.0, 200.0, 480.0, 300.0));
+    }
+
+    #[test]
+    fn fractional_and_short_bounds_are_hard_limits_with_or_without_previews() {
+        for bounds in [(300.8, 155.8), (700.6, 120.6), (900.9, 250.9)] {
+            for preview in [false, true] {
+                let layout = Layout::new(3, 30, preview, bounds);
+                assert!(layout.width <= bounds.0);
+                assert!(layout.height <= bounds.1);
+                assert!(layout.row_slots >= 1);
+                assert!(layout.tile_slots >= 1);
+                assert!(layout.row_rect(layout.row_slots - 1).bottom() <= layout.height - PADDING);
+            }
+        }
     }
 
     #[test]
