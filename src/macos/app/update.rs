@@ -6,7 +6,6 @@ use crate::macos::runtime::{run_later, schedule, with_app};
 use crate::macos::settings_window::SettingsWindow;
 use crate::macos::updater;
 use alttabio::update::{Checked, Step, Update};
-use objc2_app_kit::NSApplication;
 
 // The first automatic update check waits a minute after the start, so a login does not ask
 // GitHub before the network is up. A failed check tries again in an hour, and any other outcome
@@ -147,7 +146,8 @@ impl App {
             eprintln!("{error}; the update takes effect at the next start");
             return;
         }
-        self.shutdown();
-        NSApplication::sharedApplication(self.mtm).terminate(None);
+        let store = self.shutdown();
+        let mtm = self.mtm;
+        run_later(mtm, move || super::finish_shutdown(mtm, store));
     }
 }

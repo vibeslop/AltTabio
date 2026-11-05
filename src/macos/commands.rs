@@ -14,10 +14,13 @@ pub struct AppRef<'a> {
 }
 
 pub fn activate(record: &WindowRecord) -> Result<(), String> {
-    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(record.pid)
-    else {
-        return Err(format!("{} is no longer running", record.app_name));
-    };
+    let app = running_application(&AppRef {
+        process: ProcessIdentity::new(
+            u32::try_from(record.pid).unwrap_or_default(),
+            record.launched_at,
+        ),
+        name: &record.app_name,
+    })?;
     if app.isHidden() && !app.unhide() {
         eprintln!("Could not unhide {}", record.app_name);
     }

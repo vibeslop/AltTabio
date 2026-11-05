@@ -78,7 +78,13 @@ pub fn run(arguments: &[OsString]) {
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-    let app = Rc::new(RefCell::new(App::new(mtm, settings, store, preview_mode)));
+    let app = match App::new(mtm, settings, store, preview_mode) {
+        Ok(app) => Rc::new(RefCell::new(app)),
+        Err(error) => {
+            show_fatal_error(mtm, &error);
+            return;
+        }
+    };
     runtime::install(&app);
     app.borrow_mut().start();
     if first_start && !preview_mode {

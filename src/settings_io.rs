@@ -167,6 +167,28 @@ mod tests {
     }
 
     #[test]
+    fn background_writer_persists_the_last_settings_and_preserves_unknown_keys()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TestDirectory::new()?;
+        let mut store = directory.store()?;
+        let path = store.path.clone();
+        let writer = alttabio::settings_writer::SettingsWriter::spawn(
+            move |settings| store.save(settings),
+            |result| assert!(result.is_ok()),
+        )?;
+        let mut settings = Settings::default();
+        writer.save(settings.clone())?;
+        settings.general.auto_update = !settings.general.auto_update;
+        writer.save(settings.clone())?;
+        writer.finish()?;
+        let contents = std::fs::read_to_string(path)?;
+        assert!(contents.contains("FutureSetting=keep"));
+        assert_eq!(SettingsDocument::parse(&contents).settings(), settings);
+        directory.assert_only_settings_remain()?;
+        Ok(())
+    }
+
+    #[test]
     fn failed_partial_write_preserves_previous_file_and_cleans_temporary_sibling()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = TestDirectory::new()?;
