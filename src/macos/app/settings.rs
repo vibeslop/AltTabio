@@ -5,7 +5,7 @@ use crate::macos::alerts::show_fatal_error;
 use crate::macos::autostart;
 use crate::macos::hotkey::HotkeySettings;
 use crate::macos::permissions;
-use crate::macos::runtime::{run_later, with_app};
+use crate::macos::runtime::{post_to_app, run_later};
 use crate::macos::settings_window::{SettingsEvent, SettingsWindow};
 use alttabio::settings::Settings;
 use alttabio::theme::SwitcherTokens;
@@ -14,22 +14,35 @@ use std::rc::Rc;
 impl App {
     pub(crate) fn show_settings(&mut self) {
         if self.settings_window.is_none() {
-            let handler: Rc<dyn Fn(SettingsEvent)> = Rc::new(|event| match event {
-                SettingsEvent::Changed(settings) => {
-                    let _ = with_app(|app| app.apply_settings(settings));
-                }
-                SettingsEvent::Autostart(enabled) => {
-                    let _ = with_app(|app| app.set_autostart(enabled));
-                }
-                SettingsEvent::OpenAccessibility => permissions::open_accessibility_settings(),
-                SettingsEvent::OpenScreenRecording => {
-                    permissions::open_screen_recording_settings();
-                }
+            let handler: Rc<dyn Fn(SettingsEvent)> = Rc::new(|event| {
+                post_to_app(move |app| app.handle_settings_event(event));
             });
             self.settings_window = Some(SettingsWindow::new(self.mtm, &self.settings, handler));
         }
         if let Some(window) = &self.settings_window {
             window.show(&self.settings);
+        }
+    }
+
+    fn handle_settings_event(&mut self, event: SettingsEvent) {
+        match event {
+            SettingsEvent::Toggled(key, value) => {
+                let mut settings = self.settings.clone();
+                key.set(&mut settings, value);
+                self.apply_settings(settings);
+            }
+            SettingsEvent::Theme(theme) => {
+                let mut settings = self.settings.clone();
+                settings.appearance.theme = theme;
+                self.apply_settings(settings);
+            }
+            SettingsEvent::Autostart(enabled) => self.set_autostart(enabled),
+            SettingsEvent::OpenAccessibility => permissions::open_accessibility_settings(),
+            SettingsEvent::OpenScreenRecording => permissions::open_screen_recording_settings(),
+            SettingsEvent::Refresh => {}
+        }
+        if let Some(window) = &self.settings_window {
+            window.refresh();
         }
     }
 
@@ -94,7 +107,11 @@ impl App {
     }
 
     fn save_settings(&mut self) {
-        if let Err(error) = self.store.save(&self.settings) {
+        let Some(store) = &self.store else {
+            eprintln!("Settings changed while AltTabio is shutting down");
+            return;
+        };
+        if let Err(error) = store.save(self.settings.clone()) {
             eprintln!("{error}");
         }
     }

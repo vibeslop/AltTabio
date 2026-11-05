@@ -2,10 +2,40 @@
 
 use super::App;
 use crate::macos::commands::{self, AppRef};
+use crate::macos::runtime::post_to_app;
 use crate::macos::tracing;
 use crate::macos::window_list::WindowRecord;
 use alttabio::app_switcher::{Action, Effect, Target};
+use alttabio::process_identity::ProcessIdentity;
 use alttabio::window_command::WindowCommand;
+
+/// An owned snapshot, so remote calls never retain an application-state borrow.
+enum CommandTarget {
+    Window(WindowRecord),
+    App {
+        process: ProcessIdentity,
+        name: String,
+    },
+}
+
+impl CommandTarget {
+    fn run(&self, command: Option<WindowCommand>) -> Result<(), String> {
+        match (self, command) {
+            (Self::Window(record), None) => commands::activate(record),
+            (Self::Window(record), Some(command)) => commands::execute_on_window(command, record),
+            (Self::App { process, name }, command) => {
+                let app = AppRef {
+                    process: *process,
+                    name,
+                };
+                match command {
+                    Some(command) => commands::execute_on_app(command, &app),
+                    None => commands::activate_app(&app),
+                }
+            }
+        }
+    }
+}
 
 impl App {
     pub(super) fn apply_action(&mut self, action: Action) {
@@ -42,44 +72,61 @@ impl App {
             let listed = self.listed_windows();
             self.window_history.note(Some(handle), &listed);
         }
-        if let Err(error) = self.act_on(target, commands::activate, commands::activate_app) {
+        let showed_preview = self.dismiss_overlay();
+        if let Err(error) = self.queue_command(target, None, showed_preview) {
             eprintln!("{error}");
+            self.switch_finished(showed_preview);
         }
-        self.hide_overlay();
     }
 
     fn execute_command(&mut self, command: WindowCommand, target: Target) {
-        let result = self.act_on(
-            target,
-            |record| commands::execute_on_window(command, record),
-            |app| commands::execute_on_app(command, app),
-        );
-        if let Err(error) = result {
+        if let Err(error) = self.queue_command(target, Some(command), false) {
             eprintln!("{error}");
-            return;
         }
-        // The switcher stays open and keeps its selection; the refreshes show the window or
-        // app leaving the list in place.
-        self.request_refresh();
-        self.schedule_refresh_burst();
     }
 
-    /// Runs `on_window` on the target window's record, or `on_app` on the target app.
-    fn act_on(
+    fn queue_command(
         &self,
         target: Target,
-        on_window: impl FnOnce(&WindowRecord) -> Result<(), String>,
-        on_app: impl FnOnce(&AppRef<'_>) -> Result<(), String>,
+        command: Option<WindowCommand>,
+        showed_preview: bool,
     ) -> Result<(), String> {
-        match target {
-            Target::Window { handle, .. } => self.record(handle).map_or_else(
-                || Err("The selected window is no longer listed".to_owned()),
-                on_window,
+        let target = match target {
+            Target::Window { handle, process } => CommandTarget::Window(
+                self.record(handle)
+                    .filter(|record| {
+                        u32::try_from(record.pid).ok() == Some(process.id)
+                            && record.launched_at == process.started_at
+                    })
+                    .ok_or_else(|| "The selected window is no longer listed".to_owned())?
+                    .clone(),
             ),
-            Target::App(process) => on_app(&AppRef {
+            Target::App(process) => CommandTarget::App {
                 process,
-                name: &self.app_name(process),
-            }),
-        }
+                name: self.app_name(process),
+            },
+        };
+        // AX client calls and NSRunningApplication may run off the main thread. Serial dispatch
+        // keeps user commands ordered, independently of enumeration and settings persistence.
+        // https://developer.apple.com/documentation/appkit/nsrunningapplication
+        let session = self.session;
+        self.command_queue.exec_async(move || {
+            let result = objc2::rc::autoreleasepool(|_| target.run(command));
+            post_to_app(move |app| {
+                match result {
+                    Err(error) => eprintln!("{error}"),
+                    Ok(()) if command.is_some() => {
+                        // Refresh only after the remote action has completed.
+                        app.request_refresh();
+                        app.schedule_refresh_burst();
+                    }
+                    Ok(()) => {}
+                }
+                if command.is_none() && app.session == session {
+                    app.switch_finished(showed_preview);
+                }
+            });
+        });
+        Ok(())
     }
 }

@@ -69,6 +69,12 @@ impl App {
     }
 
     pub(super) fn hide_overlay(&mut self) {
+        let showed_preview = self.dismiss_overlay();
+        self.switch_finished(showed_preview);
+    }
+
+    /// Hides immediately; activation may still be waiting on another app.
+    pub(super) fn dismiss_overlay(&mut self) -> bool {
         let showed_preview = matches!(self.panel, Panel::Shown)
             && self
                 .shown
@@ -84,6 +90,10 @@ impl App {
         self.reset_pointer();
         self.shown = None;
         self.reset_previews();
+        showed_preview
+    }
+
+    pub(super) fn switch_finished(&mut self, showed_preview: bool) {
         if showed_preview
             && !self.screen_recording_asked
             && !permissions::screen_recording_granted()
@@ -96,8 +106,9 @@ impl App {
             });
         }
         if self.preview_mode {
-            self.shutdown();
-            NSApplication::sharedApplication(self.mtm).terminate(None);
+            let store = self.shutdown();
+            let mtm = self.mtm;
+            run_later(mtm, move || super::finish_shutdown(mtm, store));
         }
     }
 

@@ -17,7 +17,7 @@ use super::overlay::Overlay;
 use super::permissions;
 use super::preview::PreviewSource;
 use super::refresh_worker::RefreshWorker;
-use super::runtime::{run_later, with_app};
+use super::runtime::{post_to_app, run_later, with_app};
 use super::settings_window::SettingsWindow;
 use super::status_item::{self, MenuAction, StatusItem};
 use super::window_list::{WindowRecord, WindowlessApp};
@@ -26,7 +26,9 @@ use alttabio::app_switcher::{AppSwitcher, RecentApps, WindowHistory};
 use alttabio::panel_layout::{Extent, Shown};
 use alttabio::panel_pointer::Pointer;
 use alttabio::settings::Settings;
+use alttabio::settings_writer::SettingsWriter;
 use alttabio::update::Updater;
+use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -42,7 +44,8 @@ use update::FIRST_UPDATE_CHECK_SECONDS;
 pub(super) struct App {
     mtm: MainThreadMarker,
     settings: Settings,
-    store: SettingsStore,
+    store: Option<SettingsWriter>,
+    command_queue: DispatchRetained<DispatchQueue>,
     preview_mode: bool,
     switcher: AppSwitcher,
     hotkey: HotkeyState,
@@ -109,18 +112,27 @@ impl App {
     pub(super) fn new(
         mtm: MainThreadMarker,
         settings: Settings,
-        store: SettingsStore,
+        mut store: SettingsStore,
         preview_mode: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        let store = SettingsWriter::spawn(
+            move |settings| store.save(settings),
+            |result| {
+                if let Err(error) = result {
+                    eprintln!("{error}");
+                }
+            },
+        )?;
         let hotkey_settings = hotkey_settings(&settings);
         let mut recent_apps = RecentApps::default();
         if let Some(pid) = frontmost_pid() {
             recent_apps.note(pid);
         }
-        Self {
+        Ok(Self {
             mtm,
             settings,
-            store,
+            store: Some(store),
+            command_queue: DispatchQueue::new("alttabio-window-commands", None),
             preview_mode,
             switcher: AppSwitcher::default(),
             hotkey: HotkeyState::default(),
@@ -156,7 +168,7 @@ impl App {
             updater: Updater::default(),
             update_timer: None,
             away_timer: None,
-        }
+        })
     }
 
     pub(super) fn start(&mut self) {
@@ -164,11 +176,14 @@ impl App {
         let overlay = Rc::new(Overlay::new(
             mtm,
             Rc::new(|event| {
-                let _ = with_app(|app| app.handle_view_event(event));
+                post_to_app(move |app| app.handle_view_event(event));
             }),
         ));
         self.overlay = Some(overlay);
-        self.status_item = Some(status_item::install(mtm, Rc::new(handle_menu_action)));
+        self.status_item = Some(status_item::install(
+            mtm,
+            Rc::new(|action| DispatchQueue::main().exec_async(move || handle_menu_action(action))),
+        ));
         self.observe_workspace();
         self.request_refresh();
         self.watch_front_app();
@@ -204,7 +219,7 @@ impl App {
         }
     }
 
-    fn shutdown(&mut self) {
+    fn shutdown(&mut self) -> Option<SettingsWriter> {
         self.event_tap = None;
         self.cancel_dwell();
         self.front_observer = None;
@@ -218,6 +233,7 @@ impl App {
         {
             timer.invalidate();
         }
+        self.store.take()
     }
 }
 
@@ -238,13 +254,19 @@ fn handle_menu_action(action: MenuAction) {
             let _ = with_app(App::update_requested);
         }
         MenuAction::Quit => {
-            let mtm = with_app(|app| {
-                app.shutdown();
-                app.mtm
-            });
-            if let Some(mtm) = mtm.or_else(MainThreadMarker::new) {
-                NSApplication::sharedApplication(mtm).terminate(None);
+            if let Some((mtm, store)) = with_app(|app| (app.mtm, app.shutdown())) {
+                finish_shutdown(mtm, store);
             }
         }
     }
+}
+
+/// Drain queued settings before quitting, with no application-state borrow held.
+fn finish_shutdown(mtm: MainThreadMarker, store: Option<SettingsWriter>) {
+    if let Some(store) = store
+        && let Err(error) = store.finish()
+    {
+        eprintln!("{error}");
+    }
+    NSApplication::sharedApplication(mtm).terminate(None);
 }

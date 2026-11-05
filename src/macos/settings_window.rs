@@ -83,7 +83,7 @@ impl SettingKey {
         }
     }
 
-    fn set(self, settings: &mut Settings, value: bool) {
+    pub(super) fn set(self, settings: &mut Settings, value: bool) {
         match self {
             Self::Autostart => settings.general.autostart = value,
             Self::AutoUpdate => settings.general.auto_update = value,
@@ -112,13 +112,15 @@ const GROUPS: &[(&str, &[SettingKey])] = &[
     ),
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum SettingsEvent {
-    Changed(Settings),
+    Toggled(SettingKey, bool),
+    Theme(Theme),
     /// The launch-at-login box was clicked; carries the state the user asked for.
     Autostart(bool),
     OpenAccessibility,
     OpenScreenRecording,
+    Refresh,
 }
 
 pub struct ControllerIvars {
@@ -160,17 +162,13 @@ define_class!(
                 // The login item lives in the system, not in the INI; the box shows whatever
                 // the system reports once the request is done.
                 (self.ivars().handler)(SettingsEvent::Autostart(value));
-                self.refresh_status();
                 return;
             }
-            let settings = {
+            {
                 let mut settings = self.ivars().settings.borrow_mut();
                 key.set(&mut settings, value);
-                settings.clone()
-            };
-            (self.ivars().handler)(SettingsEvent::Changed(settings));
-            // Turning previews on may bring up the Screen Recording row.
-            self.refresh_status();
+            }
+            (self.ivars().handler)(SettingsEvent::Toggled(key, value));
         }
 
         #[unsafe(method(themeChanged:))]
@@ -184,12 +182,11 @@ define_class!(
                 2 => Theme::Dark,
                 _ => Theme::Auto,
             };
-            let settings = {
+            {
                 let mut settings = self.ivars().settings.borrow_mut();
                 settings.appearance.theme = theme;
-                settings.clone()
-            };
-            (self.ivars().handler)(SettingsEvent::Changed(settings));
+            }
+            (self.ivars().handler)(SettingsEvent::Theme(theme));
         }
 
         #[unsafe(method(openAccessibility:))]
@@ -210,7 +207,7 @@ define_class!(
         // SAFETY: the signature matches windowDidBecomeKey:.
         #[unsafe(method(windowDidBecomeKey:))]
         fn window_did_become_key(&self, _notification: &NSNotification) {
-            self.refresh_status();
+            (self.ivars().handler)(SettingsEvent::Refresh);
         }
     }
 );
