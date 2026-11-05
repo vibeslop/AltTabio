@@ -252,6 +252,10 @@ fn protected_executable_beneath_replaceable_ancestor_is_rejected() -> Result<(),
     std::fs::write(&executable, b"path-validation fixture").map_err(|error| error.to_string())?;
     fixture.protect(&executable)?;
     fixture.protect(&installation)?;
+    let root = fixture.root.clone();
+    // Grant ACL control at the higher ancestor, but no current rights to replace its children.
+    // This forces the validator to visit that ancestor rather than reject the immediate parent.
+    fixture.protect_with(&root, w!("D:P(A;;FRFX;;;WD)(A;;0x40000;;;WD)(A;;RC;;;OW)"))?;
     let token = test_token()?;
     // Prove that the leaf and immediate parent are protected, while the ancestor is mutable.
     for path in [&executable, &installation] {
@@ -259,7 +263,16 @@ fn protected_executable_beneath_replaceable_ancestor_is_rejected() -> Result<(),
             assert!(!token_has_access(path, token.0, access)?);
         }
     }
-    assert!(token_has_access(&fixture.root, token.0, WRITE_DAC.0)?);
+    for access in [
+        FILE_ADD_FILE.0,
+        FILE_ADD_SUBDIRECTORY.0,
+        FILE_DELETE_CHILD.0,
+    ] {
+        assert!(!token_has_access(&root, token.0, access)?);
+    }
+    assert!(!path_component_is_replaceable(&executable, token.0)?);
+    assert!(!path_component_is_replaceable(&installation, token.0)?);
+    assert!(token_has_access(&root, token.0, WRITE_DAC.0)?);
     assert!(executable_is_replaceable(&executable, token.0)?);
     Ok(())
 }
