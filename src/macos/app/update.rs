@@ -42,7 +42,13 @@ impl App {
     }
 
     pub(super) fn update_requested(&mut self) {
-        let step = self.updater.requested();
+        // The installed menu action explicitly offers relaunch. During installation the
+        // command still says Check for Updates, so observing it grants no restart consent.
+        let step = if self.updater.installed_version().is_some() {
+            self.updater.requested()
+        } else {
+            self.updater.check_or_observe()
+        };
         self.apply_update_step(step);
     }
 
@@ -105,13 +111,16 @@ impl App {
         if let Some(status_item) = &self.status_item {
             status_item.set_update_installed(installed);
         }
-        if installed && self.away_timer.is_none() {
+        if installed && self.settings.general.auto_update && self.away_timer.is_none() {
             self.away_timer = Some(schedule(self.mtm, AWAY_POLL_SECONDS, App::look_for_away));
         }
     }
 
     fn look_for_away(&mut self) {
         self.away_timer = None;
+        if !self.settings.general.auto_update {
+            return;
+        }
         if updater::seconds_since_input() < AWAY_SECONDS {
             self.away_timer = Some(schedule(self.mtm, AWAY_POLL_SECONDS, App::look_for_away));
             return;
@@ -123,6 +132,9 @@ impl App {
     /// Quits and opens the installed update in this copy's place, with the settings window if
     /// it is up.
     fn relaunch(&mut self) {
+        if !self.updater.relaunch_allowed() {
+            return;
+        }
         if self.switcher.is_active() {
             let _timer = schedule(self.mtm, RELAUNCH_RETRY_SECONDS, App::relaunch);
             return;
