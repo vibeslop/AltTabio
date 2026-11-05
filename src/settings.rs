@@ -1,4 +1,5 @@
 //! Portable INI settings stored next to the executable.
+use crate::localization::Language;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settings {
@@ -19,6 +20,7 @@ pub struct ExperimentalSettings {
     reason = "fields intentionally mirror the existing portable INI keys"
 )]
 pub struct GeneralSettings {
+    pub language: Language,
     pub autostart: bool,
     pub replace_alt_tab: bool,
     pub replace_win_tab: bool,
@@ -134,6 +136,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             general: GeneralSettings {
+                language: Language::System,
                 autostart: false,
                 replace_alt_tab: true,
                 replace_win_tab: true,
@@ -238,6 +241,9 @@ impl SettingsDocument {
     pub fn settings_over(&self, defaults: &Settings) -> Settings {
         Settings {
             general: GeneralSettings {
+                language: self
+                    .find("General", "Language")
+                    .map_or(defaults.general.language, Language::parse),
                 autostart: self.read_bool("General", "Autostart", defaults.general.autostart),
                 replace_alt_tab: self.read_bool(
                     "General",
@@ -327,6 +333,7 @@ impl SettingsDocument {
     pub fn render(&self, settings: &Settings) -> String {
         let mut lines = vec![
             "[General]".to_owned(),
+            format!("Language={}", settings.general.language.as_ini_value()),
             format!("Autostart={}", settings.general.autostart),
             format!("ReplaceAltTab={}", settings.general.replace_alt_tab),
             format!("ReplaceWinTab={}", settings.general.replace_win_tab),
@@ -420,7 +427,8 @@ fn same_key(left: &str, right: &str) -> bool {
 }
 
 fn is_known(entry: &Entry) -> bool {
-    const KNOWN: [(&str, &str); 23] = [
+    const KNOWN: [(&str, &str); 24] = [
+        ("General", "Language"),
         ("Experimental", "RmbWheelSwitching"),
         ("General", "Autostart"),
         ("General", "ReplaceAltTab"),
@@ -586,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn established_user_settings_round_trip_without_changes() {
+    fn established_user_settings_keep_values_when_language_is_added() {
         let contents = "[General]\nAutostart=true\nReplaceAltTab=true\nReplaceWinTab=true\n\
                         TypedSearch=true\nReleaseAltSwitches=true\n\
                         MouseOverSelection=true\nAutoUpdate=false\n\n\
@@ -598,7 +606,10 @@ mod tests {
                         [Experimental]\nRmbWheelSwitching=false\n";
         let document = SettingsDocument::parse(contents);
 
-        assert_eq!(document.render(&document.settings()), contents);
+        assert_eq!(
+            document.render(&document.settings()),
+            contents.replacen("[General]\n", "[General]\nLanguage=System\n", 1)
+        );
     }
 
     #[test]

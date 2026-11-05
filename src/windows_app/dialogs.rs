@@ -1,6 +1,7 @@
 use super::{App, AppHost, show_error_for_window};
 use crate::{dialog_host, settings_dialog, startup};
 use alttabio::input::HookSettings;
+use alttabio::localization::message;
 use alttabio::settings::Settings;
 use alttabio::settings_change::{
     AutostartState, SettingsChange, SettingsEffects, switcher_session_settings,
@@ -42,7 +43,10 @@ impl AppHost {
             {
                 show_error_for_window(
                     window,
-                    &format!("Could not select the Settings page: {error}"),
+                    &message(
+                        "Could not select the Settings page: {error}",
+                        &[("error", &error.to_string())],
+                    ),
                 );
             }
             return;
@@ -64,7 +68,10 @@ impl AppHost {
             Err(error) => {
                 show_error_for_window(
                     owner,
-                    &format!("Autostart status could not be read. {error}"),
+                    &message(
+                        "Autostart status could not be read. {error}",
+                        &[("error", &error)],
+                    ),
                 );
                 AutostartState {
                     enabled: dialog_settings.general.autostart,
@@ -92,8 +99,20 @@ impl AppHost {
         match result {
             Ok(Some(settings)) => app.apply_settings(settings, previous_autostart),
             Ok(None) => {}
-            Err(error) => app.show_error(&format!("Could not open settings: {error}")),
+            Err(error) => app.show_error(&message(
+                "Could not open settings: {error}",
+                &[("error", &error.to_string())],
+            )),
         }
+        // Background update events can copy preview-language labels while the modal loop
+        // runs. Restore copied UI text after every exit, including Cancel and save failures.
+        if let Some(tray) = &app.tray
+            && let Err(error) = tray.refresh_language()
+        {
+            eprintln!("Could not refresh the tray language: {error}");
+        }
+        drop(app);
+        self.refresh_updates();
     }
 }
 
@@ -133,6 +152,7 @@ impl App {
 
         let icon_changed = settings.appearance.icon != previous_settings.appearance.icon;
         self.settings = settings;
+        alttabio::localization::set_language(self.settings.general.language);
         self.session
             .update_settings(switcher_session_settings(&self.settings));
         if icon_changed {
@@ -142,11 +162,17 @@ impl App {
                 .map(|tray| tray.set_icon(self.settings.appearance.icon))
                 .transpose();
             if let Err(error) = icon_result {
-                self.show_error(&format!("Could not update the tray icon. {error}"));
+                self.show_error(&message(
+                    "Could not update the tray icon. {error}",
+                    &[("error", &error.to_string())],
+                ));
             }
         }
         if let Err(error) = self.refresh_theme() {
-            self.show_error(&format!("Could not update the overlay theme. {error}"));
+            self.show_error(&message(
+                "Could not update the overlay theme. {error}",
+                &[("error", &error.to_string())],
+            ));
         }
         self.recreate_preview();
         self.request_redraw();

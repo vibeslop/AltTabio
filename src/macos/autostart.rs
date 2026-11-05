@@ -28,10 +28,14 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
         }
     };
     result.map_err(|error| {
-        let action = if enabled { "enable" } else { "disable" };
-        format!(
-            "Could not {action} launch at login: {}",
-            error.localizedDescription()
+        let template = if enabled {
+            "Could not enable launch at login: {error}"
+        } else {
+            "Could not disable launch at login: {error}"
+        };
+        alttabio::localization::message(
+            template,
+            &[("error", &error.localizedDescription().to_string())],
         )
     })
 }

@@ -410,9 +410,15 @@ pub fn scroll_into_view(start: usize, selected: usize, total: usize, shown: usiz
 pub fn more_note(total: usize, start: usize, shown: usize) -> Option<String> {
     let below = total.saturating_sub(start + shown);
     if below > 0 {
-        Some(format!("{below} more"))
+        Some(crate::localization::message(
+            "{count} more",
+            &[("count", &below.to_string())],
+        ))
     } else if start > 0 {
-        Some(format!("{start} more above"))
+        Some(crate::localization::message(
+            "{count} more above",
+            &[("count", &start.to_string())],
+        ))
     } else {
         None
     }

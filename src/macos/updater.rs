@@ -137,10 +137,9 @@ fn obstacle(bundle: &Path) -> Option<String> {
         return Some("This copy is not in a folder it could be replaced in.".to_owned());
     };
     if !writable(folder) {
-        return Some(format!(
-            "This account cannot change {}. Run the install command as an administrator to \
-             update.",
-            folder.display()
+        return Some(alttabio::localization::message(
+            "This account cannot change {path}. Run the install command as an administrator to update.",
+            &[("path", &folder.display().to_string())],
         ));
     }
     None

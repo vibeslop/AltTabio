@@ -68,7 +68,7 @@ fn tab_moves_from_the_selected_category_into_its_settings() -> Result<()> {
     let host = dialog.host()?;
     let state = host.state_mut()?;
     let navigation = state.controls.get(Control::Navigation(Category::General));
-    let first = state.controls.checkbox(SettingOption::Autostart);
+    let first = state.controls.get(Control::Selector(Selector::Language));
     drop(state);
     // SAFETY: query native Tab traversal inside this hidden test dialog only.
     let next = unsafe {

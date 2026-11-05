@@ -33,7 +33,7 @@ pub(super) struct PaintState {
     pub(super) begin_paint_failures: Rc<SharedFailureRun>,
     layout: SettingsLayout,
     icon: IconColor,
-    checked_selection: [Option<usize>; 2],
+    checked_selection: [Option<usize>; 3],
 }
 
 impl PaintState {
@@ -63,10 +63,12 @@ impl DialogState {
             begin_paint_failures: Rc::clone(&self.begin_paint_failures),
             layout: self.layout(),
             icon: self.selected_icon(),
-            checked_selection: [Selector::Theme, Selector::Icon].map(|selector| {
-                self.dropdown_selection[selector as usize]
-                    .or_else(|| selected_index(self.controls.get(Control::Selector(selector))))
-            }),
+            checked_selection: [Selector::Theme, Selector::Icon, Selector::Language].map(
+                |selector| {
+                    self.dropdown_selection[selector as usize]
+                        .or_else(|| selected_index(self.controls.get(Control::Selector(selector))))
+                },
+            ),
         }
     }
 

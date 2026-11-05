@@ -188,14 +188,12 @@ fn paint_control(hwnd: HWND, dc: HDC, client: RECT, state: &PaintState) -> Resul
             fonts.of(control),
         ),
         Control::Warning(_) => paint_warning(dc, client, control, state),
-        Control::AboutDescription => text(
+        Control::AboutDescription => draw_text_with_font(
             dc,
             control.text(),
-            RECT {
-                bottom: client.top + scale(22, state.dpi),
-                ..client
-            },
+            client,
             state.palette.text,
+            DRAW_TEXT_NO_PREFIX | DRAW_TEXT_WORD_BREAK,
             fonts.body.0,
         ),
         Control::Section(_) => text(
@@ -277,7 +275,10 @@ fn paint_identity(
     rect.bottom = client.bottom;
     text(
         dc,
-        concat!("Version ", env!("CARGO_PKG_VERSION")),
+        &alttabio::localization::message(
+            "Version {version}",
+            &[("version", env!("CARGO_PKG_VERSION"))],
+        ),
         rect,
         state.palette.secondary,
         fonts.help.0,

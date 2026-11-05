@@ -366,7 +366,10 @@ pub(crate) fn show_error_for_window(owner: HWND, message: &str) {
 }
 
 fn show_error_box(owner: Option<HWND>, message: &str) {
-    let text = wide(message);
+    let text = wide(&format!(
+        "{}\n\n{message}",
+        alttabio::localization::tr("AltTabio could not complete this action.")
+    ));
     let result = unsafe {
         // SAFETY: both UTF-16 buffers remain alive and null terminated for the synchronous call.
         MessageBoxW(

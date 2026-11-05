@@ -25,7 +25,7 @@ impl SettingsLayout {
 
     #[must_use]
     pub fn for_client(client: Size, dpi: u32, category: Category) -> Self {
-        let sidebar_width = scale(168, dpi);
+        let sidebar_width = scale(192, dpi);
         let footer_y = client.height - scale(58, dpi);
         let viewport_y = scale(if category == Category::About { 74 } else { 99 }, dpi);
         let main_width = (client.width - sidebar_width).max(1);
@@ -61,7 +61,7 @@ impl SettingsLayout {
                 } else {
                     s(77 + category as i32 * 44)
                 },
-                s(144),
+                self.sidebar.width - s(24),
                 s(40),
             ),
             Control::PageHeading => Rect::new(

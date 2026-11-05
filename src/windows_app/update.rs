@@ -304,7 +304,7 @@ impl AppHost {
         quit
     }
 
-    fn refresh_updates(&self) {
+    pub(super) fn refresh_updates(&self) {
         let (view, theme) = {
             let app = self.state.borrow();
             (

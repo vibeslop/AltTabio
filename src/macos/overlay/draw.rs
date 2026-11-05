@@ -263,6 +263,7 @@ fn draw_row(model: &FrameModel, row: &Row, bounds: Rect, fonts: &Fonts, colors: 
         right = button.left - STATE_GAP / 2.0;
     }
     if let Some(label) = row.state.label() {
+        let label = alttabio::localization::tr(label);
         let width = measure(label, &fonts.detail).width.ceil();
         draw_text(
             label,
@@ -307,6 +308,7 @@ fn draw_row(model: &FrameModel, row: &Row, bounds: Rect, fonts: &Fonts, colors: 
 }
 
 fn draw_note(text: &str, bounds: Rect, indent: f64, fonts: &Fonts, colors: &Colors) {
+    let text = alttabio::localization::tr(text);
     draw_text(
         text,
         Rect {
@@ -363,7 +365,7 @@ fn draw_preview(preview: &PreviewModel, area: Rect, fonts: &Fonts, colors: &Colo
             ..area
         };
         draw_text(
-            message,
+            alttabio::localization::tr(message),
             paragraph,
             &fonts.detail,
             &colors.secondary,

@@ -1,6 +1,7 @@
 use crate::app_icon;
 use crate::app_messages::WM_TRAY_CALLBACK;
 use crate::native_theme::{DarkModeApi, PreferredAppMode, preferred_app_mode};
+use alttabio::localization::tr;
 use alttabio::settings::IconColor;
 use alttabio::theme::ResolvedTheme;
 use std::cell::Cell;
@@ -123,7 +124,7 @@ impl TrayIcon {
                 false
             }
         };
-        Ok(Self {
+        let tray = Self {
             data,
             icon,
             menu,
@@ -133,7 +134,9 @@ impl TrayIcon {
             dark_mode_api,
             update_installed: Cell::new(false),
             registered: Cell::new(registered),
-        })
+        };
+        tray.refresh_language()?;
+        Ok(tray)
     }
 
     pub fn show_menu(&self) -> TrayAction {
@@ -180,22 +183,40 @@ impl TrayIcon {
         if self.update_installed.get() == installed {
             return Ok(());
         }
-        let label = if installed {
-            w!("Update status...")
+        let previous = self.update_installed.replace(installed);
+        if let Err(error) = self.refresh_language() {
+            self.update_installed.set(previous);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn refresh_language(&self) -> Result<()> {
+        let update_label = if self.update_installed.get() {
+            "Update status..."
         } else {
-            w!("Check for Updates...")
+            "Check for Updates..."
         };
-        unsafe {
-            // SAFETY: menu is owned by this guard, the command exists, and label is static UTF-16.
-            ModifyMenuW(
-                self.menu,
-                u32::try_from(UPDATE_COMMAND).unwrap_or_default(),
-                MF_BYCOMMAND | MF_STRING,
-                UPDATE_COMMAND,
-                label,
-            )
-        }?;
-        self.update_installed.set(installed);
+        for (command, source) in [
+            (OPEN_SWITCHER_COMMAND, "Open Switcher"),
+            (SETTINGS_COMMAND, "Settings"),
+            (ABOUT_COMMAND, "About AltTabio"),
+            (UPDATE_COMMAND, update_label),
+            (EXIT_COMMAND, "Exit"),
+        ] {
+            let label = crate::win32::wide(tr(source));
+            // SAFETY: menu is owned by this guard, each command exists, and the UTF-16
+            // buffer remains live throughout ModifyMenuW, which copies its text.
+            unsafe {
+                ModifyMenuW(
+                    self.menu,
+                    u32::try_from(command).unwrap_or_default(),
+                    MF_BYCOMMAND | MF_STRING,
+                    command,
+                    PCWSTR(label.as_ptr()),
+                )?;
+            }
+        }
         Ok(())
     }
 

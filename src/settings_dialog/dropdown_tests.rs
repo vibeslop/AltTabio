@@ -318,6 +318,7 @@ fn clicking_popup_rows_commits_the_theme_and_icon_choices() -> Result<()> {
             Selector::Icon => {
                 assert_eq!(state.current_settings().appearance.icon, IconColor::Copper);
             }
+            Selector::Language => panic!("this appearance-only test does not select a language"),
         }
     }
     dialog.destroy()?;
@@ -364,6 +365,7 @@ fn enter_commits_a_keyboard_choice_without_extra_clicks() -> Result<()> {
         assert!(match selector {
             Selector::Theme => state.current_settings().appearance.theme == Theme::Light,
             Selector::Icon => state.current_settings().appearance.icon == IconColor::Copper,
+            Selector::Language => panic!("this appearance-only test does not select a language"),
         });
     }
     dialog.destroy()?;

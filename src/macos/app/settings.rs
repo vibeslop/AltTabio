@@ -5,7 +5,7 @@ use crate::macos::alerts::show_fatal_error;
 use crate::macos::autostart;
 use crate::macos::hotkey::HotkeySettings;
 use crate::macos::permissions;
-use crate::macos::runtime::{post_to_app, run_later};
+use crate::macos::runtime::{post_to_app, run_later, with_app};
 use crate::macos::settings_window::{SettingsEvent, SettingsWindow};
 use alttabio::settings::Settings;
 use alttabio::theme::SwitcherTokens;
@@ -36,6 +36,11 @@ impl App {
                 settings.appearance.theme = theme;
                 self.apply_settings(settings);
             }
+            SettingsEvent::Language(language) => {
+                let mut settings = self.settings.clone();
+                settings.general.language = language;
+                self.apply_settings(settings);
+            }
             SettingsEvent::Autostart(enabled) => self.set_autostart(enabled),
             SettingsEvent::OpenAccessibility => permissions::open_accessibility_settings(),
             SettingsEvent::OpenScreenRecording => permissions::open_screen_recording_settings(),
@@ -47,11 +52,26 @@ impl App {
     }
 
     fn apply_settings(&mut self, settings: Settings) {
+        let language_changed = settings.general.language != self.settings.general.language;
         let previews_turned_on = settings.appearance.preview && !self.settings.appearance.preview;
         let updates_changed = settings.general.auto_update != self.settings.general.auto_update;
         self.settings = settings;
         self.updater
             .set_automatic_updates(self.settings.general.auto_update);
+        alttabio::localization::set_language(self.settings.general.language);
+        if language_changed {
+            // Let native popups finish tracking before replacing their item titles.
+            run_later(self.mtm, || {
+                let _ = with_app(|app| {
+                    if let Some(window) = &app.settings_window {
+                        window.refresh_language();
+                    }
+                    if let Some(item) = &app.status_item {
+                        item.refresh_language(app.updater.installed_version().is_some());
+                    }
+                });
+            });
+        }
         self.hotkey_settings = hotkey_settings(&self.settings);
         self.save_settings();
         if previews_turned_on {

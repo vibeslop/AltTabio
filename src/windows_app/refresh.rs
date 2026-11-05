@@ -89,9 +89,9 @@ impl App {
             )
         };
         if timer_id == 0 {
-            return Err(format!(
-                "Could not start reliable live window-list updates: {}\n\nThe window event watcher has been disabled.",
-                Error::from_thread()
+            return Err(alttabio::localization::message(
+                "Could not start reliable live window-list updates: {error}\n\nThe window event watcher has been disabled.",
+                &[("error", &Error::from_thread().to_string())],
             ));
         }
         self.listed_refresh_retry_timer_armed = true;

@@ -3,6 +3,7 @@
 use super::DialogFonts;
 use crate::win32::wide;
 use alttabio::dialog_layout::{Rect, scale};
+use alttabio::localization::tr;
 use alttabio::settings::Settings;
 use alttabio::settings_form::{
     Control, DialogButton, REPOSITORY_URL, SELECTOR_ITEM_HEIGHT, Selector, SettingOption,
@@ -19,12 +20,12 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON,
-    CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_GETITEMHEIGHT, CB_SETCURSEL, CB_SETITEMHEIGHT,
-    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW, GetMenuState,
-    GetSystemMenu, GetWindowRect, HMENU, MF_BYCOMMAND, MoveWindow, RemoveMenu, SC_MAXIMIZE,
-    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    CB_ADDSTRING, CB_ERR, CB_GETCURSEL, CB_GETITEMHEIGHT, CB_RESETCONTENT, CB_SETCURSEL,
+    CB_SETITEMHEIGHT, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CreateWindowExW,
+    GetMenuState, GetSystemMenu, GetWindowRect, HMENU, MF_BYCOMMAND, MoveWindow, RemoveMenu,
+    SC_MAXIMIZE, SW_HIDE, SW_SHOW, SendMessageW, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_GROUP, WS_POPUP,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{Error, PCWSTR, PWSTR, Result, w};
 // SS_OWNERDRAW is otherwise exposed only by the broad SystemServices bindings.
@@ -49,6 +50,31 @@ pub(super) fn remove_maximize_command(window: HWND) -> Result<()> {
 pub(super) struct DialogControls(Vec<(Control, HWND)>, HWND);
 
 impl DialogControls {
+    pub(super) fn refresh_language(&self, parent: HWND, settings: &Settings) -> Result<()> {
+        let title = wide(tr("AltTabio Settings"));
+        // SAFETY: parent is the live Settings window and title is valid throughout this call.
+        unsafe {
+            SetWindowTextW(parent, PCWSTR(title.as_ptr()))?;
+        }
+        for (control, window) in self.iter() {
+            if let Control::Selector(selector) = control {
+                // SAFETY: this live combo has closed its popup; resetting it releases only
+                // its copied strings. The chosen value is restored from the current draft.
+                unsafe {
+                    SendMessageW(window, CB_RESETCONTENT, None, None);
+                }
+                fill_selector(window, selector, settings)?;
+            } else {
+                let text = wide(control.text());
+                // SAFETY: each child belongs to this dialog; the text is copied synchronously.
+                unsafe {
+                    SetWindowTextW(window, PCWSTR(text.as_ptr()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn create(
         parent: HWND,
         instance: HINSTANCE,

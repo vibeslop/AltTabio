@@ -2,6 +2,7 @@
 //! only while macOS still withholds something the chosen settings need.
 
 use super::{autostart, permissions};
+use alttabio::localization::{Language, tr};
 use alttabio::settings::{Settings, Theme};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -116,6 +117,7 @@ const GROUPS: &[(&str, &[SettingKey])] = &[
 pub enum SettingsEvent {
     Toggled(SettingKey, bool),
     Theme(Theme),
+    Language(Language),
     /// The launch-at-login box was clicked; carries the state the user asked for.
     Autostart(bool),
     OpenAccessibility,
@@ -128,6 +130,9 @@ pub struct ControllerIvars {
     settings: RefCell<Settings>,
     checkboxes: RefCell<Vec<(SettingKey, Retained<NSButton>)>>,
     theme: RefCell<Option<Retained<NSPopUpButton>>>,
+    language: RefCell<Option<Retained<NSPopUpButton>>>,
+    labels: RefCell<Vec<(Retained<NSTextField>, &'static str)>>,
+    permission_buttons: RefCell<Vec<Retained<NSButton>>>,
     accessibility: RefCell<Option<Retained<NSGridRow>>>,
     screen_recording: RefCell<Option<Retained<NSGridRow>>>,
     window: RefCell<Option<Retained<NSWindow>>>,
@@ -194,6 +199,17 @@ define_class!(
             (self.ivars().handler)(SettingsEvent::OpenAccessibility);
         }
 
+        #[unsafe(method(languageChanged:))]
+        fn language_changed(&self, sender: Option<&AnyObject>) {
+            let Some(popup) = sender.and_then(|sender| sender.downcast_ref::<NSPopUpButton>()) else { return; };
+            let language = usize::try_from(popup.indexOfSelectedItem()).ok().and_then(|index| Language::ALL.get(index)).copied().unwrap_or_default();
+            {
+                let mut settings = self.ivars().settings.borrow_mut();
+                settings.general.language = language;
+            }
+            (self.ivars().handler)(SettingsEvent::Language(language));
+        }
+
         #[unsafe(method(openScreenRecording:))]
         fn open_screen_recording(&self, _sender: Option<&AnyObject>) {
             (self.ivars().handler)(SettingsEvent::OpenScreenRecording);
@@ -223,6 +239,9 @@ impl SettingsController {
             settings: RefCell::new(settings),
             checkboxes: RefCell::new(Vec::new()),
             theme: RefCell::new(None),
+            language: RefCell::new(None),
+            labels: RefCell::new(Vec::new()),
+            permission_buttons: RefCell::new(Vec::new()),
             accessibility: RefCell::new(None),
             screen_recording: RefCell::new(None),
             window: RefCell::new(None),
@@ -244,6 +263,39 @@ impl SettingsController {
             theme.selectItemAtIndex(theme_index(settings.appearance.theme));
         }
         self.refresh_status();
+        self.refresh_language();
+    }
+
+    fn refresh_language(&self) {
+        for (key, button) in self.ivars().checkboxes.borrow().iter() {
+            button.setTitle(&NSString::from_str(tr(key.label())));
+        }
+        for (label, source) in self.ivars().labels.borrow().iter() {
+            label.setStringValue(&NSString::from_str(tr(source)));
+        }
+        for button in self.ivars().permission_buttons.borrow().iter() {
+            button.setTitle(&NSString::from_str(tr("Open System Settings…")));
+        }
+        if let Some(popup) = self.ivars().theme.borrow().as_ref() {
+            popup.removeAllItems();
+            for name in ["System", "Light", "Dark"] {
+                popup.addItemWithTitle(&NSString::from_str(tr(name)));
+            }
+            popup.selectItemAtIndex(theme_index(self.ivars().settings.borrow().appearance.theme));
+        }
+        if let Some(popup) = self.ivars().language.borrow().as_ref() {
+            popup.removeAllItems();
+            for language in Language::ALL {
+                popup.addItemWithTitle(&NSString::from_str(language.native_name()));
+            }
+            popup.selectItemAtIndex(language_index(
+                self.ivars().settings.borrow().general.language,
+            ));
+        }
+        if let Some(window) = self.ivars().window.borrow().as_ref() {
+            window.setTitle(&NSString::from_str(tr("AltTabio Settings")));
+        }
+        self.fit_window();
     }
 
     /// Re-reads what the system says, since permissions and login items change outside the
@@ -338,7 +390,7 @@ impl SettingsWindow {
             // SAFETY: the window is owned by SettingsWindow rather than a window controller.
             window.setReleasedWhenClosed(false);
         }
-        window.setTitle(&NSString::from_str("AltTabio Settings"));
+        window.setTitle(&NSString::from_str(tr("AltTabio Settings")));
         window.setContentView(Some(&root));
         *controller.ivars().window.borrow_mut() = Some(window.clone());
         *controller.ivars().content.borrow_mut() = Some(Retained::into_super(root));
@@ -361,6 +413,10 @@ impl SettingsWindow {
     /// Shows the permission rows for what the system reports now.
     pub fn refresh(&self) {
         self.controller.refresh_status();
+    }
+
+    pub fn refresh_language(&self) {
+        self.controller.refresh_language();
     }
 
     pub fn show(&self, settings: &Settings) {
@@ -408,20 +464,32 @@ fn form(
     *controller.ivars().screen_recording.borrow_mut() = Some(screen_recording);
 
     for (group, keys) in GROUPS {
+        let has_language = *group == "General";
+        if has_language {
+            let language = NSStackView::new(mtm);
+            language.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+            language.setAlignment(NSLayoutAttribute::FirstBaseline);
+            language.setSpacing(COLUMN_SPACING);
+            language.addArrangedSubview(&label_view(mtm, "Language", controller));
+            language.addArrangedSubview(&language_popup(mtm, settings, controller));
+            add_row(&grid, &label_view(mtm, group, controller), &language)
+                .setTopPadding(GROUP_SPACING);
+        }
         for (index, key) in keys.iter().enumerate() {
-            let label = if index == 0 {
-                label_view(mtm, group)
+            let starts_group = index == 0 && !has_language;
+            let label = if starts_group {
+                label_view(mtm, group, controller)
             } else {
                 NSGridCell::emptyContentView(mtm)
             };
             let row = add_row(&grid, &label, &checkbox(mtm, *key, settings, controller));
-            if index == 0 {
+            if starts_group {
                 row.setTopPadding(GROUP_SPACING);
             }
         }
     }
     let theme = theme_popup(mtm, settings, controller);
-    add_row(&grid, &label_view(mtm, "Appearance"), &theme).setTopPadding(GROUP_SPACING);
+    add_row(&grid, &label_view(mtm, "Appearance", controller), &theme).setTopPadding(GROUP_SPACING);
     grid
 }
 
@@ -429,11 +497,18 @@ fn add_row(grid: &NSGridView, label: &NSView, control: &NSView) -> Retained<NSGr
     grid.addRowWithViews(&NSArray::from_slice(&[label, control]))
 }
 
-fn label_view(mtm: MainThreadMarker, text: &str) -> Retained<NSView> {
-    Retained::into_super(Retained::into_super(NSTextField::labelWithString(
-        &NSString::from_str(text),
-        mtm,
-    )))
+fn label_view(
+    mtm: MainThreadMarker,
+    text: &'static str,
+    controller: &SettingsController,
+) -> Retained<NSView> {
+    let label = NSTextField::labelWithString(&NSString::from_str(tr(text)), mtm);
+    controller
+        .ivars()
+        .labels
+        .borrow_mut()
+        .push((label.clone(), text));
+    Retained::into_super(Retained::into_super(label))
 }
 
 fn checkbox(
@@ -445,7 +520,7 @@ fn checkbox(
     let button = unsafe {
         // SAFETY: the selector exists on SettingsController with a matching signature.
         NSButton::checkboxWithTitle_target_action(
-            &NSString::from_str(key.label()),
+            &NSString::from_str(tr(key.label())),
             Some(controller),
             Some(sel!(toggled:)),
             mtm,
@@ -468,7 +543,7 @@ fn theme_popup(
 ) -> Retained<NSView> {
     let popup = NSPopUpButton::new(mtm);
     for name in ["System", "Light", "Dark"] {
-        popup.addItemWithTitle(&NSString::from_str(name));
+        popup.addItemWithTitle(&NSString::from_str(tr(name)));
     }
     popup.selectItemAtIndex(theme_index(settings.appearance.theme));
     unsafe {
@@ -486,11 +561,16 @@ fn permission_row(
     mtm: MainThreadMarker,
     grid: &NSGridView,
     controller: &SettingsController,
-    name: &str,
-    note: &str,
+    name: &'static str,
+    note: &'static str,
     action: Sel,
 ) -> Retained<NSGridRow> {
-    let text = NSTextField::wrappingLabelWithString(&NSString::from_str(note), mtm);
+    let text = NSTextField::wrappingLabelWithString(&NSString::from_str(tr(note)), mtm);
+    controller
+        .ivars()
+        .labels
+        .borrow_mut()
+        .push((text.clone(), note));
     text.setSelectable(false);
     text.setFont(Some(&NSFont::systemFontOfSize(
         NSFont::smallSystemFontSize(),
@@ -500,19 +580,24 @@ fn permission_row(
     let button = unsafe {
         // SAFETY: the selector exists on SettingsController with a matching signature.
         NSButton::buttonWithTitle_target_action(
-            &NSString::from_str("Open System Settings…"),
+            &NSString::from_str(tr("Open System Settings…")),
             Some(controller),
             Some(action),
             mtm,
         )
     };
+    controller
+        .ivars()
+        .permission_buttons
+        .borrow_mut()
+        .push(button.clone());
     let column = NSStackView::new(mtm);
     column.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     column.setAlignment(NSLayoutAttribute::Leading);
     column.setSpacing(6.0);
     column.addArrangedSubview(&text);
     column.addArrangedSubview(&button);
-    let row = add_row(grid, &label_view(mtm, name), &column);
+    let row = add_row(grid, &label_view(mtm, name, controller), &column);
     row.setTopPadding(GROUP_SPACING);
     row.setHidden(true);
     row
@@ -524,6 +609,33 @@ fn control_state(on: bool) -> NSControlStateValue {
     } else {
         NSControlStateValueOff
     }
+}
+
+fn language_index(language: Language) -> isize {
+    Language::ALL
+        .iter()
+        .position(|candidate| *candidate == language)
+        .and_then(|index| isize::try_from(index).ok())
+        .unwrap_or_default()
+}
+
+fn language_popup(
+    mtm: MainThreadMarker,
+    settings: &Settings,
+    controller: &SettingsController,
+) -> Retained<NSView> {
+    let popup = NSPopUpButton::new(mtm);
+    for language in Language::ALL {
+        popup.addItemWithTitle(&NSString::from_str(language.native_name()));
+    }
+    popup.selectItemAtIndex(language_index(settings.general.language));
+    // SAFETY: the target is retained by SettingsWindow and this selector has the target/action signature.
+    unsafe {
+        popup.setTarget(Some(controller));
+        popup.setAction(Some(sel!(languageChanged:)));
+    }
+    *controller.ivars().language.borrow_mut() = Some(popup.clone());
+    Retained::into_super(Retained::into_super(Retained::into_super(popup)))
 }
 
 fn theme_index(theme: Theme) -> isize {

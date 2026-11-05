@@ -3,6 +3,7 @@
 //! in the library.
 
 use crate::process_info::{executable_path, process_started_at};
+use alttabio::localization::tr;
 use alttabio::process_identity::ProcessIdentity;
 use alttabio::window_command::WindowCommand;
 use std::ffi::c_void;
@@ -32,7 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNORMAL, SetForegroundWindow, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenu, WM_CLOSE,
 };
-use windows::core::{BSTR, Interface, PCWSTR, w};
+use windows::core::{BSTR, Interface, PCWSTR};
 
 pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
     let created = unsafe {
@@ -47,17 +48,18 @@ pub(super) fn show_menu(owner: HWND) -> Option<WindowCommand> {
         }
     };
     let items = [
-        (1, w!("Close\tF4"), WindowCommand::Close),
-        (2, w!("Minimize\tF5"), WindowCommand::Minimize),
-        (3, w!("Maximize\tF6"), WindowCommand::Maximize),
-        (4, w!("Restore\tF7"), WindowCommand::Restore),
-        (5, w!("Terminate\tF8"), WindowCommand::Terminate),
-        (6, w!("Run\tF9"), WindowCommand::Run),
+        (1, "Close\tF4", WindowCommand::Close),
+        (2, "Minimize\tF5", WindowCommand::Minimize),
+        (3, "Maximize\tF6", WindowCommand::Maximize),
+        (4, "Restore\tF7", WindowCommand::Restore),
+        (5, "Terminate\tF8", WindowCommand::Terminate),
+        (6, "Run\tF9", WindowCommand::Run),
     ];
     for (id, label, _) in &items {
+        let label = crate::win32::wide(tr(label));
         let added = unsafe {
-            // SAFETY: menu is live, ids are application-owned, and labels are static UTF-16.
-            AppendMenuW(menu.0, MF_STRING, *id, *label)
+            // SAFETY: menu is live, ids are application-owned, and the UTF-16 label lives through this copying call.
+            AppendMenuW(menu.0, MF_STRING, *id, PCWSTR(label.as_ptr()))
         };
         if let Err(error) = added {
             eprintln!("Could not add an item to the task menu: {error}");
