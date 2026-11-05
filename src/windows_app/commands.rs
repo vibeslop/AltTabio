@@ -98,15 +98,41 @@ pub(super) fn execute(
 ) -> bool {
     let window = HWND(window_handle as *mut c_void);
     match command {
-        WindowCommand::Close => close_window(window),
-        WindowCommand::Minimize => show_window(window, SW_MINIMIZE),
-        WindowCommand::Maximize => show_window(window, SW_MAXIMIZE),
-        WindowCommand::Restore => show_window(window, SW_RESTORE),
+        WindowCommand::Close
+        | WindowCommand::Minimize
+        | WindowCommand::Maximize
+        | WindowCommand::Restore => with_selected_window(
+            window,
+            process_identity,
+            |target, identity| {
+                open_selected_process(target, identity, PROCESS_QUERY_LIMITED_INFORMATION)
+            },
+            |target| match command {
+                WindowCommand::Close => close_window(target),
+                WindowCommand::Minimize => show_window(target, SW_MINIMIZE),
+                WindowCommand::Maximize => show_window(target, SW_MAXIMIZE),
+                WindowCommand::Restore => show_window(target, SW_RESTORE),
+                _ => false,
+            },
+        ),
         WindowCommand::Terminate => terminate_window_process(window, process_identity),
         WindowCommand::Run => run_window_process(window, process_identity),
         // Only the macOS chords produce these; the Windows hook never encodes them.
         WindowCommand::Quit | WindowCommand::Hide => false,
     }
+}
+
+fn with_selected_window<P>(
+    window: HWND,
+    identity: ProcessIdentity,
+    validate: impl FnOnce(HWND, ProcessIdentity) -> Option<P>,
+    action: impl FnOnce(HWND) -> bool,
+) -> bool {
+    // Keep the validated process handle alive through dispatch, just as process commands do.
+    let Some(_process) = validate(window, identity) else {
+        return false;
+    };
+    action(window)
 }
 
 fn close_window(window: HWND) -> bool {
@@ -405,6 +431,52 @@ impl Drop for OwnedMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_window_validation_prevents_command_dispatch() {
+        let window = HWND::default();
+        let identity = ProcessIdentity::new(42, 100);
+        assert!(!with_selected_window::<()>(
+            window,
+            identity,
+            |target, captured| {
+                assert_eq!(target, window);
+                assert_eq!(captured, identity);
+                None
+            },
+            |_| panic!("a stale window must not receive a command"),
+        ));
+    }
+
+    #[test]
+    fn validated_process_lives_through_window_command_dispatch() {
+        struct Guard<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let dropped = std::cell::Cell::new(false);
+        let window = HWND::default();
+        let identity = ProcessIdentity::new(42, 100);
+        assert!(with_selected_window(
+            window,
+            identity,
+            |_, _| Some(Guard(&dropped)),
+            |target| {
+                assert_eq!(target, window);
+                assert!(!dropped.get());
+                true
+            },
+        ));
+        assert!(dropped.get());
+        assert!(!with_selected_window(
+            window,
+            identity,
+            |_, _| Some(()),
+            |_| false
+        ));
+    }
 
     #[test]
     #[ignore = "requires an elevated test process and an interactive non-elevated Windows shell"]
