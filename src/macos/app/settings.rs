@@ -37,6 +37,8 @@ impl App {
         let previews_turned_on = settings.appearance.preview && !self.settings.appearance.preview;
         let updates_changed = settings.general.auto_update != self.settings.general.auto_update;
         self.settings = settings;
+        self.updater
+            .set_automatic_updates(self.settings.general.auto_update);
         self.hotkey_settings = hotkey_settings(&self.settings);
         self.save_settings();
         if previews_turned_on {
@@ -45,8 +47,13 @@ impl App {
         if updates_changed {
             if self.settings.general.auto_update {
                 self.update_check_due();
-            } else if let Some(timer) = self.update_timer.take() {
-                timer.invalidate();
+            } else {
+                if let Some(timer) = self.update_timer.take() {
+                    timer.invalidate();
+                }
+                if let Some(timer) = self.away_timer.take() {
+                    timer.invalidate();
+                }
             }
         }
         if !self.settings.appearance.preview {

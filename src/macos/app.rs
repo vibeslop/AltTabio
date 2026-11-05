@@ -172,6 +172,8 @@ impl App {
         self.observe_workspace();
         self.request_refresh();
         self.watch_front_app();
+        self.updater
+            .set_automatic_updates(self.settings.general.auto_update);
 
         if self.preview_mode {
             self.show_when_listed = true;

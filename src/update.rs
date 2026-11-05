@@ -150,9 +150,22 @@ enum Phase {
 pub struct Updater {
     phase: Phase,
     asked: bool,
+    automatic_updates_disabled: bool,
 }
 
 impl Updater {
+    /// Applies current automatic-update consent without cancelling explicitly requested work.
+    pub fn set_automatic_updates(&mut self, enabled: bool) {
+        self.automatic_updates_disabled = !enabled;
+    }
+
+    /// Recheck at execution time because a queued automatic restart can lose consent.
+    #[must_use]
+    pub fn relaunch_allowed(&self) -> bool {
+        matches!(self.phase, Phase::Installed(_))
+            && (self.asked || !self.automatic_updates_disabled)
+    }
+
     /// Observe an existing job without approving installation or an immediate restart.
     /// A manual observation of a check asks for an offer instead of silently installing.
     pub fn check_or_observe(&mut self) -> Step {
@@ -164,7 +177,7 @@ impl Updater {
 
     /// The daily check is due. It is skipped while anything else is under way.
     pub fn check_due(&mut self) -> Step {
-        if self.phase != Phase::Idle {
+        if self.phase != Phase::Idle || self.automatic_updates_disabled {
             return Step::None;
         }
         self.phase = Phase::Checking;
@@ -185,7 +198,10 @@ impl Updater {
                 self.asked = true;
                 Step::None
             }
-            Phase::Installed(_) => Step::Relaunch,
+            Phase::Installed(_) => {
+                self.asked = true;
+                Step::Relaunch
+            }
         }
     }
 
@@ -195,6 +211,9 @@ impl Updater {
         }
         self.phase = Phase::Idle;
         if !self.asked {
+            if self.automatic_updates_disabled {
+                return Step::None;
+            }
             return match result {
                 Ok(Checked::Available(update)) => {
                     self.phase = Phase::Installing(update.version);
@@ -249,7 +268,7 @@ impl Updater {
     /// unnoticed.
     #[must_use]
     pub fn user_away(&self) -> Step {
-        if matches!(self.phase, Phase::Installed(_)) {
+        if self.relaunch_allowed() {
             Step::Relaunch
         } else {
             Step::None
@@ -528,5 +547,84 @@ mod tests {
         assert_eq!(updater.user_away(), Step::None);
         updater.check_due();
         assert_eq!(updater.offer_answered(update("1.2.0"), true), Step::None);
+    }
+
+    #[test]
+    fn disabling_automatic_updates_during_a_check_prevents_installation() {
+        let mut updater = Updater::default();
+        assert_eq!(updater.check_due(), Step::Check);
+        updater.set_automatic_updates(false);
+        assert_eq!(
+            updater.checked(Ok(Checked::Available(update("1.2.0")))),
+            Step::None
+        );
+        assert_eq!(updater.check_due(), Step::None);
+        updater.set_automatic_updates(true);
+        assert_eq!(updater.check_due(), Step::Check);
+    }
+
+    #[test]
+    fn disabling_during_installation_revokes_automatic_restart() {
+        let mut updater = Updater::default();
+        updater.check_due();
+        updater.checked(Ok(Checked::Available(update("1.2.0"))));
+        updater.set_automatic_updates(false);
+        assert_eq!(updater.installed(Ok(())), Step::None);
+        assert_eq!(updater.user_away(), Step::None);
+        assert!(!updater.relaunch_allowed());
+        assert_eq!(updater.requested(), Step::Relaunch);
+        assert!(updater.relaunch_allowed());
+    }
+
+    #[test]
+    fn disabling_after_restart_was_queued_revokes_execution_permission() {
+        let mut updater = Updater::default();
+        updater.check_due();
+        updater.checked(Ok(Checked::Available(update("1.2.0"))));
+        updater.installed(Ok(()));
+        assert_eq!(updater.user_away(), Step::Relaunch);
+        updater.set_automatic_updates(false);
+        assert!(!updater.relaunch_allowed());
+    }
+
+    #[test]
+    fn manual_installation_still_relaunches_with_automatic_updates_disabled() {
+        let mut updater = Updater::default();
+        updater.set_automatic_updates(false);
+        assert_eq!(updater.check_or_observe(), Step::Check);
+        assert_eq!(
+            updater.checked(Ok(Checked::Available(update("1.2.0")))),
+            Step::Offer(update("1.2.0"))
+        );
+        assert_eq!(
+            updater.offer_answered(update("1.2.0"), true),
+            Step::Install(update("1.2.0"))
+        );
+        assert_eq!(updater.installed(Ok(())), Step::Relaunch);
+        assert!(updater.relaunch_allowed());
+    }
+
+    #[test]
+    fn observing_an_automatic_install_does_not_approve_immediate_restart() {
+        let mut updater = Updater::default();
+        updater.check_due();
+        updater.checked(Ok(Checked::Available(update("1.2.0"))));
+        assert_eq!(updater.check_or_observe(), Step::None);
+        assert_eq!(updater.installed(Ok(())), Step::None);
+        updater.set_automatic_updates(false);
+        assert_eq!(updater.user_away(), Step::None);
+    }
+
+    #[test]
+    fn reenabling_during_a_check_does_not_start_an_overlapping_check() {
+        let mut updater = Updater::default();
+        updater.check_due();
+        updater.set_automatic_updates(false);
+        updater.set_automatic_updates(true);
+        assert_eq!(updater.check_due(), Step::None);
+        assert_eq!(
+            updater.checked(Ok(Checked::Available(update("1.2.0")))),
+            Step::Install(update("1.2.0"))
+        );
     }
 }
