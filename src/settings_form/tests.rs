@@ -1,5 +1,73 @@
 use super::*;
 use crate::dialog_layout::{Size, scale};
+
+#[test]
+fn language_choices_preserve_native_names_and_stable_storage() {
+    let _preview = crate::localization::PreviewLanguage::new(Language::Russian);
+    assert_eq!(
+        Selector::Language.entries(),
+        ["Системный", "English", "Русский", "简体中文"]
+    );
+    assert_eq!(
+        Control::Selector(Selector::Language).category(),
+        Some(Category::General)
+    );
+    for language in Language::ALL {
+        let mut settings = Settings::default();
+        settings.general.language = language;
+        let document = crate::settings::SettingsDocument::parse("[Plugin]\nKeep=yes\n");
+        let rendered = document.render(&settings);
+        assert!(rendered.contains("Keep=yes"));
+        assert_eq!(rendered.matches("Language=").count(), 1);
+        assert_eq!(
+            crate::settings::SettingsDocument::parse(&rendered).settings(),
+            settings
+        );
+        assert_eq!(
+            LANGUAGE_CHOICES.value_at(Selector::Language.index(&settings)),
+            language
+        );
+    }
+    assert_eq!(
+        crate::settings::SettingsDocument::parse("[General]\nLanguage=unknown\n")
+            .settings()
+            .general
+            .language,
+        Language::System
+    );
+    assert_eq!(
+        crate::settings::SettingsDocument::default()
+            .settings()
+            .general
+            .language,
+        Language::System
+    );
+}
+
+#[test]
+fn settings_copy_is_translated_in_both_supported_translations() {
+    let _english = crate::localization::PreviewLanguage::new(Language::English);
+    let sources: Vec<_> = Control::all()
+        .map(Control::text)
+        .chain(Category::ALL.into_iter().map(Category::intro))
+        .chain(SettingOption::ALL.into_iter().map(SettingOption::help))
+        .chain(Selector::Theme.entries())
+        .chain(Selector::Icon.entries())
+        .collect();
+    for language in [Language::Russian, Language::SimplifiedChinese] {
+        for source in &sources {
+            if source.is_empty() || matches!(*source, "GitHub" | "Copyright (c) 2026 VibeSlop") {
+                continue;
+            }
+            assert_ne!(
+                language.translate(source),
+                *source,
+                "missing {language:?} settings translation: {source}"
+            );
+        }
+    }
+}
+
 #[test]
 fn every_checkbox_reads_only_its_bound_setting() {
     let fields: [fn(&mut Settings) -> &mut bool; 16] = [

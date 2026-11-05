@@ -42,6 +42,7 @@ mod task_icon;
 mod task_query;
 #[cfg(windows)]
 mod tray;
+mod ui_language;
 #[cfg(windows)]
 mod update_window;
 #[cfg(windows)]
@@ -54,6 +55,7 @@ mod windows_app;
 mod windows_updater;
 
 fn main() {
+    ui_language::initialize_system();
     let arguments = std::env::args_os().collect::<Vec<_>>();
     run(&arguments);
 }
@@ -81,6 +83,7 @@ fn run(arguments: &[std::ffi::OsString]) {
     {
         settings.appearance.full_desktop_preview = true;
     }
+    alttabio::localization::set_language(settings.general.language);
     if let Err(error) = windows_app::run(preview_mode, dwm_preview, settings, settings_store) {
         windows_app::show_fatal_error(&error.to_string());
     }

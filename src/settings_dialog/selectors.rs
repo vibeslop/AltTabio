@@ -189,12 +189,17 @@ pub(super) fn paint_entry(
         Selector::Theme => {
             paint_theme_preview(dc, preview, THEME_CHOICES.value_at(index), state.dpi)?;
         }
+        Selector::Language => {}
     }
     draw_text_with_font(
         dc,
         label,
         RECT {
-            left: preview.right + padding,
+            left: if selector == Selector::Language {
+                rect.left + padding
+            } else {
+                preview.right + padding
+            },
             right: rect.right - padding,
             ..rect
         },

@@ -1,3 +1,4 @@
+use alttabio::localization::message;
 use alttabio::settings::{Settings, SettingsDocument};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -30,9 +31,12 @@ impl SettingsStore {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => {
-                return Err(format!(
-                    "Could not read settings from {}: {error}",
-                    path.display()
+                return Err(message(
+                    "Could not read settings from {path}: {error}",
+                    &[
+                        ("path", &path.display().to_string()),
+                        ("error", &error.to_string()),
+                    ],
                 ));
             }
         };
@@ -54,10 +58,13 @@ impl SettingsStore {
         write_and_sync: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
     ) -> Result<(), String> {
         let rendered = self.document.render(settings);
-        let save_error = |error| {
-            format!(
-                "Could not save settings to {}: {error}",
-                self.path.display()
+        let save_error = |error: io::Error| {
+            message(
+                "Could not save settings to {path}: {error}",
+                &[
+                    ("path", &self.path.display().to_string()),
+                    ("error", &error.to_string()),
+                ],
             )
         };
         let (temporary_path, mut file) =

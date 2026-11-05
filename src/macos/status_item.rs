@@ -92,6 +92,19 @@ pub struct StatusItem {
 }
 
 impl StatusItem {
+    pub fn refresh_language(&self, installed: bool) {
+        for (index, source) in [
+            (2, "Open Switcher"),
+            (3, "Settings…"),
+            (4, "About AltTabio"),
+            (7, "Quit AltTabio"),
+        ] {
+            if let Some(item) = self._menu.itemAtIndex(index) {
+                item.setTitle(&NSString::from_str(alttabio::localization::tr(source)));
+            }
+        }
+        self.set_update_installed(installed);
+    }
     /// Names the update command for whether an installed update waits for a relaunch.
     pub fn set_update_installed(&self, installed: bool) {
         let title = if installed {
@@ -99,7 +112,8 @@ impl StatusItem {
         } else {
             CHECK_FOR_UPDATES
         };
-        self.update.setTitle(&NSString::from_str(title));
+        self.update
+            .setTitle(&NSString::from_str(alttabio::localization::tr(title)));
     }
 }
 
@@ -176,7 +190,7 @@ fn menu_item(
         // SAFETY: every selector passed here exists on MenuTarget with a matching signature.
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
-            &NSString::from_str(title),
+            &NSString::from_str(alttabio::localization::tr(title)),
             action,
             &NSString::from_str(key),
         )

@@ -1,4 +1,5 @@
 //! Presentation of update work, independent of native windows and worker ownership.
+use crate::localization::{message, tr};
 use crate::update::{Update, Version};
 use std::time::SystemTime;
 
@@ -97,24 +98,34 @@ impl Status {
             Self::Checking => {
                 view.title = "Checking for updates…".into();
                 view.body = "Looking for a newer version of AltTabio.".into();
-                view.note = format!("Installed version {version}");
+                view.note = message("Installed version {version}", &[("version", version)]);
                 view.progress = Some(None);
             }
             Self::Current(checked) => {
                 view.title = "You’re up to date".into();
-                view.body = format!("AltTabio {version} is the latest version.");
+                view.body = message(
+                    "AltTabio {version} is the latest version.",
+                    &[("version", version)],
+                );
                 let minutes = checked.elapsed().unwrap_or_default().as_secs() / 60;
                 view.note = if minutes == 0 {
                     "Checked just now".into()
                 } else {
-                    format!("Checked {minutes} min ago")
+                    message(
+                        "Checked {minutes} min ago",
+                        &[("minutes", &minutes.to_string())],
+                    )
                 };
                 view.primary = Some(("Check again", Command::Check));
             }
             Self::Available(update) => {
-                view.title = format!("AltTabio {} is available", update.version);
-                view.body = format!(
-                    "You have version {version}. Installing this update will restart AltTabio."
+                view.title = message(
+                    "AltTabio {version} is available",
+                    &[("version", &update.version.to_string())],
+                );
+                view.body = message(
+                    "You have version {version}. Installing this update will restart AltTabio.",
+                    &[("version", version)],
                 );
                 view.note = "Your settings will be kept.".into();
                 view.primary = Some(("Install and restart", Command::Install));
@@ -126,11 +137,13 @@ impl Status {
                 view.note = if *total == 0 {
                     "You can hide this window. The update will continue.".into()
                 } else {
-                    format!(
-                        "{:.1} MB of {:.1} MB  ({}%)",
-                        megabytes(*received),
-                        megabytes(*total),
-                        percentage(*received, *total)
+                    message(
+                        "{received} MB of {total} MB  ({percent}%)",
+                        &[
+                            ("received", &format!("{:.1}", megabytes(*received))),
+                            ("total", &format!("{:.1}", megabytes(*total))),
+                            ("percent", &percentage(*received, *total).to_string()),
+                        ],
                     )
                 };
                 view.progress = Some((*total != 0).then(|| percentage(*received, *total)));
@@ -152,7 +165,10 @@ impl Status {
             }
             Self::Ready(ready) => {
                 view.title = "Update ready to install".into();
-                view.body = format!("AltTabio {ready} has been downloaded and verified.");
+                view.body = message(
+                    "AltTabio {version} has been downloaded and verified.",
+                    &[("version", &ready.to_string())],
+                );
                 view.note = if automatic {
                     "If you choose Later, AltTabio will restart when you’re away."
                 } else {
@@ -189,7 +205,10 @@ impl Status {
                     }
                 }
                 .into();
-                view.note = format!("You’re still on version {version}.");
+                view.note = message(
+                    "You’re still on version {version}.",
+                    &[("version", version)],
+                );
                 view.detail.clone_from(detail);
                 view.primary = Some(match stage {
                     None => ("Try again", Command::Check),
@@ -202,15 +221,17 @@ impl Status {
             }
             Self::Blocked { version, detail } => {
                 view.title = "Can’t install this update".into();
-                view.body = format!(
-                    "AltTabio {version} is available, but this folder allows other apps to replace AltTabio."
+                view.body = message(
+                    "AltTabio {version} is available, but this folder allows other apps to replace AltTabio.",
+                    &[("version", &version.to_string())],
                 );
                 // Permission-query failures must not be misrepresented as a writable folder.
                 if !detail
                     .starts_with("Updates are disabled because non-elevated processes can replace")
                 {
-                    view.body = format!(
-                        "AltTabio {version} is available, but the installation folder could not be checked."
+                    view.body = message(
+                        "AltTabio {version} is available, but the installation folder could not be checked.",
+                        &[("version", &version.to_string())],
                     );
                 }
                 view.note =
@@ -225,6 +246,11 @@ impl Status {
                 view.primary = Some(("View releases", Command::Releases));
             }
         }
+        view.title = tr(&view.title).to_owned();
+        view.body = tr(&view.body).to_owned();
+        view.note = tr(&view.note).to_owned();
+        view.primary = view.primary.map(|(label, command)| (tr(label), command));
+        view.close = tr(view.close);
         view
     }
 
@@ -257,6 +283,54 @@ fn megabytes(bytes: u64) -> f64 {
 mod tests {
     use super::*;
     use crate::update::{Checked, Step, Updater};
+
+    #[test]
+    fn translated_updates_preserve_commands_versions_progress_and_diagnostic_details() {
+        use crate::localization::{Language, PreviewLanguage};
+        let version = update().version;
+        let statuses = [
+            Status::Checking,
+            Status::Current(SystemTime::now()),
+            Status::Available(update()),
+            Status::Downloading {
+                received: 50,
+                total: 100,
+            },
+            Status::Verifying,
+            Status::Preparing,
+            Status::Ready(version),
+            Status::Restarting,
+            Status::Failed {
+                stage: Some(Stage::Verify),
+                detail: "diagnostic {version}".into(),
+            },
+            Status::Blocked {
+                version,
+                detail: "diagnostic {version}".into(),
+            },
+            Status::LocalBuild,
+        ];
+        let preview = PreviewLanguage::new(Language::English);
+        for status in statuses {
+            preview.set(Language::English);
+            let english = status.view("1.3.0", true, false);
+            for language in [Language::Russian, Language::SimplifiedChinese] {
+                preview.set(language);
+                let view = status.view("1.3.0", true, false);
+                assert_ne!(view.title, english.title);
+                assert_ne!(view.body, english.body);
+                assert_ne!(view.close, english.close);
+                assert_eq!(view.detail, english.detail);
+                assert_eq!(view.progress, english.progress);
+                assert_eq!(
+                    view.primary.map(|(_, command)| command),
+                    english.primary.map(|(_, command)| command)
+                );
+                assert!(!view.body.contains("{version}"));
+                assert!(!view.note.contains("{version}"));
+            }
+        }
+    }
 
     fn update() -> Update {
         Update {

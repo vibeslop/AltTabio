@@ -75,6 +75,7 @@ pub fn run(arguments: &[OsString]) {
         }
     };
 
+    alttabio::localization::set_language(settings.general.language);
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 

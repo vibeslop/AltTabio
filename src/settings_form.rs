@@ -3,6 +3,7 @@ mod layout;
 pub use layout::{SettingsLayout, SettingsPages};
 
 use crate::dialog_layout::{Rect, scale};
+use crate::localization::{Language, tr};
 use crate::settings::{IconColor, Settings, Theme};
 
 pub const SELECTOR_ITEM_HEIGHT: i32 = 32;
@@ -64,7 +65,7 @@ impl Control {
     pub const fn category(self) -> Option<Category> {
         match self {
             Self::Section(section) => Some(section.category()),
-            Self::Label(_) | Self::Selector(_) => Some(Category::Appearance),
+            Self::Label(selector) | Self::Selector(selector) => Some(selector.category()),
             Self::Checkbox(option) | Self::Warning(option) => Some(option.category()),
             Self::AboutIdentity
             | Self::AboutDescription
@@ -89,8 +90,8 @@ impl Control {
     }
 
     #[must_use]
-    pub const fn text(self) -> &'static str {
-        match self {
+    pub fn text(self) -> &'static str {
+        tr(match self {
             Self::SidebarTitle => "Settings",
             Self::Navigation(category) => category.title(),
             Self::Section(section) => section.title(),
@@ -105,7 +106,7 @@ impl Control {
             Self::Button(DialogButton::Ok) => "Save changes",
             Self::Button(DialogButton::Cancel) => "Cancel",
             _ => "",
-        }
+        })
     }
 
     #[must_use]
@@ -159,27 +160,27 @@ impl Category {
     }
 
     #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
+    pub fn title(self) -> &'static str {
+        tr(match self {
             Self::General => "General",
             Self::Switching => "Switching",
             Self::Appearance => "Appearance",
             Self::Display => "Display",
             Self::Experimental => "Experimental",
             Self::About => "About",
-        }
+        })
     }
 
     #[must_use]
-    pub const fn intro(self) -> &'static str {
-        match self {
-            Self::General => "Startup and updates.",
+    pub fn intro(self) -> &'static str {
+        tr(match self {
+            Self::General => "Startup, language, and updates.",
             Self::Switching => "Choose how you move between windows.",
             Self::Appearance => "The look of your switcher.",
             Self::Display => "Windows across your monitors.",
             Self::Experimental => "These features may not work reliably.",
             Self::About => "",
-        }
+        })
     }
 
     #[must_use]
@@ -194,7 +195,12 @@ impl Category {
             ReplaceWinTab, ShowAppNames, ShowNumbers, TypedSearch, VisibleBorders,
         };
         match self {
-            Self::General => &[C(Autostart), C(AutoUpdate)],
+            Self::General => &[
+                Label(Selector::Language),
+                D(Selector::Language),
+                C(Autostart),
+                C(AutoUpdate),
+            ],
             Self::Switching => &[
                 S(Section::Keyboard),
                 C(ReplaceAltTab),
@@ -253,13 +259,13 @@ impl Section {
     }
 
     #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
+    pub fn title(self) -> &'static str {
+        tr(match self {
             Self::Keyboard => "Keyboard",
             Self::Mouse => "Mouse",
             Self::WindowList => "Window list",
             Self::Preview => "Preview",
-        }
+        })
     }
 }
 
@@ -280,7 +286,7 @@ macro_rules! setting_options {
         impl SettingOption {
             pub const ALL: [Self; OPTION_COUNT] = [$( Self::$name, )+];
             #[must_use]
-            pub const fn label(self) -> &'static str { match self { $(Self::$name => $label,)+ } }
+            pub fn label(self) -> &'static str { tr(match self { $(Self::$name => $label,)+ }) }
             #[must_use]
             pub const fn category(self) -> Category { match self { $(Self::$name => Category::$category,)+ } }
             #[must_use]
@@ -312,25 +318,25 @@ setting_options! {
 
 impl SettingOption {
     #[must_use]
-    pub const fn help(self) -> &'static str {
-        match self {
+    pub fn help(self) -> &'static str {
+        tr(match self {
             Self::AutoUpdate => "Check for and install updates automatically.",
             Self::TypedSearch => "Find a window by typing while the switcher is open.",
             Self::MouseOverSelection => "Select a window when the pointer moves over it.",
             Self::FullDesktopPreview => "Show the window where it sits on the desktop.",
             Self::RmbWheelSwitching => "Hold RMB and scroll up or down to switch windows.",
             _ => "",
-        }
+        })
     }
 
     #[must_use]
-    pub const fn warning(self) -> &'static str {
-        match self {
+    pub fn warning(self) -> &'static str {
+        tr(match self {
             Self::RmbWheelSwitching => {
                 "In some applications, the switcher may open slowly or fail to open. May also interfere with context menus or mouse gestures."
             }
             _ => "",
-        }
+        })
     }
 }
 
@@ -342,7 +348,7 @@ pub struct Choices<T: 'static> {
 
 impl<T: Copy + Default + PartialEq> Choices<T> {
     fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.values.iter().map(|value| (self.name)(*value))
+        self.values.iter().map(|value| tr((self.name)(*value)))
     }
 
     #[must_use]
@@ -368,19 +374,33 @@ pub const ICON_CHOICES: Choices<IconColor> = Choices {
     values: &IconColor::ALL,
     name: IconColor::as_ini_value,
 };
+pub const LANGUAGE_CHOICES: Choices<Language> = Choices {
+    values: &Language::ALL,
+    name: Language::native_name,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Selector {
     Theme,
     Icon,
+    Language,
 }
 
 impl Selector {
     #[must_use]
-    const fn label(self) -> &'static str {
-        match self {
+    fn label(self) -> &'static str {
+        tr(match self {
             Self::Theme => "Theme",
             Self::Icon => "App icon",
+            Self::Language => "Language",
+        })
+    }
+
+    #[must_use]
+    pub const fn category(self) -> Category {
+        match self {
+            Self::Language => Category::General,
+            Self::Theme | Self::Icon => Category::Appearance,
         }
     }
 
@@ -389,6 +409,7 @@ impl Selector {
         match self {
             Self::Theme => 200,
             Self::Icon => 201,
+            Self::Language => 202,
         }
     }
 
@@ -397,6 +418,7 @@ impl Selector {
         match self {
             Self::Theme => THEME_CHOICES.names().collect(),
             Self::Icon => ICON_CHOICES.names().collect(),
+            Self::Language => LANGUAGE_CHOICES.names().collect(),
         }
     }
 
@@ -406,6 +428,7 @@ impl Selector {
         match self {
             Self::Theme => THEME_CHOICES.index_of(settings.appearance.theme),
             Self::Icon => ICON_CHOICES.index_of(settings.appearance.icon),
+            Self::Language => LANGUAGE_CHOICES.index_of(settings.general.language),
         }
     }
 }

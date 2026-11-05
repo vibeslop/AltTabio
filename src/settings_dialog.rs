@@ -3,6 +3,8 @@ mod controls;
 mod drawing;
 #[cfg(test)]
 mod dropdown_tests;
+#[cfg(test)]
+mod language_tests;
 mod navigation;
 #[cfg(test)]
 #[path = "settings_dialog/tests.rs"]
@@ -23,10 +25,11 @@ use crate::{
 };
 use alttabio::dialog_layout::{Size, known_dpi};
 use alttabio::failure_run::SharedFailureRun;
+use alttabio::localization::{Language, PreviewLanguage};
 use alttabio::settings::{IconColor, Settings, Theme};
 use alttabio::settings_form::{
-    Category, Choices, Control, DialogButton, ICON_CHOICES, MIN_CLIENT_HEIGHT, MIN_CLIENT_WIDTH,
-    Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
+    Category, Choices, Control, DialogButton, ICON_CHOICES, LANGUAGE_CHOICES, MIN_CLIENT_HEIGHT,
+    MIN_CLIENT_WIDTH, Selector, SettingOption, SettingsLayout, SettingsPages, THEME_CHOICES,
 };
 use alttabio::theme::ResolvedTheme;
 use controls::{DialogControls, is_checked, selected_index};
@@ -176,6 +179,7 @@ struct DialogState {
     palette: ThemePalette,
     dark_mode_api: Option<DarkModeApi>,
     settings: Settings,
+    language_preview: PreviewLanguage,
     instance: HINSTANCE,
     dpi: u32,
     client: Size,
@@ -183,7 +187,7 @@ struct DialogState {
     hovered: Rc<Cell<HWND>>,
     accepted: bool,
     pending_previews: u8,
-    dropdown_selection: [Option<usize>; 2],
+    dropdown_selection: [Option<usize>; 3],
     /// Shared across snapshots so repeated paint failures are logged only once.
     begin_paint_failures: Rc<SharedFailureRun>,
 }
@@ -222,6 +226,7 @@ impl DialogState {
             paint: paint_state::PaintCache::default(),
             palette: ThemePalette::new(false),
             dark_mode_api,
+            language_preview: PreviewLanguage::new(settings.general.language),
             settings,
             instance,
             dpi,
@@ -230,7 +235,7 @@ impl DialogState {
             hovered: Rc::new(Cell::new(HWND::default())),
             accepted: false,
             pending_previews: 0,
-            dropdown_selection: [None; 2],
+            dropdown_selection: [None; 3],
             begin_paint_failures: Rc::new(SharedFailureRun::default()),
         }
     }
@@ -249,6 +254,7 @@ impl DialogState {
         self.apply_selected_theme();
         self.resize()?;
         self.select_category(Category::General)?;
+        self.apply_selected_language()?;
         self.sync_save_enabled();
         Ok(())
     }
@@ -285,6 +291,21 @@ impl DialogState {
 
     fn selected_icon(&self) -> IconColor {
         self.selected(Selector::Icon, &ICON_CHOICES, self.settings.appearance.icon)
+    }
+
+    fn selected_language(&self) -> Language {
+        self.selected(
+            Selector::Language,
+            &LANGUAGE_CHOICES,
+            self.settings.general.language,
+        )
+    }
+
+    fn apply_selected_language(&mut self) -> Result<()> {
+        self.language_preview.set(self.selected_language());
+        let settings = self.current_settings();
+        self.controls.refresh_language(self.hwnd, &settings)?;
+        self.select_category(self.pages.category)
     }
 
     fn apply_selected_theme(&mut self) {
@@ -342,6 +363,7 @@ impl DialogState {
         }
         settings.appearance.icon = self.selected_icon();
         settings.appearance.theme = self.selected_theme();
+        settings.general.language = self.selected_language();
         settings
     }
 
@@ -389,6 +411,11 @@ impl DialogState {
         match selector {
             Selector::Theme => self.apply_selected_theme(),
             Selector::Icon => self.apply_selected_icon(),
+            Selector::Language => {
+                if let Err(error) = self.apply_selected_language() {
+                    eprintln!("Could not preview the settings language: {error}");
+                }
+            }
         }
         self.sync_save_enabled();
         self.redraw();
@@ -401,6 +428,7 @@ const fn selector_preview_bit(selector: Selector) -> u8 {
     match selector {
         Selector::Theme => 0b01,
         Selector::Icon => 0b10,
+        Selector::Language => 0b100,
     }
 }
 

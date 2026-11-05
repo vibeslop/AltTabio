@@ -111,9 +111,14 @@ fn menu_entries(window: bool, app_name: &str) -> Vec<Option<(isize, String, &'st
             entries.push(None);
         }
         let title = if item.on_window {
-            item.title.to_owned()
+            alttabio::localization::tr(item.title).to_owned()
         } else {
-            format!("{} {app_name}", item.title)
+            let template = match item.command {
+                WindowCommand::Hide => "Hide {app}",
+                WindowCommand::Quit => "Quit {app}",
+                _ => "Force Quit {app}",
+            };
+            alttabio::localization::message(template, &[("app", app_name)])
         };
         let tag = isize::try_from(index + 1).unwrap_or_default();
         entries.push(Some((tag, title, item.key)));

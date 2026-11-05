@@ -255,6 +255,10 @@ impl UpdateWindow {
     }
 
     pub(crate) fn refresh(&mut self, view: View, theme: Theme) -> Result<()> {
+        set_text(
+            self.dialog.window(),
+            alttabio::localization::tr("AltTabio updates"),
+        )?;
         if self.theme != theme {
             self.theme = theme;
             self.apply_theme()?;
@@ -330,7 +334,18 @@ impl UpdateWindow {
         }
         self.fonts = vec![heading, body, small];
         let extra = if self.details_open { 120 } else { 0 };
-        let size = FRAME.window_size(Size::new(470, 300 + extra).scaled(self.dpi), self.dpi)?;
+        // Russian action labels name both installation and restart. Keep their full wording.
+        let (wider, primary_extra, close_extra) = if alttabio::localization::current_language()
+            == alttabio::localization::Language::Russian
+        {
+            (116, 100, 16)
+        } else {
+            (0, 0, 0)
+        };
+        let size = FRAME.window_size(
+            Size::new(470 + wider, 300 + extra).scaled(self.dpi),
+            self.dpi,
+        )?;
         // SAFETY: retain position/z-order/focus; only resize this owned window.
         unsafe {
             SetWindowPos(
@@ -344,16 +359,16 @@ impl UpdateWindow {
             )
         }?;
         for (index, (x, y, width, height)) in [
-            (28, 26, 414, 34),
-            (28, 72, 414, 52),
-            (28, 155, 414, 44),
-            (28, 135, 414, 5),
-            (28, 135, 414, 5),
-            (220, 238 + extra, 150, 34),
-            (378, 238 + extra, 64, 34),
-            (28, 201, 150, 28),
-            (28, 238, 414, 108),
-            (0, 0, 470, 300 + extra),
+            (28, 26, 414 + wider, 34),
+            (28, 72, 414 + wider, 52),
+            (28, 155, 414 + wider, 44),
+            (28, 135, 414 + wider, 5),
+            (28, 135, 414 + wider, 5),
+            (220, 238 + extra, 150 + primary_extra, 34),
+            (378 + primary_extra, 238 + extra, 64 + close_extra, 34),
+            (28, 201, 150 + wider, 28),
+            (28, 238, 414 + wider, 108),
+            (0, 0, 470 + wider, 300 + extra),
         ]
         .into_iter()
         .enumerate()
@@ -387,11 +402,11 @@ impl UpdateWindow {
         }
         set_text(
             self.controls[7],
-            if self.details_open {
+            alttabio::localization::tr(if self.details_open {
                 "Hide details"
             } else {
                 "Technical details"
-            },
+            }),
         )?;
         // SAFETY: the full owned window is invalidated after layout, without synchronous paint.
         unsafe { InvalidateRect(Some(self.dialog.window()), None, true) }.ok()
