@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,8 +19,9 @@ use windows::Win32::Security::{
     TokenElevation,
 };
 use windows::Win32::Storage::FileSystem::{
-    DELETE, FILE_ADD_FILE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
+    DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ALL_ACCESS, FILE_APPEND_DATA,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+    FILE_GENERIC_WRITE, FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::TaskScheduler::{ITaskFolder, ITaskService, TaskScheduler};
@@ -32,6 +34,9 @@ use windows::core::{BOOL, BSTR, HRESULT, PCWSTR};
 
 mod migration;
 pub(crate) use migration::repair_legacy_task_timeout;
+
+#[cfg(test)]
+mod path_security_tests;
 
 /// Reads only this installation's task. The caller must initialize COM on this thread.
 pub fn status() -> Result<AutostartState, String> {
@@ -210,18 +215,66 @@ fn token_is_elevated(token: HANDLE) -> Result<bool, String> {
 }
 
 fn executable_is_replaceable(executable: &Path, token: HANDLE) -> Result<bool, String> {
-    let parent = executable
-        .parent()
-        .ok_or_else(|| "The AltTabio executable has no parent folder".to_owned())?;
-    let file_write = token_has_access(executable, token, FILE_WRITE_DATA.0)?
-        || token_has_access(executable, token, WRITE_DAC.0)?
-        || token_has_access(executable, token, WRITE_OWNER.0)?;
-    let file_delete = token_has_access(executable, token, DELETE.0)?;
-    let parent_add = token_has_access(parent, token, FILE_ADD_FILE.0)?;
-    let parent_delete = token_has_access(parent, token, FILE_DELETE_CHILD.0)?;
-    let parent_controls_acl = token_has_access(parent, token, WRITE_DAC.0)?
-        || token_has_access(parent, token, WRITE_OWNER.0)?;
-    Ok(file_write || parent_controls_acl || (parent_add && (file_delete || parent_delete)))
+    if !executable.is_absolute() || executable.file_name().is_none() {
+        return Err("The AltTabio executable path must be an absolute file path".to_owned());
+    }
+    // Check the original name before resolving it: canonicalization would otherwise hide a
+    // junction or symbolic link that an unelevated process could redirect later.
+    if path_chain_is_replaceable(executable, token)? {
+        return Ok(true);
+    }
+    let resolved = std::fs::canonicalize(executable)
+        .map_err(|error| format!("Could not resolve the installation path: {error}"))?;
+    // Drive aliases can resolve to a different directory chain. Both names must be protected.
+    path_chain_is_replaceable(&resolved, token)
+}
+
+fn path_chain_is_replaceable(executable: &Path, token: HANDLE) -> Result<bool, String> {
+    for component in executable.ancestors() {
+        if path_component_is_replaceable(component, token)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn path_component_is_replaceable(path: &Path, token: HANDLE) -> Result<bool, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Could not inspect installation path {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Err(format!(
+            "The installation path contains a reparse point: {}. Use a protected folder without links or mounted folders.",
+            path.display()
+        ));
+    }
+    if token_has_access(path, token, WRITE_DAC.0)? || token_has_access(path, token, WRITE_OWNER.0)?
+    {
+        return Ok(true);
+    }
+    let directory = metadata.is_dir();
+    if !directory
+        && (token_has_access(path, token, FILE_WRITE_DATA.0)?
+            || token_has_access(path, token, FILE_APPEND_DATA.0)?)
+    {
+        return Ok(true);
+    }
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    // A directory can be renamed/replaced without touching the executable's own ACL. Creation
+    // of unrelated siblings alone is safe; replacement also requires deleting this component.
+    let add = if directory {
+        FILE_ADD_SUBDIRECTORY
+    } else {
+        FILE_ADD_FILE
+    };
+    Ok(token_has_access(parent, token, add.0)?
+        && (token_has_access(path, token, DELETE.0)?
+            || token_has_access(parent, token, FILE_DELETE_CHILD.0)?))
 }
 
 fn token_has_access(path: &Path, token: HANDLE, desired_access: u32) -> Result<bool, String> {
