@@ -40,7 +40,10 @@ jobs:
           codesign --verify --deep --strict target/mac/AltTabio.app
 
       - name: Check the install script
-        run: sh -n docs/install.sh
+        run: |
+          sh -n docs/install.sh
+          sh -n scripts/mac/test-installer.sh
+          sh scripts/mac/test-installer.sh
 
   verify:
     runs-on: windows-latest

@@ -11,6 +11,8 @@
 set -eu
 
 repo=vibeslop/AltTabio
+# Keep this standalone installer aligned with scripts/mac/release-certificate.sha1.
+release_certificate=617A82407E9767025EDE4A62A9B990ADEA21F53B
 
 # Reads the GitHub API's release list on stdin and prints the tag of the newest published release
 # that carries a macOS archive, and the archive's URL. Windows and macOS share releases, so the
@@ -62,6 +64,13 @@ cleanup() {
     [ -z "$work" ] || rm -rf "$work"
 }
 
+# Reject untrusted downloads before changing the installed copy.
+verify_bundle() {
+    codesign --verify --deep --strict \
+        -R "=identifier \"com.vibeslop.AltTabio\" and certificate leaf = H\"$release_certificate\"" "$1" ||
+        fail "the downloaded AltTabio.app fails its signature or release identity check; nothing was changed."
+}
+
 main() {
     macos=$(sw_vers -productVersion)
     if [ "${macos%%.*}" -lt 26 ]; then
@@ -87,9 +96,7 @@ main() {
     curl -fL --progress-bar -o "$work/AltTabio.zip" "$url" || fail "could not download $url."
     ditto -x -k "$work/AltTabio.zip" "$work" || fail "the download is not a readable archive."
     [ -d "$work/AltTabio.app" ] || fail "the download holds no AltTabio.app."
-    # A damaged download fails here, before anything is replaced.
-    codesign --verify --deep --strict "$work/AltTabio.app" ||
-        fail "the downloaded AltTabio.app fails its signature check; nothing was changed."
+    verify_bundle "$work/AltTabio.app"
     new_certificate=$(certificate "$work/AltTabio.app")
     [ -n "$new_certificate" ] ||
         fail "the downloaded AltTabio.app is not signed with a certificate; nothing was changed."
