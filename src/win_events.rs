@@ -96,8 +96,9 @@ impl WinEventWatcher {
 
     #[must_use]
     pub fn install_failure_message(error: &str) -> String {
-        format!(
-            "Could not watch window events: {error}\n\nLive window-list updates and Remote Desktop passthrough tracking are disabled until AltTabio is restarted."
+        alttabio::localization::message(
+            "Could not watch window events: {error}\n\nLive window-list updates and Remote Desktop passthrough tracking are disabled until AltTabio is restarted.",
+            &[("error", error)],
         )
     }
 }
@@ -402,6 +403,24 @@ mod tests {
         assert!(message.contains("Live window-list updates"));
         assert!(message.contains("Remote Desktop passthrough tracking"));
         assert!(message.contains("disabled"));
+    }
+
+    #[test]
+    fn win_event_recovery_guidance_is_localized_and_preserves_the_error() {
+        use alttabio::localization::{Language, PreviewLanguage};
+
+        let diagnostic = "access denied {error} 中文";
+        let preview = PreviewLanguage::new(Language::English);
+        for (language, guidance) in [
+            (Language::Russian, "отключены до перезапуска AltTabio"),
+            (Language::SimplifiedChinese, "直到重新启动 AltTabio"),
+        ] {
+            preview.set(language);
+            let report = WinEventWatcher::install_failure_message(diagnostic);
+            assert!(report.contains(guidance));
+            assert!(report.contains(diagnostic));
+            assert!(!report.contains("disabled until AltTabio is restarted"));
+        }
     }
 
     #[test]

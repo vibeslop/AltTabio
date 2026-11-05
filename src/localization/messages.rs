@@ -34,6 +34,8 @@ messages! {
     ("Autostart rollback also failed: {error}", "Также не удалось восстановить автозапуск: {error}", "还原自动启动设置也失败了：{error}"),
     (concat!("AltTabio\nVersion ", env!("CARGO_PKG_VERSION")), concat!("AltTabio\nВерсия ", env!("CARGO_PKG_VERSION")), concat!("AltTabio\n版本 ", env!("CARGO_PKG_VERSION"))),
     ("Technical details", "Технические подробности", "技术详情"),
+    ("Could not watch window events: {error}\n\nLive window-list updates and Remote Desktop passthrough tracking are disabled until AltTabio is restarted.", "Не удалось отслеживать события окон: {error}\n\nОбновление списка окон в реальном времени и отслеживание режима передачи ввода в Удалённый рабочий стол отключены до перезапуска AltTabio.", "无法监视窗口事件：{error}\n\n窗口列表实时更新和远程桌面输入直通状态跟踪已禁用，直到重新启动 AltTabio。"),
+    ("Could not start reliable live window-list updates: {error}\n\nThe window event watcher has been disabled.", "Не удалось запустить надёжное обновление списка окон в реальном времени: {error}\n\nОтслеживание событий окон отключено.", "无法启动可靠的窗口列表实时更新：{error}\n\n窗口事件监视已禁用。"),
     ("No matching windows", "Нет подходящих окон", "没有匹配的窗口"),
     ("No open windows", "Нет открытых окон", "没有打开的窗口"),
     ("Minimized", "Свёрнуто", "已最小化"),
