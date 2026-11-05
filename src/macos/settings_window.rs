@@ -463,19 +463,27 @@ fn form(
     *controller.ivars().accessibility.borrow_mut() = Some(accessibility);
     *controller.ivars().screen_recording.borrow_mut() = Some(screen_recording);
 
-    let language = language_popup(mtm, settings, controller);
-    add_row(&grid, &label_view(mtm, "Language", controller), &language)
-        .setTopPadding(GROUP_SPACING);
-
     for (group, keys) in GROUPS {
+        let has_language = *group == "General";
+        if has_language {
+            let language = NSStackView::new(mtm);
+            language.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+            language.setAlignment(NSLayoutAttribute::FirstBaseline);
+            language.setSpacing(COLUMN_SPACING);
+            language.addArrangedSubview(&label_view(mtm, "Language", controller));
+            language.addArrangedSubview(&language_popup(mtm, settings, controller));
+            add_row(&grid, &label_view(mtm, group, controller), &language)
+                .setTopPadding(GROUP_SPACING);
+        }
         for (index, key) in keys.iter().enumerate() {
-            let label = if index == 0 {
+            let starts_group = index == 0 && !has_language;
+            let label = if starts_group {
                 label_view(mtm, group, controller)
             } else {
                 NSGridCell::emptyContentView(mtm)
             };
             let row = add_row(&grid, &label, &checkbox(mtm, *key, settings, controller));
-            if index == 0 {
+            if starts_group {
                 row.setTopPadding(GROUP_SPACING);
             }
         }
