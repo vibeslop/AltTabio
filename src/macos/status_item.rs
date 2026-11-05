@@ -87,7 +87,7 @@ const RELAUNCH_TO_UPDATE: &str = "Relaunch to Update";
 pub struct StatusItem {
     _item: Retained<NSStatusItem>,
     _target: Retained<MenuTarget>,
-    _menu: Retained<NSMenu>,
+    menu: Retained<NSMenu>,
     update: Retained<NSMenuItem>,
 }
 
@@ -99,7 +99,7 @@ impl StatusItem {
             (4, "About AltTabio"),
             (7, "Quit AltTabio"),
         ] {
-            if let Some(item) = self._menu.itemAtIndex(index) {
+            if let Some(item) = self.menu.itemAtIndex(index) {
                 item.setTitle(&NSString::from_str(alttabio::localization::tr(source)));
             }
         }
@@ -174,7 +174,7 @@ pub fn install(mtm: MainThreadMarker, handler: Rc<dyn Fn(MenuAction)>) -> Status
     StatusItem {
         _item: item,
         _target: target,
-        _menu: menu,
+        menu,
         update,
     }
 }

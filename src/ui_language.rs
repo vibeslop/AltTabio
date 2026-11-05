@@ -50,5 +50,5 @@ fn windows_preferences() -> windows::core::Result<Vec<String>> {
 #[cfg(target_os = "macos")]
 fn preferred_language() -> Language {
     let preferences = objc2_foundation::NSLocale::preferredLanguages();
-    Language::from_preferences(preferences.iter().map(ToString::to_string))
+    Language::from_preferences(preferences.iter().map(|language| language.to_string()))
 }

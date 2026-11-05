@@ -18,6 +18,7 @@ macro_rules! messages {
 messages! {
     ("Allow Screen Recording in System Settings to see previews", "Разрешите запись экрана в Системных настройках для предпросмотра", "请在系统设置中允许屏幕录制以显示预览"),
     ("Preview is not available for this window", "Предпросмотр этого окна недоступен", "此窗口无法预览"),
+    ("This window cannot be captured", "Захват этого окна недоступен", "无法捕获此窗口"),
     ("{count} more", "Ещё {count}", "另有 {count} 个"),
     ("{count} more above", "Выше ещё {count}", "上方另有 {count} 个"),
     ("This copy is not signed with the release certificate, so a release would lose its Accessibility and Screen Recording permissions.", "Эта копия подписана другим сертификатом. Установка выпуска приведёт к потере разрешений Универсального доступа и Записи экрана.", "此版本未使用发布证书签名，安装发布版本将导致辅助功能和屏幕录制权限丢失。"),
