@@ -165,11 +165,7 @@ impl App {
 
         let tiles = self.tiles(layout, selected_app);
         let (rows, list) = self.rows(layout);
-        let preview = self
-            .settings
-            .appearance
-            .preview
-            .then(|| self.preview_model());
+        let preview = layout.preview_rect().map(|_| self.preview_model());
 
         let shown = Shown {
             layout,
