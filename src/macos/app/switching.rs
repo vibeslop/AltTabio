@@ -7,6 +7,7 @@ use crate::macos::tracing;
 use crate::macos::window_list::WindowRecord;
 use alttabio::app_switcher::{Action, Effect, Target};
 use alttabio::process_identity::ProcessIdentity;
+use alttabio::terminal_text::escape;
 use alttabio::window_command::WindowCommand;
 
 /// An owned snapshot, so remote calls never retain an application-state borrow.
@@ -111,7 +112,8 @@ impl App {
         // https://developer.apple.com/documentation/appkit/nsrunningapplication
         let session = self.session;
         self.command_queue.exec_async(move || {
-            let result = objc2::rc::autoreleasepool(|_| target.run(command));
+            let result =
+                objc2::rc::autoreleasepool(|_| target.run(command)).map_err(|error| escape(&error));
             post_to_app(move |app| {
                 match result {
                     Err(error) => eprintln!("{error}"),
