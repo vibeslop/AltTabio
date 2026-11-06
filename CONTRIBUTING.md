@@ -22,7 +22,7 @@ The release executable must be written to this checkout's `target\release\AltTab
 ```sh
 scripts/mac/run.sh                 # build target/mac/AltTabio.app and start it with its log in the terminal
 scripts/mac/run.sh -- --preview    # show the overlay once without taking over Cmd+Tab
-scripts/mac/run.sh -- --list       # print the windows AltTabio sees and exit
+scripts/mac/run.sh --debug -- --list # print the windows AltTabio sees and exit
 scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
@@ -31,7 +31,9 @@ Before submitting a macOS change, run the same formatting, Clippy, and test comm
 
 macOS ties Accessibility and Screen Recording grants to the certificate an app is signed with, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once so your grants survive rebuilds, and choose **Always Allow** if a build asks whether codesign may use the key. When AltTabio is started from a terminal, macOS applies the terminal's grants to it. A build signed with anything but the release certificate never updates itself.
 
-`ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action. `--list` and `--activate <window id>` also work from a plain `cargo run`. Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there.
+`ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action. `--list` and `--activate <window id>` require a debug build, through `scripts/mac/run.sh --debug -- <arguments>` or a plain `cargo run -- <arguments>`. Release builds reject both flags before starting the app and omit their enumeration and activation handlers. A runtime environment variable or additional argument cannot enable them in a release binary. This gate applies regardless of whether macOS attributes a launch to the terminal or AltTabio. Debug builds are developer tools, so run these diagnostics from a terminal with its own TCC grants and do not distribute them as releases.
+
+Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there.
 
 ## Releasing
 
