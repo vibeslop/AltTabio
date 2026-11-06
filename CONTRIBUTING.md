@@ -22,7 +22,7 @@ The release executable must be written to this checkout's `target\release\AltTab
 ```sh
 scripts/mac/run.sh                 # build target/mac/AltTabio.app and start it with its log in the terminal
 scripts/mac/run.sh -- --preview    # show the overlay once without taking over Cmd+Tab
-scripts/mac/run.sh -- --list       # print the windows AltTabio sees and exit
+scripts/mac/run.sh --debug -- --list # print the windows AltTabio sees and exit
 scripts/mac/run.sh -- --settings   # start with the settings window open
 scripts/mac/build-app.sh           # only build the bundle
 ```
@@ -31,7 +31,9 @@ Before submitting a macOS change, run the same formatting, Clippy, and test comm
 
 macOS ties Accessibility and Screen Recording grants to the certificate an app is signed with, and ad-hoc signatures change with every build. Run `scripts/mac/make-signing-cert.sh` once so your grants survive rebuilds, and choose **Always Allow** if a build asks whether codesign may use the key. When AltTabio is started from a terminal, macOS applies the terminal's grants to it. A build signed with anything but the release certificate never updates itself.
 
-`ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action. `--list` and `--activate <window id>` also work from a plain `cargo run`. Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there.
+`ALTTABIO_TRACE=1 scripts/mac/run.sh` prints every intercepted key event and switcher action. `--list` and `--activate <window id>` require a debug build, through `scripts/mac/run.sh --debug -- <arguments>` or a plain `cargo run -- <arguments>`. Release builds reject both flags before starting the app and omit their enumeration and activation handlers. A runtime environment variable or additional argument cannot enable them in a release binary. This gate applies regardless of whether macOS attributes a launch to the terminal or AltTabio. Debug builds are developer tools, so run these diagnostics from a terminal with its own TCC grants and do not distribute them as releases.
+
+Settings live in `~/Library/Application Support/AltTabio/AltTabio.ini`, or in an `AltTabio.ini` next to the executable if one exists there.
 
 ## Releasing
 
@@ -60,3 +62,7 @@ Running the workflow by hand builds a tag's Windows archive alone. Select that s
 Every release carries the same release certificate, so users keep their permissions across updates. Its SHA-1 hash is pinned in `scripts/mac/release-certificate.sha1`, and its key lives in the secrets of the repository's `release` environment, which only `v*` tags can use. A maintainer creates it once with `scripts/mac/make-signing-cert.sh --release`, commits the pin, and stores the backup the script writes, with its password, in the private [vibeslop/release-signing](https://github.com/vibeslop/release-signing) repository, encrypted to the maintainers' SSH keys. Whoever holds the key can sign an app that macOS treats as AltTabio, and a new certificate would make every user grant both permissions again.
 
 The [Release](#releasing) workflow signs the macOS archive with it. `scripts/mac/package.sh` builds and signs the same archive by hand on a Mac that imported the certificate with `scripts/mac/make-signing-cert.sh --import <backup.p12>`, and refuses a bundle signed with any other certificate.
+
+Release builds, including universal bundles, enable the [hardened runtime](https://developer.apple.com/documentation/security/hardened-runtime) with library validation and no entitlement exceptions. `--debug` keeps the existing developer signing behavior. `sh scripts/mac/verify-hardened-runtime.sh target/mac/AltTabio.app` verifies signature integrity, the runtime flag on every architecture, and the absence of entitlements. Packaging and the release workflow require this check before upload. The bundle currently contains one executable and no nested code; adding helpers or frameworks requires extending this verification.
+
+`sh scripts/mac/test-signing.sh` exercises the build and packaging gates with mocked platform tools and needs zsh. These checks can run on Linux and do not prove macOS execution. Before releasing this signing change, verify the packaged bundle on a Mac, confirm an update signed with the unchanged pinned certificate retains existing Accessibility and Screen Recording grants, and test that an unsigned library cannot be injected through supported launch paths using `DYLD_INSERT_LIBRARIES`. Verify normal switching and previews with those retained grants. Windows-host checks cannot establish that runtime or permission continuity.

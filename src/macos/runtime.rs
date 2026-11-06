@@ -1,6 +1,7 @@
 //! How native callbacks reach the one `App` on the main thread.
 
 use super::App;
+use alttabio::refresh_schedule::{RefreshNotice, RefreshSignal};
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
@@ -13,6 +14,8 @@ use std::rc::Rc;
 thread_local! {
     static APP: RefCell<Option<Rc<RefCell<App>>>> = const { RefCell::new(None) };
 }
+
+static REFRESH_NOTICES: RefreshSignal = RefreshSignal::new();
 
 /// Makes `app` the one that `with_app` and `post_to_app` reach.
 pub(super) fn install(app: &Rc<RefCell<App>>) {
@@ -43,6 +46,46 @@ pub(super) fn post_to_app(work: impl FnOnce(&mut App) + Send + 'static) {
     DispatchQueue::main().exec_async(move || {
         let _ = with_app(work);
     });
+}
+
+/// Called by AX and workspace callbacks: merge before allocating a dispatch block.
+pub(super) fn post_refresh_notice(notice: RefreshNotice) {
+    if REFRESH_NOTICES.record(notice) {
+        post_refresh_to_app(|app| app.apply_refresh_notices(REFRESH_NOTICES.take()));
+    }
+}
+
+pub(super) fn stop_refresh_notices() {
+    REFRESH_NOTICES.stop();
+}
+
+/// Refresh producers already bound the number of outstanding deliveries. Keep that
+/// delivery alive if a nested run loop encounters a busy app instead of losing it.
+pub(super) fn post_refresh_to_app(work: impl FnOnce(&mut App) + Send + 'static) {
+    DispatchQueue::main().exec_async(move || deliver_refresh(work));
+}
+
+fn deliver_refresh(work: impl FnOnce(&mut App) + 'static) {
+    let pending = APP.with(|slot| {
+        let app = slot.borrow().as_ref().map(Rc::clone)?;
+        let Ok(mut app) = app.try_borrow_mut() else {
+            return Some(work);
+        };
+        work(&mut app);
+        None
+    });
+    if let Some(work) = pending
+        && let Some(mtm) = MainThreadMarker::new()
+    {
+        // Release every borrow before scheduling. One timer retains the existing
+        // delivery; native producers continue merging into their fixed flags.
+        let slot = RefCell::new(Some(work));
+        let _timer = main_loop_timer(mtm, 0.01, false, move || {
+            if let Some(work) = slot.borrow_mut().take() {
+                deliver_refresh(work);
+            }
+        });
+    }
 }
 
 /// Runs `work` on the next main run loop pass without holding any app-state borrow.
