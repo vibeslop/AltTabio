@@ -85,11 +85,7 @@ To uninstall: turn off start-with-Windows if you enabled it, exit from the tray 
 
 ### macOS
 
-Paste this line into Terminal:
-
-```sh
-curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
-```
+Copy the [verified installer bootstrap block](https://github.com/vibeslop/AltTabio#macos) into Terminal. It verifies the installer image against the pinned release certificate before mounting it or running its script.
 
 The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. After that, AltTabio updates itself: once a day it looks for a newer release on GitHub, installs it, and reopens while the Mac is idle. **Check for Updates…** in the menu bar menu looks right away. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
 

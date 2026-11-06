@@ -1,13 +1,13 @@
 #!/bin/sh
-# Installs or updates AltTabio on macOS from GitHub Releases:
-#
-#   curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
+# Installs or updates AltTabio on macOS from inside the signed release installer image.
+# Use the trusted bootstrap in README.md to authenticate that image before executing this script.
+# Never pipe the Pages-hosted copy into a shell; its own checks cannot authenticate this script.
 #
 # AltTabio is not notarized, which takes a paid Apple developer account. Browsers mark what they
 # download as quarantined, and Gatekeeper refuses to open a quarantined app that is not notarized.
 # curl sets no quarantine flag, so the copy installed here opens right away.
 #
-# Everything runs from main, so a download cut short by the pipe runs nothing.
+# Everything runs from main.
 set -eu
 
 repo=vibeslop/AltTabio

@@ -2,7 +2,7 @@ name: Release
 
 # Builds a version tag's release archives and attaches them to the tag's release, creating it as a
 # draft when there is none: AltTabio-<version>-windows-x64.zip, and AltTabio-<version>-macos.zip
-# signed with the release certificate, where docs/install.sh finds it. Run it by hand with a tag to
+# signed with the release certificate, plus a signed macOS installer image. Run it by hand with a tag to
 # build that tag's Windows archive alone, selecting the same tag as the workflow ref.
 # Re-running a tag's own run rebuilds both.
 
@@ -200,13 +200,19 @@ jobs:
       - name: Package
         run: scripts/mac/package.sh
 
-      - name: Attach the archive to the release
+      - name: Attach the archive and signed installer to the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.draft.outputs.tag }}
           VERSION: ${{ needs.draft.outputs.version }}
-        run: gh release upload "$TAG" "target/mac/AltTabio-$VERSION-macos.zip" --clobber
+        run: |
+          gh release upload "$TAG" "target/mac/AltTabio-$VERSION-macos.zip" \
+            target/mac/AltTabio-macos-installer.dmg --clobber
+          # Read back the published image and require byte-for-byte equality with the signed one.
+          mkdir -p target/mac/published
+          gh release download "$TAG" --pattern AltTabio-macos-installer.dmg --dir target/mac/published
+          cmp target/mac/AltTabio-macos-installer.dmg target/mac/published/AltTabio-macos-installer.dmg
 
       - name: Remove the keychain
         if: always()

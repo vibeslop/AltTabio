@@ -118,7 +118,7 @@
         {"@type": "Question", "name": "Will AltTabio slow down my computer?", "acceptedAnswer": {"@type": "Answer", "text": "It is a small native program written in Rust. The switcher waits for the shortcut; update checks and downloads run in the background."}},
         {"@type": "Question", "name": "Why does Windows ask for administrator permission?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. Those are the only reasons."}},
         {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works."}},
-        {"@type": "Question", "name": "Why install AltTabio on a Mac with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The install script downloads with curl, checks the signature, and puts the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates."}},
+        {"@type": "Question", "name": "Why install AltTabio on a Mac with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The README command verifies the installer image against AltTabio's pinned release certificate before running its script, which installs the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates."}},
         {"@type": "Question", "name": "How do I get the built-in switcher back?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, right-click the AltTabio tray icon and choose Exit. On a Mac, quit AltTabio from its menu bar icon, or turn off Replace Cmd+Tab in its settings. On Windows you can also replace only Alt+Tab or only Win+Tab."}},
         {"@type": "Question", "name": "How do I uninstall AltTabio?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, turn off start with Windows if you enabled it, exit from the tray icon, and delete the folder. On a Mac, turn off Launch at login, quit AltTabio, delete AltTabio.app, and remove its settings folder and permissions."}},
         {"@type": "Question", "name": "Is AltTabio an Alt+Tab Terminator alternative?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. AltTabio is an independent, open-source window switcher for people who want a list and a live preview on Alt+Tab. It is not affiliated with Alt+Tab Terminator."}}
@@ -257,18 +257,10 @@
         </div>
         <div id="install-mac">
           <span class="os">macOS 26 or later</span>
-          <h3>Paste one line into Terminal</h3>
-          <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="mac-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="mac-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
+          <h3>Verify the installer before it runs</h3>
+          <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
           <ol class="steps">
-            <li><span>The script checks the download's signature, puts AltTabio in Applications, and opens it.</span></li>
+            <li><span>The command verifies the installer image before running its script, which puts AltTabio in Applications and opens it.</span></li>
             <li><span>Allow <strong>Accessibility</strong> when it asks. <strong>Screen Recording</strong> is only for previews.</span></li>
           </ol>
           <a class="more-link" href="mac/#install">Other ways to install on a Mac</a>
@@ -306,7 +298,7 @@
         </details>
         <details>
           <summary>Why install on a Mac with a Terminal command?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The install script downloads with curl, checks the signature, and puts the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates.</p><p>You can also <a href="mac/#install">download the zip and allow it by hand</a>.</p></div>
+          <div class="ans"><p>AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The README command verifies the installer image against AltTabio's pinned release certificate before running its script, which installs the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates.</p><p>You can also <a href="mac/#install">download the zip and allow it by hand</a>.</p></div>
         </details>
         <details>
           <summary>How do I get the built-in switcher back?<span class="plus" aria-hidden="true"></span></summary>
@@ -367,16 +359,8 @@
 
 <dialog class="sheet" id="mac-sheet" aria-labelledby="sheet-title">
   <h2 id="sheet-title">Install AltTabio on your Mac</h2>
-  <p>Paste this line into Terminal. It checks the download's signature, puts AltTabio in Applications, and opens it.</p>
-  <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="sheet-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="sheet-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
+  <p>Copy the bootstrap block from the README into Terminal. It verifies the installer image with the pinned release certificate before running its script.</p>
+  <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
   <div class="row">
     <a href="mac/#install">Other ways to install</a>
     <form method="dialog"><button class="btn btn-quiet btn-sm">Done</button></form>
