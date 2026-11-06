@@ -26,7 +26,7 @@ The release list remains untrusted discovery metadata. The updater selects a new
 
 The installation-folder ACL checks, protected staging ACL, approval marker, helper readiness handshake, final executable rehash, permission preservation, replacement, rollback and failure cooldown still apply. Input and window callbacks do no verification or network work.
 
-Signatures protect updates when release metadata or assets are changed without the Windows private key. They do not protect a compromised signing job, stolen signing key, administrator-controlled app files, or the initial unverified manual installation. HTTPS and GitHub checks remain required. Withholding releases can prevent discovery; this protocol is not a transparency log or a signed freshness service. Older app builds do not enforce the new signature policy. No Authenticode certificate is used, so UAC and SmartScreen behavior is unchanged.
+Signatures protect updates when release metadata or assets are changed without the Windows private key. They do not protect a compromised signing job, stolen signing key or administrator-controlled app files. The [first-install procedure](windows-install.md) uses a verifier built from separately trusted source to authenticate the archive before extraction and elevated execution. Skipping that step leaves the initial manual installation unauthenticated. HTTPS and GitHub checks remain required. Withholding releases can prevent discovery; this protocol is not a transparency log or a signed freshness service. Older app builds do not enforce the new signature policy. No Authenticode certificate is used, so UAC and SmartScreen behavior is unchanged.
 
 ## Release automation and recovery
 
