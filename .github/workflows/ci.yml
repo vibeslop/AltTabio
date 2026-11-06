@@ -27,6 +27,11 @@ jobs:
       - name: Test Rust
         run: cargo test --quiet
 
+      - name: Test production diagnostic policy
+        env:
+          CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: "false"
+        run: cargo test --quiet --lib macos_cli::
+
       - name: Build macOS app bundle
         run: scripts/mac/build-app.sh --universal
 
@@ -38,6 +43,10 @@ jobs:
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch arm64
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch x86_64
           codesign --verify --deep --strict target/mac/AltTabio.app
+
+      - name: Verify release rejects window diagnostics
+        timeout-minutes: 1
+        run: sh scripts/mac/test-cli-gate.sh
 
       - name: Check the install script
         run: |
