@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod app_switcher;
 pub mod close_button;
+pub mod command_output;
 pub mod deferred_switch;
 pub mod dialog_layout;
 pub mod dialog_state;
