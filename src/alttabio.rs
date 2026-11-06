@@ -26,6 +26,7 @@ pub mod settings_form;
 pub mod settings_writer;
 pub mod switcher;
 pub mod task_list_hit;
+pub mod task_query_budget;
 pub mod task_refresh;
 pub mod text_edit;
 pub mod theme;

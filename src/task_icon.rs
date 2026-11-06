@@ -1,6 +1,8 @@
 use crate::win32::wide;
+use alttabio::task_query_budget::{IconQueryBudget, can_query_snapshot};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
+use std::time::Instant;
 use windows::Win32::Foundation::{HWND, LPARAM, PROPERTYKEY, WPARAM};
 use windows::Win32::UI::Shell::PropertiesSystem::{
     IPropertyStore, PSGetPropertyKeyFromName, SHGetPropertyStoreForWindow,
@@ -14,41 +16,80 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BSTR, Error, PCWSTR, Result, w};
 
-#[derive(Default)]
 /// Owns task icons for one task-list snapshot. Keep it alive until that list is replaced.
 pub struct TaskIcons {
+    started: Instant,
+    message_budget: IconQueryBudget,
     identity: Rc<()>,
     window_icons: Vec<OwnedIcon>,
     icons: HashMap<String, Option<OwnedIcon>>,
     app_icons: HashMap<String, Option<OwnedIcon>>,
+    window_app_ids: HashMap<isize, String>,
+}
+
+impl Default for TaskIcons {
+    fn default() -> Self {
+        Self::new(Instant::now())
+    }
 }
 
 impl TaskIcons {
+    pub(crate) fn new(started: Instant) -> Self {
+        Self {
+            started,
+            message_budget: IconQueryBudget::default(),
+            identity: Rc::default(),
+            window_icons: Vec::new(),
+            icons: HashMap::new(),
+            app_icons: HashMap::new(),
+            window_app_ids: HashMap::new(),
+        }
+    }
+
     /// Keeping a weak identity prevents an expired snapshot's address from being reused by a cache.
     pub(crate) fn identity(&self) -> Weak<()> {
         Rc::downgrade(&self.identity)
     }
 
     pub fn resolve(&mut self, hwnd: HWND, executable: &str) -> isize {
-        if let Some(icon) = window_icon(hwnd) {
+        if let Some(icon) = window_icon(hwnd, &mut self.message_budget, self.started) {
             let handle = icon.0.0 as isize;
             self.window_icons.push(icon);
             return handle;
         }
+        // Cached fallbacks remain usable when the snapshot deadline has passed, but do not
+        // start more file or Shell work. A single native call can itself overrun the deadline.
+        if !self.icons.contains_key(executable) && can_query_snapshot(self.started.elapsed()) {
+            self.icons
+                .insert(executable.to_owned(), extract_icon(executable));
+        }
         let extracted = self
             .icons
-            .entry(executable.to_owned())
-            .or_insert_with(|| extract_icon(executable))
-            .as_ref()
+            .get(executable)
+            .and_then(Option::as_ref)
             .map_or(0, |icon| icon.0.0 as isize);
         if extracted != 0 {
             return extracted;
         }
-        // Windows without an explicit app identity cannot use the AppsFolder fallback.
-        let Ok(app_id) = window_app_id(hwnd) else {
-            return 0;
+        let window_key = hwnd.0 as isize;
+        let app_id = if let Some(app_id) = self.window_app_ids.get(&window_key) {
+            app_id.clone()
+        } else {
+            if !can_query_snapshot(self.started.elapsed()) {
+                return 0;
+            }
+            // Record identities only for this snapshot's borrowed windows. Reuse requires
+            // no new COM/Shell query after the deadline; owned icons stay in app_icons.
+            let Ok(app_id) = window_app_id(hwnd) else {
+                return 0;
+            };
+            if app_id.is_empty() {
+                return 0;
+            }
+            self.window_app_ids.insert(window_key, app_id.clone());
+            app_id
         };
-        if app_id.is_empty() {
+        if !self.app_icons.contains_key(&app_id) && !can_query_snapshot(self.started.elapsed()) {
             return 0;
         }
         self.app_icons
@@ -163,12 +204,18 @@ fn shell_app_icon(app_id: &str) -> Result<Option<OwnedIcon>> {
     Ok(owned)
 }
 
-fn window_icon(hwnd: HWND) -> Option<OwnedIcon> {
-    // Busy render/load threads cannot answer WM_GETICON promptly. Give each size 1 ms
-    // and stop at the first timeout. Responsive replies without an icon still allow the
-    // next size, even if scheduling delayed the previous reply.
+fn window_icon(hwnd: HWND, budget: &mut IconQueryBudget, started: Instant) -> Option<OwnedIcon> {
+    // All windows and sizes share one message-count/time budget. Keep the 1 ms per-send limit
+    // and stop this window's sends on failure, then use non-messaging class/executable fallbacks.
     for size in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
+        if !can_query_snapshot(started.elapsed()) {
+            break;
+        }
+        let Some(timeout_ms) = budget.next_timeout_ms() else {
+            break;
+        };
         let mut icon = 0_usize;
+        let sent_at = Instant::now();
         let sent = unsafe {
             // SAFETY: hwnd is borrowed and icon is writable for this bounded query.
             SendMessageTimeoutW(
@@ -177,10 +224,11 @@ fn window_icon(hwnd: HWND) -> Option<OwnedIcon> {
                 WPARAM(size as usize),
                 LPARAM(0),
                 SMTO_BLOCK | SMTO_ABORTIFHUNG,
-                1,
+                timeout_ms,
                 Some(&raw mut icon),
             )
         };
+        budget.record_elapsed(sent_at.elapsed());
         if sent.0 == 0 {
             // A timeout or vanished/inaccessible window cannot answer another size reliably.
             break;
@@ -263,6 +311,90 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_message_budget_keeps_executable_fallback_and_its_owned_cache() -> Result<()> {
+        let window = TestWindow::new()?;
+        // SAFETY: the shared stock icon outlives the test-owned window. If the exhausted budget
+        // accidentally sends WM_GETICON, this source would be copied instead of using the file.
+        unsafe {
+            let stock = LoadIconW(None, IDI_APPLICATION)?;
+            SendMessageW(
+                window.0,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(stock.0 as isize)),
+            );
+        }
+        let executable = std::env::current_exe().map_err(|error| {
+            Error::new(
+                windows::core::HRESULT(0x8000_4005_u32.cast_signed()),
+                error.to_string(),
+            )
+        })?;
+        let mut icons = TaskIcons::default();
+        icons
+            .message_budget
+            .record_elapsed(std::time::Duration::MAX);
+        let icon = icons.resolve(window.0, &executable.to_string_lossy());
+        assert_ne!(icon, 0);
+        assert!(icons.window_icons.is_empty());
+        assert_eq!(icons.icons.len(), 1);
+        // Simulate the snapshot deadline passing without sleeping. Already owned fallbacks
+        // remain usable, while a new executable must not start file or Shell work.
+        let Some(expired) =
+            Instant::now().checked_sub(alttabio::task_query_budget::SNAPSHOT_TIME_LIMIT)
+        else {
+            panic!("could not construct an expired snapshot clock");
+        };
+        icons.started = expired;
+        assert_eq!(icons.resolve(window.0, &executable.to_string_lossy()), icon);
+        assert_eq!(icons.resolve(window.0, "unqueried.exe"), 0);
+        assert_eq!(icons.icons.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn expired_snapshot_reuses_cached_packaged_icon_without_a_process_path() -> Result<()> {
+        let window = TestWindow::new()?;
+        let app_id = "AltTabio.CachedIconRegression";
+        // SAFETY: this fixture owns the hidden HWND and COM apartment. The store copies
+        // the property value; no application or user settings are modified.
+        unsafe {
+            let store: IPropertyStore = SHGetPropertyStoreForWindow(window.0)?;
+            let mut key = PROPERTYKEY::default();
+            PSGetPropertyKeyFromName(w!("System.AppUserModel.ID"), &raw mut key)?;
+            store.SetValue(&raw const key, &PROPVARIANT::from(app_id))?;
+        }
+        // SAFETY: the shared stock icon outlives this copy. The cache owns the copy once.
+        let cached = OwnedIcon(unsafe { CopyIcon(LoadIconW(None, IDI_APPLICATION)?) }?);
+        let expected = cached.0.0 as isize;
+        let mut icons = TaskIcons::default();
+        icons.app_icons.insert(app_id.to_owned(), Some(cached));
+        assert_eq!(icons.resolve(window.0, ""), expected);
+        let Some(expired) =
+            Instant::now().checked_sub(alttabio::task_query_budget::SNAPSHOT_TIME_LIMIT)
+        else {
+            panic!("could not construct an expired snapshot clock");
+        };
+        icons.started = expired;
+        assert_eq!(
+            icons.resolve(window.0, ""),
+            expected,
+            "snapshot expiry must not discard an already resolved packaged icon"
+        );
+        assert_eq!(icons.resolve(window.0, "unqueried.exe"), expected);
+        let unknown = TestWindow::new()?;
+        assert_eq!(icons.resolve(unknown.0, "unqueried.exe"), 0);
+        assert!(!icons.icons.contains_key("unqueried.exe"));
+        assert_eq!(icons.app_icons.len(), 1);
+        // SAFETY: the returned cache icon must remain live until the snapshot is dropped.
+        drop(OwnedIcon(unsafe { CopyIcon(HICON(expected as *mut _)) }?));
+        drop(icons);
+        // SAFETY: no intervening icon allocation occurred; CopyIcon validates this stale value.
+        assert!(unsafe { CopyIcon(HICON(expected as *mut _)) }.is_err());
+        Ok(())
+    }
+
+    #[test]
     fn snapshot_icon_still_draws_after_window_replaces_and_destroys_source() -> Result<()> {
         let window = TestWindow::new()?;
         // SAFETY: the stock icon is shared; CopyIcon returns a separate, test-owned icon.
@@ -331,7 +463,7 @@ mod tests {
     fn iconless_window_uses_executable_icon() -> Result<()> {
         let window = TestWindow::new()?;
         assert!(
-            window_icon(window.0).is_none(),
+            window_icon(window.0, &mut IconQueryBudget::default(), Instant::now()).is_none(),
             "fixture must have no window or class icon"
         );
         let executable = std::env::current_exe().map_err(|error| {

@@ -3,10 +3,15 @@ use crate::settings_dialog;
 use crate::task_icon::TaskIcons;
 use alttabio::settings::Settings;
 use alttabio::switcher::{SwitchTask, WindowCloaking, WindowEligibility, is_switchable_window};
+use alttabio::task_query_budget::{
+    MAX_CHILD_WINDOWS, MAX_CHILDREN_PER_FRAME, MAX_TASKS, MAX_TOP_LEVEL_WINDOWS,
+    can_query_snapshot, title_buffer_capacity,
+};
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::time::Instant;
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_APP, DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
@@ -15,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     IsWindowVisible, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
-use windows::core::{BOOL, Result};
+use windows::core::{BOOL, Error, Result};
 
 pub struct EnumeratedTasks {
     pub tasks: Vec<SwitchTask>,
@@ -23,31 +28,39 @@ pub struct EnumeratedTasks {
 }
 
 pub fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTasks> {
+    let mut budget = SnapshotQuery::new();
     let current_monitor = if settings.monitor.use_current_monitor_filter {
         Some(crate::win32::monitor_near_cursor()?)
     } else {
         None
     };
-    let mut handles = Vec::<HWND>::new();
-    unsafe {
-        // SAFETY: EnumWindows is synchronous, so `handles` remains exclusively borrowed and live
+    let mut collection = WindowCollection::new(MAX_TOP_LEVEL_WINDOWS);
+    let enumerated = unsafe {
+        // SAFETY: EnumWindows is synchronous, so `collection` remains exclusively borrowed and live
         // for every invocation of enum_window.
         EnumWindows(
             Some(enum_window),
-            LPARAM((&raw mut handles).cast::<c_void>() as isize),
-        )?;
-    }
+            LPARAM((&raw mut collection).cast::<c_void>() as isize),
+        )
+    };
+    // EnumWindows also reports failure when our callback deliberately stops at the cap.
+    // Only that explicit stop is a successful partial snapshot. Preserve native errors and panics.
+    collection.finish(enumerated)?;
     let mut result = EnumeratedTasks {
         tasks: Vec::new(),
-        icons: TaskIcons::default(),
+        icons: TaskIcons::new(budget.started),
     };
-    for hwnd in handles {
+    for hwnd in collection.handles {
+        if result.tasks.len() == MAX_TASKS || !budget.can_query() {
+            break;
+        }
         if let Some(task) = create_switch_task(
             hwnd,
             std::process::id(),
             current_monitor,
             result.tasks.len(),
             &mut result.icons,
+            &mut budget,
         ) {
             result.tasks.push(task);
         }
@@ -55,19 +68,76 @@ pub fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTas
     Ok(result)
 }
 
+struct SnapshotQuery {
+    started: Instant,
+    remaining_children: usize,
+}
+
+impl SnapshotQuery {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            remaining_children: MAX_CHILD_WINDOWS,
+        }
+    }
+
+    fn can_query(&self) -> bool {
+        can_query_snapshot(self.started.elapsed())
+    }
+}
+
+/// Preallocate outside callbacks. The callback only appends borrowed handles up to this fixed cap.
+struct WindowCollection {
+    handles: Vec<HWND>,
+    limit: usize,
+    panicked: bool,
+}
+
+impl WindowCollection {
+    fn new(limit: usize) -> Self {
+        Self {
+            handles: Vec::with_capacity(limit),
+            limit,
+            panicked: false,
+        }
+    }
+
+    fn is_full(&self) -> bool {
+        self.handles.len() >= self.limit
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.panicked {
+            return Err(Error::new(
+                windows::core::HRESULT(0x8000_4005_u32.cast_signed()),
+                "Window collection callback panicked",
+            ));
+        }
+        Ok(())
+    }
+
+    fn finish(&self, enumerated: Result<()>) -> Result<()> {
+        self.check()?;
+        if self.is_full() { Ok(()) } else { enumerated }
+    }
+}
+
 unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let context = unsafe {
-        // SAFETY: the caller passes an exclusive live Vec<HWND> for synchronous enumeration.
-        (lparam.0 as *mut Vec<HWND>).as_mut()
+        // SAFETY: the caller passes an exclusive live WindowCollection for synchronous enumeration.
+        (lparam.0 as *mut WindowCollection).as_mut()
     };
     let Some(context) = context else {
         return false.into();
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        context.push(hwnd);
+        if !context.is_full() {
+            context.handles.push(hwnd);
+        }
     }));
-    result.is_ok().into()
+    context.panicked = result.is_err();
+    (result.is_ok() && !context.is_full()).into()
 }
 
 fn create_switch_task(
@@ -76,6 +146,7 @@ fn create_switch_task(
     current_monitor: Option<HMONITOR>,
     index: usize,
     icons: &mut TaskIcons,
+    budget: &mut SnapshotQuery,
 ) -> Option<SwitchTask> {
     // Most top-level windows are hidden helpers. Reject them before reading titles,
     // classes, ownership and DWM attributes for the switcher's synchronous snapshot.
@@ -131,11 +202,14 @@ fn create_switch_task(
     if !is_switchable_window(&eligibility) {
         return None;
     }
+    if !budget.can_query() {
+        return None;
+    }
 
     let process =
         ProcessInfo::query(process_id).unwrap_or_else(|_| ProcessInfo::unavailable(process_id));
-    let icon_executable =
-        hosted_app_executable(hwnd, &class_name).unwrap_or_else(|| process.executable.clone());
+    let icon_executable = hosted_app_executable(hwnd, &class_name, budget)
+        .unwrap_or_else(|| process.executable.clone());
     Some(
         SwitchTask::new(
             index + 1,
@@ -156,11 +230,18 @@ fn excludes_current_process_window(
     process_id == current_process_id && class_name != settings_dialog::WINDOW_CLASS_NAME
 }
 
-fn hosted_app_executable(hwnd: HWND, class_name: &str) -> Option<PathBuf> {
-    if class_name != "ApplicationFrameWindow" {
+fn hosted_app_executable(
+    hwnd: HWND,
+    class_name: &str,
+    budget: &mut SnapshotQuery,
+) -> Option<PathBuf> {
+    if class_name != "ApplicationFrameWindow"
+        || budget.remaining_children == 0
+        || !budget.can_query()
+    {
         return None;
     }
-    let mut children = Vec::<HWND>::new();
+    let mut children = WindowCollection::new(budget.remaining_children.min(MAX_CHILDREN_PER_FRAME));
     unsafe {
         // SAFETY: children is exclusively borrowed for synchronous callbacks. EnumChildWindows'
         // return value is documented as unused; the callback only collects borrowed handles.
@@ -170,7 +251,15 @@ fn hosted_app_executable(hwnd: HWND, class_name: &str) -> Option<PathBuf> {
             LPARAM((&raw mut children).cast::<c_void>() as isize),
         );
     }
-    for child in children {
+    budget.remaining_children -= children.handles.len();
+    if let Err(error) = children.check() {
+        eprintln!("Could not collect hosted app windows: {error}");
+        return None;
+    }
+    for child in children.handles {
+        if !budget.can_query() {
+            break;
+        }
         if window_class_name(child) != "Windows.UI.Core.CoreWindow" {
             continue;
         }
@@ -194,9 +283,7 @@ fn window_title(hwnd: HWND) -> String {
     if length <= 0 {
         return String::new();
     }
-    let capacity = usize::try_from(length)
-        .unwrap_or_default()
-        .saturating_add(1);
+    let capacity = title_buffer_capacity(length);
     let mut buffer = vec![0_u16; capacity];
     let written = unsafe {
         // SAFETY: `buffer` is writable and HWND is supplied by EnumWindows.
@@ -254,6 +341,39 @@ mod tests {
         CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, WNDCLASSEXW, WS_POPUP,
     };
     use windows::core::{Error, w};
+
+    #[test]
+    fn enumeration_callback_stops_without_growing_either_handle_batch() {
+        for limit in [MAX_TOP_LEVEL_WINDOWS, MAX_CHILDREN_PER_FRAME, 0] {
+            let mut collection = WindowCollection::new(limit);
+            let capacity = collection.handles.capacity();
+            for index in 0..10_000 {
+                // SAFETY: the synchronous callback only stores this scalar handle. The context
+                // is live and exclusively borrowed, and no Windows API dereferences the handle.
+                let keep_going = unsafe {
+                    enum_window(
+                        HWND((index + 1) as *mut _),
+                        LPARAM((&raw mut collection).cast::<c_void>() as isize),
+                    )
+                };
+                assert_eq!(keep_going.as_bool(), index + 1 < limit);
+            }
+            assert_eq!(collection.handles.len(), limit);
+            assert_eq!(collection.handles.capacity(), capacity);
+            assert!(collection.check().is_ok());
+        }
+    }
+
+    #[test]
+    fn deliberate_cap_stop_succeeds_but_native_errors_and_panics_do_not() {
+        let failure = || Error::from(windows::core::HRESULT(0x8000_4005_u32.cast_signed()));
+        let mut collection = WindowCollection::new(1);
+        assert!(collection.finish(Err(failure())).is_err());
+        collection.handles.push(HWND::default());
+        assert!(collection.finish(Err(failure())).is_ok());
+        collection.panicked = true;
+        assert!(collection.finish(Err(failure())).is_err());
+    }
 
     #[test]
     fn only_exclusively_application_cloaked_windows_are_recoverable_tasks() {
@@ -343,7 +463,8 @@ mod tests {
                 None,
             )?
         });
-        assert!(hosted_app_executable(parent.0, "ApplicationFrameWindow").is_none());
+        let query = |class| hosted_app_executable(parent.0, class, &mut SnapshotQuery::new());
+        assert!(query("ApplicationFrameWindow").is_none());
         // SAFETY: parent is live; the child class is registered above and remains live until drop.
         let _child = TestWindow(unsafe {
             CreateWindowExW(
@@ -363,11 +484,13 @@ mod tests {
         });
         let executable = ProcessInfo::query(std::process::id())?.executable;
         assert!(!executable.as_os_str().is_empty());
-        assert_eq!(
-            hosted_app_executable(parent.0, "ApplicationFrameWindow"),
-            Some(executable)
+        assert_eq!(query("ApplicationFrameWindow"), Some(executable));
+        assert!(query("OtherWindowClass").is_none());
+        let mut exhausted = SnapshotQuery::new();
+        exhausted.remaining_children = 0;
+        assert!(
+            hosted_app_executable(parent.0, "ApplicationFrameWindow", &mut exhausted).is_none()
         );
-        assert!(hosted_app_executable(parent.0, "OtherWindowClass").is_none());
         Ok(())
     }
 
