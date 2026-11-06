@@ -1,5 +1,5 @@
 //! Looking for a newer release and putting it in place of the running copy, the way
-//! `docs/install.sh` does: the GitHub release list, `curl`, `ditto`, and `codesign` against the
+//! `docs/install.sh` does: the GitHub release list, bounded ZIP streams, and `codesign` against the
 //! pinned release certificate. All of it blocks, so each job runs on a thread of its own and
 //! reports back through `post_to_app`.
 
@@ -20,8 +20,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const RELEASES_URL: &str = "https://api.github.com/repos/vibeslop/AltTabio/releases?per_page=30";
+// A release list includes notes and assets, but must stay bounded before NSData copies it.
+const MAX_RELEASE_METADATA_BYTES: usize = 1024 * 1024;
+const MAX_METADATA_STDERR_BYTES: usize = 16 * 1024;
 // scripts/mac/package.sh packages nothing signed with another certificate.
 const RELEASE_CERTIFICATE: &str = include_str!("../../scripts/mac/release-certificate.sha1");
+// Share the standalone installer's download/extraction limits, not just its ZIP metadata checks.
+const INSTALLER: &str = include_str!("../../docs/install.sh");
 
 /// The running copy's bundle, which an update replaces.
 pub fn bundle_path() -> PathBuf {
@@ -108,11 +113,18 @@ fn spawn(work: impl FnOnce() + Send + 'static) -> Result<(), String> {
 }
 
 fn check_now(current: Version, bundle: &Path) -> Result<Checked, String> {
-    let list = run(curl()
-        .args(["--max-time", "30", "--header"])
-        .arg("Accept: application/vnd.github+json")
-        .arg(RELEASES_URL))
-    .map_err(|error| format!("Could not get the list of releases from GitHub: {error}"))?;
+    let output = alttabio::command_output::bounded(
+        curl()
+            .args(["--max-time", "30", "--header"])
+            .arg("Accept: application/vnd.github+json")
+            .arg(RELEASES_URL),
+        MAX_RELEASE_METADATA_BYTES,
+        MAX_METADATA_STDERR_BYTES,
+    )
+    .map_err(|error| error.to_string())
+    .and_then(|output| command_result("/usr/bin/curl", output));
+    let list = output
+        .map_err(|error| format!("Could not get the list of releases from GitHub: {error}"))?;
     let Some(update) = newest_update(current, &read_releases(&list)?) else {
         return Ok(Checked::UpToDate);
     };
@@ -154,25 +166,22 @@ fn install_now(update: &Update, bundle: &Path) -> Result<(), String> {
         .ok_or_else(|| "This copy is not in a folder it could be replaced in".to_owned())?;
     let work = WorkFolder::create()?;
     let archive = work.path.join("AltTabio.zip");
-    run(curl()
-        .args([
-            "--max-time",
-            "600",
-            "--max-filesize",
-            "104857600",
-            "--output",
-        ])
-        .arg(&archive)
-        .arg(&update.url))
+    run(Command::new("/bin/sh")
+        .args(["-c", INSTALLER, "sh", "--download-update-archive"])
+        .arg(&update.url)
+        .arg(&archive))
     .map_err(|error| format!("Could not download AltTabio {version}: {error}"))?;
-    run(Command::new("/usr/bin/ditto")
-        .args(["-x", "-k"])
+    let extracted = work.path.join("extracted");
+    run(Command::new("/bin/sh")
+        .args(["-c", INSTALLER, "sh", "--extract-update-archive"])
         .arg(&archive)
-        .arg(&work.path))
+        .arg(&extracted))
     .map_err(|error| {
-        format!("The download of AltTabio {version} is not a readable archive: {error}")
+        format!(
+            "The download of AltTabio {version} is malformed or exceeds the archive limits: {error}"
+        )
     })?;
-    let app = work.path.join("AltTabio.app");
+    let app = extracted.join("AltTabio.app");
     verify(&app).map_err(|error| {
         format!("The download of AltTabio {version} failed its signature check: {error}")
     })?;
@@ -262,6 +271,10 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("could not start {program}: {error}"))?;
+    command_result(&program, output)
+}
+
+fn command_result(program: &str, output: std::process::Output) -> Result<Vec<u8>, String> {
     if output.status.success() {
         return Ok(output.stdout);
     }
@@ -274,6 +287,9 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
 }
 
 fn read_releases(json: &[u8]) -> Result<Vec<Release>, String> {
+    if json.len() > MAX_RELEASE_METADATA_BYTES {
+        return Err("GitHub sent a list of releases that is too large".to_owned());
+    }
     let unreadable = || "GitHub sent a list of releases AltTabio cannot read".to_owned();
     let list = NSJSONSerialization::JSONObjectWithData_options_error(
         &NSData::with_bytes(json),
@@ -410,5 +426,17 @@ mod tests {
         ] {
             assert!(read_releases(json).is_err());
         }
+    }
+
+    #[test]
+    fn release_metadata_has_a_byte_limit_before_json_parsing() {
+        let mut json = vec![b' '; MAX_RELEASE_METADATA_BYTES + 1];
+        json[..2].copy_from_slice(b"[]");
+        // Valid JSON with trailing whitespace must still be rejected when oversized.
+        assert!(read_releases(&json).is_err_and(|error| error.contains("too large")));
+        assert_eq!(
+            read_releases(&json[..MAX_RELEASE_METADATA_BYTES]),
+            Ok(vec![])
+        );
     }
 }

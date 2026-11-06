@@ -72,9 +72,10 @@ It is a practical answer for people searching for:
 
 ### Windows
 
-1. Download the latest Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases/latest).
-2. Extract it to a folder you will keep. For autostart and updates, use a folder that non-elevated processes cannot modify, such as `C:\Program Files\AltTabio`.
-3. Run `AltTabio.exe` and accept the Windows administrator prompt.
+1. Download the Windows archive and matching `.zip.minisig` from the same [GitHub release](https://github.com/vibeslop/AltTabio/releases/latest).
+2. Follow [Windows first-install verification](windows-install.md) with a verifier built from separately trusted source. Stop if verification fails or the signature is missing.
+3. After verification succeeds, extract that archive to a folder only administrators can change, such as `C:\Program Files\AltTabio`.
+4. Run `AltTabio.exe` and accept the Windows administrator prompt.
 
 Windows asks for permission because AltTabio installs a global input hook (so it can handle Alt+Tab before Windows does) and window-management commands (so it can close a frozen program when you ask). That approval is for those jobs only.
 
@@ -84,11 +85,7 @@ To uninstall: turn off start-with-Windows if you enabled it, exit from the tray 
 
 ### macOS
 
-Paste this line into Terminal:
-
-```sh
-curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
-```
+Copy the [verified installer bootstrap block](https://github.com/vibeslop/AltTabio#macos) into Terminal. It verifies the installer image against the pinned release certificate before mounting it or running its script.
 
 The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. After that, AltTabio updates itself: once a day it looks for a newer release on GitHub, installs it, and reopens while the Mac is idle. **Check for Updates…** in the menu bar menu looks right away. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
 

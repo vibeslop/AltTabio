@@ -1,14 +1,15 @@
 //! The window list: when to ask for it, and what the switcher makes of it.
 
 use super::{App, frontmost_pid};
-use crate::macos::ax::{AppObserver, WindowChange};
+use crate::macos::ax::AppObserver;
 use crate::macos::current_pid;
 use crate::macos::refresh_worker::Job;
-use crate::macos::runtime::{schedule, with_app};
+use crate::macos::runtime::{post_refresh_notice, schedule};
 use crate::macos::screen::cursor_display_bounds;
 use crate::macos::window_list::{self, EnumerationOptions, Listing, WindowRecord, merge_order};
 use alttabio::app_switcher::{AppEntry, WindowEntry, group_by_app};
 use alttabio::process_identity::ProcessIdentity;
+use alttabio::refresh_schedule::{RefreshNotice, RefreshNotices};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2_app_kit::{
@@ -17,7 +18,8 @@ use objc2_app_kit::{
     NSWorkspaceDidLaunchApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
     NSWorkspaceDidUnhideApplicationNotification,
 };
-use objc2_foundation::{NSNotification, NSNotificationName, NSOperationQueue};
+use objc2_foundation::{NSNotification, NSNotificationName};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
 use std::time::Duration;
 
@@ -45,27 +47,22 @@ impl App {
             )
         };
         for name in refreshing {
-            self.observe(name, Self::request_refresh);
+            self.observe(name, RefreshNotice::List);
         }
-        self.observe(activated, Self::front_app_changed);
+        self.observe(activated, RefreshNotice::FrontApp);
     }
 
-    /// Runs `work` whenever the workspace posts `name`.
-    fn observe(&mut self, name: &NSNotificationName, work: fn(&mut Self)) {
+    /// Merges the notice on the posting thread, before any main-queue allocation.
+    fn observe(&mut self, name: &NSNotificationName, notice: RefreshNotice) {
         let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
-            let _ = with_app(work);
+            let _ = catch_unwind(AssertUnwindSafe(|| post_refresh_notice(notice)));
         });
         let token = unsafe {
-            // SAFETY: the main operation queue delivers the block on the main thread, where
-            // `with_app` expects to run.
+            // SAFETY: the notification name and block are live. With no operation queue,
+            // the callback runs on the posting thread and touches only atomic notice flags.
             NSWorkspace::sharedWorkspace()
                 .notificationCenter()
-                .addObserverForName_object_queue_usingBlock(
-                    Some(name),
-                    None,
-                    Some(&NSOperationQueue::mainQueue()),
-                    &block,
-                )
+                .addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
         };
         self.observers.push(token);
     }
@@ -85,10 +82,13 @@ impl App {
 
     /// Moves the observer to the front app; the window list thread registers it.
     pub(super) fn watch_front_app(&mut self) {
-        match frontmost_pid().and_then(|pid| i32::try_from(pid).ok()) {
-            Some(pid) if pid != current_pid() => self.refresh.request(Job::Watch(pid)),
-            _ => self.front_observer = None,
+        let pid = frontmost_pid()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .filter(|pid| *pid != current_pid());
+        if pid.is_none() {
+            self.front_observer = None;
         }
+        self.refresh.request(Job::Watch(pid));
     }
 
     pub(crate) fn observer_ready(&mut self, pid: i32, observer: Option<AppObserver>) {
@@ -102,10 +102,15 @@ impl App {
         self.front_observer = observer;
     }
 
-    pub(crate) fn front_window_changed(&mut self, change: WindowChange) {
-        match change {
-            WindowChange::Focused => self.note_focus(),
-            WindowChange::Opened => self.request_refresh(),
+    pub(crate) fn apply_refresh_notices(&mut self, notices: RefreshNotices) {
+        if notices.front_app {
+            self.front_app_changed();
+        }
+        if notices.focus {
+            self.note_focus();
+        }
+        if notices.list {
+            self.request_refresh();
         }
     }
 
@@ -117,6 +122,23 @@ impl App {
                 App::request_refresh,
             );
         }
+    }
+
+    pub(crate) fn refresh_finished(
+        &mut self,
+        listing: Option<Listing>,
+        observer: Option<(i32, Option<AppObserver>)>,
+    ) {
+        if self.refresh.is_stopped() {
+            return;
+        }
+        if let Some((pid, observer)) = observer {
+            self.observer_ready(pid, observer);
+        }
+        if let Some(listing) = listing {
+            self.refresh_completed(listing);
+        }
+        self.refresh.complete();
     }
 
     pub(crate) fn refresh_completed(&mut self, listing: Listing) {

@@ -105,12 +105,21 @@ else
         fi
     done
 fi
+codesign_options=()
+if [[ "$profile" != debug ]]; then
+    # Harden every production build without changing its certificate or designated identity.
+    # No entitlements are needed: keep library validation and DYLD restrictions enabled.
+    codesign_options=(--options runtime)
+fi
 if [[ -n "$identity" ]]; then
     codesign --force --sign "$identity" "${codesign_keychain[@]}" \
-        --identifier com.vibeslop.AltTabio "$app"
+        "${codesign_options[@]}" --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app with $certificate"
 else
-    codesign --force --sign - --identifier com.vibeslop.AltTabio "$app"
+    codesign --force --sign - "${codesign_options[@]}" --identifier com.vibeslop.AltTabio "$app"
     echo "Signed $app ad hoc; run scripts/mac/make-signing-cert.sh once to keep permissions across builds"
+fi
+if [[ "$profile" != debug ]]; then
+    sh scripts/mac/verify-hardened-runtime.sh "$app"
 fi
 echo "Built $app ($profile, version $version)"
