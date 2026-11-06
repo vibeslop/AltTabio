@@ -740,6 +740,37 @@ fn test_context() -> HookContext {
     }
 }
 
+/// Exercise UI publication and cancellation with a real owning queue, without installing
+/// global hooks or sending input to the user's desktop.
+#[cfg(test)]
+pub(crate) fn test_ui_owner() -> (HookThread, Arc<HookFlags>) {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let join_handle = thread::spawn(move || {
+        let mut message = MSG::default();
+        // SAFETY: the initialized output creates this test thread's own message queue.
+        unsafe {
+            let _ready = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
+        }
+        // SAFETY: GetCurrentThreadId has no preconditions or ownership transfer.
+        sender
+            .send(unsafe { GetCurrentThreadId() })
+            .unwrap_or_else(|error| panic!("{error}"));
+        // SAFETY: only this owning test thread reads its initialized message output.
+        while unsafe { GetMessageW(&raw mut message, None, 0, 0) }.0 > 0 {}
+    });
+    let thread_id = receiver.recv().unwrap_or_else(|error| panic!("{error}"));
+    let flags = Arc::new(HookFlags::new());
+    (
+        HookThread {
+            thread_id,
+            join_handle: Some(join_handle),
+            remote_desktop_passthrough: Arc::new(AtomicBool::new(false)),
+            flags: Arc::clone(&flags),
+        },
+        flags,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
