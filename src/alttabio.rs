@@ -20,6 +20,7 @@ pub mod panel_pointer;
 pub mod passthrough;
 pub mod preview_layout;
 pub mod process_identity;
+pub mod refresh_schedule;
 pub mod settings;
 pub mod settings_change;
 pub mod settings_form;
