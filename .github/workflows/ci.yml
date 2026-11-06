@@ -44,6 +44,7 @@ jobs:
           sh -n docs/install.sh
           sh -n scripts/mac/test-installer.sh
           sh scripts/mac/test-installer.sh
+          python3 scripts/mac/test-update-archive.py
           sh -n scripts/mac/bootstrap.sh
           sh -n scripts/mac/test-bootstrap.sh
           sh -n scripts/mac/package-installer.sh
