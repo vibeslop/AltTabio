@@ -2,12 +2,14 @@
 
 mod key;
 mod mouse;
+mod provenance;
 
 use crate::text_edit::TextCommand;
 use crate::window_command::WindowCommand;
 use key::KeySet;
 pub use key::{Key, KeyEvent, KeyTransition, Modifiers, decode_virtual_key};
 pub use mouse::MouseEvent;
+pub use provenance::InputProvenance;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(
