@@ -381,16 +381,8 @@
 
 <dialog class="sheet" id="mac-sheet" aria-labelledby="sheet-title">
   <h2 id="sheet-title">Install AltTabio on your Mac</h2>
-  <p>Paste this line into Terminal. It checks the download's signature, puts AltTabio in Applications, and opens it.</p>
-  <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="sheet-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="sheet-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
+  <p>Copy the bootstrap block from the README into Terminal. It verifies the installer image with the pinned release certificate before running its script.</p>
+  <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
   <div class="row">
     <a href="../mac/#install">Other ways to install</a>
     <form method="dialog"><button class="btn btn-quiet btn-sm">Done</button></form>

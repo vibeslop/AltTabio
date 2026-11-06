@@ -106,7 +106,7 @@
         {"@type": "Question", "name": "Which Macs does AltTabio run on?", "acceptedAnswer": {"@type": "Answer", "text": "Any Mac with macOS 26 or later. The download is a universal app for Apple silicon and Intel."}},
         {"@type": "Question", "name": "Why does AltTabio need Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, and close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works, and the preview area shows a hint instead."}},
         {"@type": "Question", "name": "Do I have to grant the permissions again after an update?", "acceptedAnswer": {"@type": "Answer", "text": "No. macOS ties the permissions to the certificate an app is signed with, and every AltTabio release is signed with the same one."}},
-        {"@type": "Question", "name": "Why is AltTabio installed with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. The script checks the signature before it installs anything."}},
+        {"@type": "Question", "name": "Why is AltTabio installed with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The README command downloads with curl and verifies the installer image against AltTabio's pinned release certificate before mounting it or running its script."}},
         {"@type": "Question", "name": "How do I get the system Cmd+Tab back?", "acceptedAnswer": {"@type": "Answer", "text": "Turn off Replace Cmd+Tab in the AltTabio settings, or quit AltTabio from its menu bar icon."}},
         {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics. It goes online to check for and download updates from GitHub. Update automatically in Settings turns off automatic updates; you can still check manually. Previews are drawn on your Mac and never saved or sent anywhere."}}
       ]
@@ -163,16 +163,8 @@
       <span class="eyebrow">AltTabio for Mac</span>
       <h1 id="hero-title">Cmd+Tab straight to the window you want.</h1>
       <p class="sub">The Mac switcher stops at apps. AltTabio keeps Cmd+Tab and lists every window of the selected app, including minimized ones and ones on other desktops.</p>
-      <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="hero-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="hero-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
-      <p class="note">Paste into Terminal. macOS 26 or later, Apple silicon and Intel. Free and open source. Or <a href="#install">download the app</a>.</p>
+      <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
+      <p class="note">macOS 26 or later, Apple silicon and Intel. Free and open source. Or <a href="#install">download the app</a>.</p>
     </div>
   </section>
 
@@ -277,25 +269,17 @@
     <div class="wrap">
       <div class="head">
         <h2 id="install-title">Install, update, remove.</h2>
-        <p>One line for each of the first two.</p>
+        <p>Install with the verified installer. Updates follow automatically.</p>
       </div>
       <div class="get">
         <div>
           <span class="os">Recommended</span>
-          <h3>Paste one line into Terminal</h3>
-          <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="install-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="install-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
+          <h3>Verify the installer before it runs</h3>
+          <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
           <ol class="steps">
             <li><span>The script downloads the newest release, checks its signature, puts <code class="inline">AltTabio.app</code> in <code class="inline">/Applications</code> (or in <code class="inline">~/Applications</code> when your account can't write there), and opens it.</span></li>
             <li><span>Allow <strong>Accessibility</strong> when AltTabio asks, then press Cmd+Tab.</span></li>
-            <li><span>AltTabio updates itself from then on, and <strong>Check for Updates…</strong> in its menu bar menu looks right away. Running the same line again updates it too. If an update fails partway, the installed copy stays as it was.</span></li>
+            <li><span>AltTabio updates itself from then on, and <strong>Check for Updates…</strong> in its menu bar menu looks right away. Running the same bootstrap block again updates it too. If an update fails partway, the installed copy stays as it was.</span></li>
           </ol>
         </div>
         <div>
@@ -347,7 +331,7 @@
         </details>
         <details>
           <summary>Why is it installed with a Terminal command?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. A copy downloaded with curl, as the script does, is not blocked. The script checks the signature before it installs anything, and you can <a href="https://vibeslop.github.io/AltTabio/install.sh">read it</a> first.</p></div>
+          <div class="ans"><p>AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The <a href="https://github.com/vibeslop/AltTabio#macos">README command</a> downloads with curl and verifies the installer image against AltTabio's pinned release certificate before mounting it or running its script.</p></div>
         </details>
         <details>
           <summary>How do I get the system Cmd+Tab back?<span class="plus" aria-hidden="true"></span></summary>
@@ -404,16 +388,8 @@
 
 <dialog class="sheet" id="mac-sheet" aria-labelledby="sheet-title">
   <h2 id="sheet-title">Install AltTabio on your Mac</h2>
-  <p>Paste this line into Terminal. It checks the download's signature, puts AltTabio in Applications, and opens it.</p>
-  <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="sheet-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="sheet-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
+  <p>Copy the bootstrap block from the README into Terminal. It verifies the installer image with the pinned release certificate before running its script.</p>
+  <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
   <div class="row">
     <a href="../mac/#install">Other ways to install</a>
     <form method="dialog"><button class="btn btn-quiet btn-sm">Done</button></form>
