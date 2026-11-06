@@ -42,7 +42,10 @@ jobs:
           test -s target/mac/AltTabio.app/Contents/Resources/THIRD_PARTY_LICENSES.md
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch arm64
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch x86_64
-          codesign --verify --deep --strict target/mac/AltTabio.app
+          sh scripts/mac/verify-hardened-runtime.sh target/mac/AltTabio.app
+
+      - name: Check macOS signing policy
+        run: sh scripts/mac/test-signing.sh
 
       - name: Verify release rejects window diagnostics
         timeout-minutes: 1
@@ -53,6 +56,17 @@ jobs:
           sh -n docs/install.sh
           sh -n scripts/mac/test-installer.sh
           sh scripts/mac/test-installer.sh
+          python3 scripts/mac/test-update-archive.py
+          sh -n scripts/mac/bootstrap.sh
+          sh -n scripts/mac/test-bootstrap.sh
+          sh -n scripts/mac/package-installer.sh
+          sh scripts/mac/test-bootstrap.sh
+          sh scripts/mac/test-bootstrap-limits.sh
+
+      - name: Check manual macOS install instructions
+        run: |
+          sh -n scripts/mac/test-manual-install.sh
+          sh scripts/mac/test-manual-install.sh
 
   verify:
     runs-on: windows-latest

@@ -24,7 +24,7 @@ release=$(<"$pin_file")
 scripts/mac/build-app.sh --universal
 
 app=target/mac/AltTabio.app
-codesign --verify --deep --strict "$app"
+sh scripts/mac/verify-hardened-runtime.sh "$app"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -52,3 +52,4 @@ rm -f "$archive"
 ditto -c -k --keepParent "$app" "$archive"
 print -- "Packaged $archive for the v$version release"
 shasum -a 256 "$archive"
+sh scripts/mac/package-installer.sh
