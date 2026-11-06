@@ -2,6 +2,7 @@
 
 use super::window_list::{self, EnumerationOptions, Listing, Unresponsive};
 use super::{commands, current_pid};
+use alttabio::terminal_text::{escape, escape_truncated};
 use std::ffi::OsString;
 
 /// Every window on every display, asked for once from the command line.
@@ -33,8 +34,8 @@ pub(super) fn print_window_list() {
             record.window_id,
             record.pid,
             state,
-            truncate(&record.app_name, 24),
-            record.title
+            escape_truncated(&record.app_name, 24),
+            escape(&record.title)
         );
     }
     for app in listing.windowless {
@@ -43,7 +44,7 @@ pub(super) fn print_window_list() {
             "-",
             app.pid,
             "none",
-            truncate(&app.name, 24)
+            escape_truncated(&app.name, 24)
         );
     }
 }
@@ -62,11 +63,11 @@ pub(super) fn activate_from_command_line(argument: Option<&OsString>) {
         return;
     };
     match commands::activate(record) {
-        Ok(()) => println!("Activated {} ({})", record.title, record.app_name),
-        Err(error) => eprintln!("{error}"),
+        Ok(()) => println!(
+            "Activated {} ({})",
+            escape(&record.title),
+            escape(&record.app_name)
+        ),
+        Err(error) => eprintln!("{}", escape(&error)),
     }
-}
-
-fn truncate(value: &str, width: usize) -> String {
-    value.chars().take(width).collect()
 }

@@ -3,6 +3,7 @@
 
 use super::window_list::{WindowRecord, launch_time};
 use alttabio::process_identity::ProcessIdentity;
+use alttabio::terminal_text::escape;
 use alttabio::window_command::WindowCommand;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
@@ -22,23 +23,26 @@ pub fn activate(record: &WindowRecord) -> Result<(), String> {
         name: &record.app_name,
     })?;
     if app.isHidden() && !app.unhide() {
-        eprintln!("Could not unhide {}", record.app_name);
+        eprintln!("Could not unhide {}", escape(&record.app_name));
     }
     if let Some(ax) = &record.ax {
         if ax.boolean("AXMinimized") == Some(true) && !ax.set_boolean("AXMinimized", false) {
-            eprintln!("Could not restore the minimized window {}", record.title);
+            eprintln!(
+                "Could not restore the minimized window {}",
+                escape(&record.title)
+            );
         }
         // Raising before activation makes the chosen window the app's key window instead of
         // whichever window the app last used.
         if !ax.perform("AXRaise") {
-            eprintln!("Could not raise the window {}", record.title);
+            eprintln!("Could not raise the window {}", escape(&record.title));
         }
     }
     bring_forward(&app, &record.app_name)?;
     if let Some(ax) = &record.ax
         && !ax.perform("AXRaise")
     {
-        eprintln!("Could not bring {} to the front", record.title);
+        eprintln!("Could not bring {} to the front", escape(&record.title));
     }
     Ok(())
 }
@@ -47,7 +51,7 @@ pub fn activate(record: &WindowRecord) -> Result<(), String> {
 pub fn activate_app(app: &AppRef<'_>) -> Result<(), String> {
     let running = running_application(app)?;
     if running.isHidden() && !running.unhide() {
-        eprintln!("Could not unhide {}", app.name);
+        eprintln!("Could not unhide {}", escape(app.name));
     }
     bring_forward(&running, app.name)
 }

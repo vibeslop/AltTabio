@@ -6,6 +6,7 @@ use crate::macos::hotkey::TapEvent;
 use crate::macos::permissions;
 use crate::macos::runtime::{post_to_app, schedule_repeating, with_app};
 use crate::macos::tracing;
+use alttabio::terminal_text::escape;
 use objc2_app_kit::NSWorkspace;
 
 // How often a start without Accessibility access checks whether the grant has arrived.
@@ -47,7 +48,10 @@ impl App {
             .and_then(|app| app.localizedName())
             .map_or_else(|| "another app".to_owned(), |name| name.to_string());
         if tracing() {
-            eprintln!("event tap reinserted at the head; front app: {front}");
+            eprintln!(
+                "event tap reinserted at the head; front app: {}",
+                escape(&front)
+            );
         }
         if !permissions::secure_input_enabled() {
             self.secure_input_holder = None;
@@ -55,8 +59,9 @@ impl App {
         }
         if self.secure_input_holder.as_deref() != Some(&front) {
             eprintln!(
-                "Secure keyboard input is on while {front} is in front; macOS hides every key, \
-                 including ⌘ Tab, from AltTabio until it ends."
+                "Secure keyboard input is on while {} is in front; macOS hides every key, \
+                 including ⌘ Tab, from AltTabio until it ends.",
+                escape(&front)
             );
             self.secure_input_holder = Some(front);
         }

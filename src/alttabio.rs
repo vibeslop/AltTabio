@@ -31,6 +31,7 @@ pub mod switcher;
 pub mod task_list_hit;
 pub mod task_query_budget;
 pub mod task_refresh;
+pub mod terminal_text;
 pub mod text_edit;
 pub mod theme;
 pub mod update;
