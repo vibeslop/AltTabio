@@ -38,7 +38,7 @@ fn activate_and_hide(target: HWND, hide: impl FnOnce()) -> bool {
     activated
 }
 
-fn activate_window(owner: HWND) -> bool {
+pub(super) fn resolve_activation_target(owner: HWND) -> HWND {
     let popup = unsafe {
         // SAFETY: owner is a borrowed HWND selected from the current EnumWindows snapshot.
         GetLastActivePopup(owner)
@@ -49,7 +49,11 @@ fn activate_window(owner: HWND) -> bool {
             // SAFETY: popup is the borrowed HWND returned by GetLastActivePopup.
             IsWindowVisible(popup).as_bool()
         };
-    let target = activation_target(owner, popup, popup_is_visible);
+    activation_target(owner, popup, popup_is_visible)
+}
+
+fn activate_window(owner: HWND) -> bool {
+    let target = resolve_activation_target(owner);
 
     if unsafe {
         // SAFETY: target is a borrowed top-level or owned-popup HWND.
