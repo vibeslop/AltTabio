@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const RELEASES_URL: &str = "https://api.github.com/repos/vibeslop/AltTabio/releases?per_page=30";
+// A release list includes notes and assets, but must stay bounded before NSData copies it.
+const MAX_RELEASE_METADATA_BYTES: usize = 1024 * 1024;
+const MAX_METADATA_STDERR_BYTES: usize = 16 * 1024;
 // scripts/mac/package.sh packages nothing signed with another certificate.
 const RELEASE_CERTIFICATE: &str = include_str!("../../scripts/mac/release-certificate.sha1");
 // Share the standalone installer's download/extraction limits, not just its ZIP metadata checks.
@@ -110,11 +113,18 @@ fn spawn(work: impl FnOnce() + Send + 'static) -> Result<(), String> {
 }
 
 fn check_now(current: Version, bundle: &Path) -> Result<Checked, String> {
-    let list = run(curl()
-        .args(["--max-time", "30", "--header"])
-        .arg("Accept: application/vnd.github+json")
-        .arg(RELEASES_URL))
-    .map_err(|error| format!("Could not get the list of releases from GitHub: {error}"))?;
+    let output = alttabio::command_output::bounded(
+        curl()
+            .args(["--max-time", "30", "--header"])
+            .arg("Accept: application/vnd.github+json")
+            .arg(RELEASES_URL),
+        MAX_RELEASE_METADATA_BYTES,
+        MAX_METADATA_STDERR_BYTES,
+    )
+    .map_err(|error| error.to_string())
+    .and_then(|output| command_result("/usr/bin/curl", output));
+    let list = output
+        .map_err(|error| format!("Could not get the list of releases from GitHub: {error}"))?;
     let Some(update) = newest_update(current, &read_releases(&list)?) else {
         return Ok(Checked::UpToDate);
     };
@@ -261,6 +271,10 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("could not start {program}: {error}"))?;
+    command_result(&program, output)
+}
+
+fn command_result(program: &str, output: std::process::Output) -> Result<Vec<u8>, String> {
     if output.status.success() {
         return Ok(output.stdout);
     }
@@ -273,6 +287,9 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
 }
 
 fn read_releases(json: &[u8]) -> Result<Vec<Release>, String> {
+    if json.len() > MAX_RELEASE_METADATA_BYTES {
+        return Err("GitHub sent a list of releases that is too large".to_owned());
+    }
     let unreadable = || "GitHub sent a list of releases AltTabio cannot read".to_owned();
     let list = NSJSONSerialization::JSONObjectWithData_options_error(
         &NSData::with_bytes(json),
@@ -409,5 +426,17 @@ mod tests {
         ] {
             assert!(read_releases(json).is_err());
         }
+    }
+
+    #[test]
+    fn release_metadata_has_a_byte_limit_before_json_parsing() {
+        let mut json = vec![b' '; MAX_RELEASE_METADATA_BYTES + 1];
+        json[..2].copy_from_slice(b"[]");
+        // Valid JSON with trailing whitespace must still be rejected when oversized.
+        assert!(read_releases(&json).is_err_and(|error| error.contains("too large")));
+        assert_eq!(
+            read_releases(&json[..MAX_RELEASE_METADATA_BYTES]),
+            Ok(vec![])
+        );
     }
 }
