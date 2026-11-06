@@ -11,6 +11,7 @@ mod navigation;
 mod page_tests;
 mod paint;
 mod paint_state;
+mod redraw;
 mod selectors;
 #[cfg(test)]
 mod test_support;
@@ -302,10 +303,13 @@ impl DialogState {
     }
 
     fn apply_selected_language(&mut self) -> Result<()> {
+        let _redraw = redraw::RedrawBatch::begin(self.hwnd, &self.controls);
         self.language_preview.set(self.selected_language());
         let settings = self.current_settings();
         self.controls.refresh_language(self.hwnd, &settings)?;
-        self.select_category(self.pages.category)
+        self.refresh_category_text()?;
+        self.refresh_paint_state();
+        Ok(())
     }
 
     fn apply_selected_theme(&mut self) {

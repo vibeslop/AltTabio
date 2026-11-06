@@ -5,13 +5,149 @@ use crate::settings_dialog::{DialogState, page_tests::dialog, test_support::Rend
 use alttabio::settings_form::Selector;
 use std::cell::Cell;
 use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Gdi::{
+    RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, UpdateWindow,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, CB_SETCURSEL, CB_SETITEMHEIGHT, GWL_STYLE, GetClientRect, GetWindowLongPtrW,
-    GetWindowTextW, WM_SETTEXT, WM_WINDOWPOSCHANGED, WS_VISIBLE,
+    BM_CLICK, CB_RESETCONTENT, CB_SETCURSEL, CB_SETITEMHEIGHT, GWL_STYLE, GetClientRect,
+    GetWindowLongPtrW, GetWindowTextW, WM_SETTEXT, WM_WINDOWPOSCHANGED, WS_VISIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{WM_KILLFOCUS, WM_SETFOCUS};
 
 const PROBE_ID: usize = 2;
+
+struct LanguagePaintProbe {
+    window: HWND,
+    paints: Cell<usize>,
+    empty_frames: Cell<usize>,
+    paint_failed: Cell<bool>,
+}
+
+unsafe extern "system" fn language_paint_probe(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    data: usize,
+) -> LRESULT {
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the test keeps the boxed probe alive until its subclass is removed.
+        let probe = unsafe { &*(data as *const LanguagePaintProbe) };
+        if matches!(message, WM_PAINT | WM_ERASEBKGND) {
+            probe.paints.set(probe.paints.get() + 1);
+            if super::super::controls::selected_index(hwnd).is_none() {
+                probe.empty_frames.set(probe.empty_frames.get() + 1);
+            }
+        }
+        // SAFETY: forward unchanged native payloads to the remaining subclass chain.
+        let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+        if message == CB_RESETCONTENT {
+            // SAFETY: stress native repaint re-entry after the real combo reset. UpdateWindow
+            // respects native redraw suppression, unlike a synthetic WM_PRINTCLIENT.
+            unsafe {
+                if !InvalidateRect(Some(hwnd), None, false).as_bool()
+                    || !UpdateWindow(hwnd).as_bool()
+                {
+                    probe.paint_failed.set(true);
+                }
+            }
+        }
+        result
+    }))
+    .unwrap_or(LRESULT(0))
+}
+
+impl Drop for LanguagePaintProbe {
+    fn drop(&mut self) {
+        // SAFETY: the test removes its probe before destroying the dialog.
+        assert!(
+            unsafe { RemoveWindowSubclass(self.window, Some(language_paint_probe), 3) }.as_bool()
+        );
+    }
+}
+
+#[test]
+fn language_change_never_paints_an_empty_selector() -> Result<()> {
+    let _desktop = super::super::test_support::PrivateDesktop::new()?;
+    for dpi in [96, 144, 192] {
+        for theme_index in [1, 2] {
+            check_language_painting(dpi, theme_index)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_language_painting(dpi: u32, theme_index: usize) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    {
+        let mut state = host.state_mut()?;
+        state.update_dpi(dpi)?;
+        // SAFETY: the test-owned theme selector contains both light and dark entries.
+        unsafe {
+            SendMessageW(
+                state.controls.get(Control::Selector(Selector::Theme)),
+                CB_SETCURSEL,
+                Some(WPARAM(theme_index)),
+                None,
+            );
+        }
+        state.apply_selected_theme();
+    }
+    let combo = host
+        .state_mut()?
+        .controls
+        .get(Control::Selector(Selector::Language));
+    // SAFETY: this test owns the window on a private, unselected desktop.
+    unsafe {
+        let _previous = ShowWindow(dialog.window(), SW_SHOWNOACTIVATE);
+        RedrawWindow(
+            Some(dialog.window()),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        )
+        .ok()?;
+    }
+    let probe = Box::new(LanguagePaintProbe {
+        window: combo,
+        paints: Cell::new(0),
+        empty_frames: Cell::new(0),
+        paint_failed: Cell::new(false),
+    });
+    // SAFETY: the boxed probe remains stable until its Drop removes this subclass.
+    unsafe {
+        SetWindowSubclass(
+            combo,
+            Some(language_paint_probe),
+            3,
+            std::ptr::from_ref(probe.as_ref()) as usize,
+        )
+        .ok()?;
+    }
+    for index in [2, 3, 1, 0] {
+        // SAFETY: the language selector owns all four entries; only a scalar index is sent.
+        unsafe { SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(index)), None) };
+        host.state_mut()?.queue_selector_preview(Selector::Language);
+        super::super::page_tests::pump(dialog.window());
+        assert_eq!(super::super::controls::selected_index(combo), Some(index));
+    }
+    assert!(!probe.paint_failed.get(), "native repaint stress failed");
+    assert!(
+        probe.paints.get() > 0,
+        "the real language transition must repaint the field"
+    );
+    assert_eq!(
+        probe.empty_frames.get(),
+        0,
+        "language change painted a blank selector"
+    );
+    drop(probe);
+    dialog.destroy()?;
+    Ok(())
+}
 struct RepaintProbe {
     hwnd: HWND,
     image: RenderTarget,
