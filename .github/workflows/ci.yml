@@ -37,7 +37,10 @@ jobs:
           test -s target/mac/AltTabio.app/Contents/Resources/THIRD_PARTY_LICENSES.md
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch arm64
           lipo target/mac/AltTabio.app/Contents/MacOS/AltTabio -verify_arch x86_64
-          codesign --verify --deep --strict target/mac/AltTabio.app
+          sh scripts/mac/verify-hardened-runtime.sh target/mac/AltTabio.app
+
+      - name: Check macOS signing policy
+        run: sh scripts/mac/test-signing.sh
 
       - name: Check the install script
         run: |
