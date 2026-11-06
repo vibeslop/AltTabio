@@ -30,7 +30,7 @@ jobs:
       - name: Test production diagnostic policy
         env:
           CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: "false"
-        run: cargo test --quiet --lib macos_cli::
+        run: 'cargo test --quiet --lib macos_cli::'
 
       - name: Build macOS app bundle
         run: scripts/mac/build-app.sh --universal
