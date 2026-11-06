@@ -220,6 +220,8 @@ impl App {
     }
 
     fn shutdown(&mut self) -> Option<SettingsWriter> {
+        super::runtime::stop_refresh_notices();
+        self.refresh.stop();
         self.event_tap = None;
         self.cancel_dwell();
         self.front_observer = None;

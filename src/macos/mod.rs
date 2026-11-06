@@ -8,6 +8,7 @@ mod alerts;
 mod app;
 mod autostart;
 mod ax;
+#[cfg(debug_assertions)]
 mod cli;
 mod commands;
 mod event_tap;
@@ -29,6 +30,7 @@ use crate::settings_io::SettingsStore;
 use alerts::show_fatal_error;
 use alttabio::settings::Settings;
 use app::App;
+#[cfg(debug_assertions)]
 use cli::{activate_from_command_line, print_window_list};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -44,19 +46,26 @@ fn tracing() -> bool {
 }
 
 pub fn run(arguments: &[OsString]) {
+    if let Some(command) = alttabio::macos_cli::diagnostic_command(arguments) {
+        #[cfg(debug_assertions)]
+        {
+            match command {
+                alttabio::macos_cli::DiagnosticCommand::List => print_window_list(),
+                alttabio::macos_cli::DiagnosticCommand::Activate(argument) => {
+                    activate_from_command_line(argument.as_ref());
+                }
+            }
+            return;
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let alttabio::macos_cli::DiagnosticCommand::Unavailable = command;
+            eprintln!("--list and --activate are available only in debug builds of AltTabio");
+            std::process::exit(2);
+        }
+    }
     let preview_mode = arguments.iter().any(|argument| argument == "--preview");
     let settings_mode = arguments.iter().any(|argument| argument == "--settings");
-    if arguments.iter().any(|argument| argument == "--list") {
-        print_window_list();
-        return;
-    }
-    if let Some(index) = arguments
-        .iter()
-        .position(|argument| argument == "--activate")
-    {
-        activate_from_command_line(arguments.get(index + 1));
-        return;
-    }
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("AltTabio must start on the main thread");
         return;

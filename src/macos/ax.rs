@@ -1,7 +1,8 @@
 //! Narrow Accessibility (`AXUIElement`) wrappers used for window enumeration and control, and
 //! the observer that follows the front app's windows.
 
-use super::runtime::post_to_app;
+use super::runtime::post_refresh_notice;
+use alttabio::refresh_schedule::RefreshNotice;
 use objc2_application_services::{AXError, AXObserver, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFRetained, CFRunLoop, CFRunLoopSource, CFString, CFType, Type,
@@ -281,6 +282,9 @@ unsafe extern "C-unwind" fn observer_callback(
     };
     // Nothing may unwind into Accessibility; a lost change shows up in the next refresh.
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        post_to_app(move |app| app.front_window_changed(change));
+        post_refresh_notice(match change {
+            WindowChange::Focused => RefreshNotice::Focus,
+            WindowChange::Opened => RefreshNotice::List,
+        });
     }));
 }
