@@ -45,6 +45,11 @@ jobs:
           sh -n scripts/mac/test-installer.sh
           sh scripts/mac/test-installer.sh
 
+      - name: Check manual macOS install instructions
+        run: |
+          sh -n scripts/mac/test-manual-install.sh
+          sh scripts/mac/test-manual-install.sh
+
   verify:
     runs-on: windows-latest
 
