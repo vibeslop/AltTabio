@@ -105,7 +105,7 @@ impl App {
         self.overlay_focus.reset();
         self.hide_filter_feedback();
         self.stop_shell_dismissal();
-        self.task_refresh.clear_notices();
+        self.stop_task_refresh();
         self.session.hide();
         if let Some(preview) = &mut self.preview {
             preview.clear();

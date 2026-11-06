@@ -62,7 +62,19 @@ impl App {
         }
     }
 
+    pub(super) fn stop_task_refresh(&mut self) {
+        self.task_refresh.clear_notices();
+        if self.task_refresh.has_pending_retries() {
+            self.task_refresh.cancel_retries();
+            self.stop_close_refresh_timer();
+        }
+    }
+
     pub(super) fn handle_close_refresh_timer(&mut self) {
+        if !self.session.is_visible() {
+            self.stop_task_refresh();
+            return;
+        }
         if self.session.context_menu_open() {
             return;
         }
@@ -149,6 +161,12 @@ impl App {
     }
 
     fn refresh_switcher_tasks(&mut self) {
+        // Hidden sessions are rebuilt on the next opening. A late refresh must not
+        // hide again and cancel a fresh gesture between its Alt and Tab events.
+        if !self.session.is_visible() {
+            self.stop_task_refresh();
+            return;
+        }
         let timer = match enumerate_switchable_windows(&self.settings) {
             Ok(EnumeratedTasks { tasks, icons }) => {
                 let timer = self.task_refresh.complete_enumeration(Ok(&tasks));
