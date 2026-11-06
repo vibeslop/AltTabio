@@ -42,6 +42,18 @@ impl SwitchTask {
     }
 }
 
+/// Pick the first listed task in a captured foreground-to-owner chain.
+#[must_use]
+pub fn foreground_task(tasks: &[SwitchTask], windows: &[isize]) -> Option<isize> {
+    // Owned application windows can have their own row. Excluded modal popups
+    // fall back to their nearest listed owner, which need not be the root owner.
+    windows
+        .iter()
+        .copied()
+        .filter(|handle| *handle != 0)
+        .find(|handle| tasks.iter().any(|task| task.window_handle == *handle))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowCloaking {
     None,
@@ -194,13 +206,39 @@ impl SwitcherSession {
         tasks: impl IntoIterator<Item = SwitchTask>,
         selection_delta: Option<i32>,
     ) {
+        self.open_relative_to(tasks, selection_delta, None, |_| false);
+    }
+
+    /// Start cycling from the foreground task, skipping rows that activate that same window.
+    pub fn open_relative_to(
+        &mut self,
+        tasks: impl IntoIterator<Item = SwitchTask>,
+        selection_delta: Option<i32>,
+        foreground_window: Option<isize>,
+        mut activates_foreground: impl FnMut(isize) -> bool,
+    ) {
         self.wheel_remainder = 0;
         self.wheel_behavior = None;
         self.release_pinned = false;
         self.switcher.clear_filter();
         self.switcher.set_tasks(tasks);
         if let Some(delta) = selection_delta {
+            self.switcher.restore_selection(foreground_window, None);
             self.switcher.select_next(delta);
+            if delta != 0 {
+                // An owner row may activate the foreground popup. Inspect at most one
+                // full list and keep the original step count unless it lands on an alias.
+                for _ in 1..self.switcher.visible_task_count() {
+                    if !self
+                        .switcher
+                        .selected_task()
+                        .is_some_and(|task| activates_foreground(task.window_handle))
+                    {
+                        break;
+                    }
+                    self.switcher.select_next(delta.signum());
+                }
+            }
         }
         self.visible = !self.switcher.is_empty();
     }
@@ -917,6 +955,197 @@ mod tests {
     }
 
     use super::*;
+
+    fn opening_selection(
+        tasks: Vec<SwitchTask>,
+        foreground: isize,
+        owner: isize,
+        delta: i32,
+    ) -> SwitcherEffect {
+        let anchor = foreground_task(&tasks, &[foreground, owner]);
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        session.open_relative_to(tasks, Some(delta), anchor, |_| false);
+        session.handle_input(InputAction::AltReleased)
+    }
+
+    fn listed_windows() -> Vec<SwitchTask> {
+        vec![
+            SwitchTask::new(1, 10, "Owned application window", "app"),
+            SwitchTask::new(2, 20, "Owner", "app"),
+            SwitchTask::new(3, 30, "Other application", "other"),
+        ]
+    }
+
+    #[test]
+    fn listed_owned_foreground_keeps_its_own_cycling_anchor() {
+        for (direction, expected) in [(1, 20), (-1, 30)] {
+            assert_eq!(
+                opening_selection(listed_windows(), 10, 20, direction),
+                SwitcherEffect::Activate(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn excluded_modal_foreground_falls_back_to_its_listed_owner() {
+        for (direction, expected) in [(1, 30), (-1, 10)] {
+            assert_eq!(
+                opening_selection(listed_windows(), 99, 20, direction),
+                SwitcherEffect::Activate(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_owner_does_not_discard_a_listed_foreground() {
+        assert_eq!(
+            opening_selection(listed_windows(), 20, 0, 1),
+            SwitcherEffect::Activate(30),
+        );
+    }
+
+    #[test]
+    fn missing_foreground_and_owner_leave_the_existing_fallback() {
+        for (foreground, owner) in [(0, 0), (98, 99)] {
+            assert_eq!(
+                opening_selection(listed_windows(), foreground, owner, 1),
+                SwitcherEffect::Activate(20),
+            );
+        }
+        assert_eq!(foreground_task(&[], &[]), None);
+    }
+
+    #[test]
+    fn initial_cycle_skips_owners_that_activate_the_foreground_popup() {
+        use crate::activation::activation_target;
+
+        for (direction, handles) in [(1, [10, 20, 30, 40]), (-1, [10, 40, 30, 20])] {
+            let resolve =
+                |handle| activation_target(handle, if handle == 40 { 30 } else { handle }, true);
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            session.open_relative_to(
+                handles
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, handle)| SwitchTask::new(index + 1, handle, "Task", "app")),
+                Some(direction),
+                Some(30),
+                |handle| resolve(handle) == 30,
+            );
+            let SwitcherEffect::Activate(selected) = session.handle_input(InputAction::AltReleased)
+            else {
+                panic!("Alt release did not activate the selection");
+            };
+            assert_eq!(
+                resolve(selected),
+                10,
+                "opening selected an owner that returned to foreground"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_distinct_selection_preserves_excluded_modal_activation() {
+        use crate::activation::activation_target;
+
+        let resolve = |handle| activation_target(handle, if handle == 20 { 10 } else { 30 }, true);
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        session.open_relative_to(
+            [
+                SwitchTask::new(1, 20, "Current owner", "app"),
+                SwitchTask::new(2, 40, "Other owner", "other"),
+            ],
+            Some(1),
+            Some(20),
+            |handle| resolve(handle) == 10,
+        );
+        let SwitcherEffect::Activate(selected) = session.handle_input(InputAction::AltReleased)
+        else {
+            panic!("Alt release did not activate the selection");
+        };
+        assert_eq!(selected, 40);
+        assert_eq!(
+            resolve(selected),
+            30,
+            "a different app must retain its visible modal target"
+        );
+    }
+
+    #[test]
+    fn initial_cycle_finishes_when_every_row_returns_to_foreground() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        let mut queries = 0;
+        session.open_relative_to(tasks(), Some(1), Some(10), |_| {
+            queries += 1;
+            assert!(queries <= 2, "aliases caused an unbounded opening loop");
+            true
+        });
+        assert!(session.is_visible());
+        assert!(matches!(
+            session.handle_input(InputAction::AltReleased),
+            SwitcherEffect::Activate(_)
+        ));
+    }
+
+    #[test]
+    fn first_tab_cycles_from_the_foreground_below_topmost_windows() {
+        for (direction, expected) in [(1, 30), (-1, 10)] {
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            session.open_relative_to(
+                [
+                    SwitchTask::new(1, 10, "Topmost player", "player"),
+                    SwitchTask::new(2, 20, "Current editor", "editor"),
+                    SwitchTask::new(3, 30, "Previous browser", "browser"),
+                ],
+                Some(direction),
+                Some(20),
+                |_| false,
+            );
+            assert_eq!(
+                session.handle_input(InputAction::AltReleased),
+                SwitcherEffect::Activate(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn foreground_anchor_preserves_unlisted_and_preview_opening_behavior() {
+        let mut session = SwitcherSession::new(SwitcherSessionSettings {
+            typed_search: true,
+            release_alt_switches: true,
+        });
+        for (delta, foreground, expected) in [
+            (Some(1), None, 20),
+            (Some(1), Some(99), 20),
+            (None, Some(20), 10),
+        ] {
+            session.open_relative_to(tasks(), delta, foreground, |_| false);
+            assert_eq!(
+                session
+                    .switcher()
+                    .selected_task()
+                    .map(|task| task.window_handle),
+                Some(expected),
+            );
+        }
+        session.open_relative_to([], Some(1), Some(20), |_| false);
+        assert!(!session.is_visible());
+    }
 
     #[test]
     fn context_menu_keeps_its_target_while_keyboard_input_arrives() {

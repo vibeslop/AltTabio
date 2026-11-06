@@ -1,15 +1,16 @@
 use super::App;
-use super::activation::request_foreground;
+use super::activation::{request_foreground, resolve_activation_target};
 use super::display::position_on_cursor_monitor;
 use crate::preview::DwmPreview;
 use crate::renderer::RenderOptions;
 use crate::task_query::{EnumeratedTasks, enumerate_switchable_windows};
+use alttabio::switcher::foreground_task;
 use std::ffi::c_void;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, SW_HIDE, SW_SHOW, SW_SHOWNA, ShowWindow,
+    GW_OWNER, GetForegroundWindow, GetWindow, SW_HIDE, SW_SHOW, SW_SHOWNA, ShowWindow,
 };
 use windows::core::Error;
 
@@ -20,9 +21,19 @@ impl App {
         }
         self.overlay_focus.reset();
         self.hide_filter_feedback();
+        let foreground = unsafe {
+            // SAFETY: this read-only query returns a borrowed HWND.
+            GetForegroundWindow()
+        };
+        let foreground_windows = capture_foreground_windows(foreground);
         match enumerate_switchable_windows(&self.settings) {
             Ok(EnumeratedTasks { tasks, icons }) => {
-                self.session.open(tasks, selection_delta);
+                let anchor = foreground_task(&tasks, &foreground_windows);
+                self.session
+                    .open_relative_to(tasks, selection_delta, anchor, |handle| {
+                        !foreground.is_invalid()
+                            && resolve_activation_target(HWND(handle as *mut c_void)) == foreground
+                    });
                 self.task_icons = icons;
             }
             Err(error) => {
@@ -183,5 +194,125 @@ impl App {
         if !invalidated.as_bool() {
             eprintln!("Could not invalidate the overlay: {}", Error::from_thread());
         }
+    }
+}
+
+fn capture_foreground_windows(foreground: HWND) -> Vec<isize> {
+    const MAX_FOREGROUND_WINDOWS: usize = 32;
+    let mut windows = Vec::with_capacity(MAX_FOREGROUND_WINDOWS);
+    let mut current = foreground;
+    // Owners can disappear or change during capture. Bound work and stop repeated handles
+    // instead of trusting external ownership to form a stable, acyclic chain.
+    while !current.is_invalid()
+        && windows.len() < MAX_FOREGROUND_WINDOWS
+        && !windows.contains(&(current.0 as isize))
+    {
+        windows.push(current.0 as isize);
+        let owner = unsafe {
+            // SAFETY: current is a borrowed HWND; the query retains no references. Capture
+            // each owner before enumeration or revealing the overlay can change focus.
+            GetWindow(current, GW_OWNER)
+        };
+        match owner {
+            Ok(owner) => current = owner,
+            // GW_OWNER normally returns null for ownerless windows; the binding maps that
+            // to Err. A vanished window also ends capture, preserving earlier candidates.
+            Err(_) => break,
+        }
+    }
+    windows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alttabio::input::InputAction;
+    use alttabio::switcher::{
+        SwitchTask, SwitcherEffect, SwitcherSession, SwitcherSessionSettings,
+    };
+
+    struct FixtureWindow(HWND);
+
+    impl FixtureWindow {
+        fn new(owner: Option<HWND>, app_window: bool) -> Self {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, WINDOW_EX_STYLE, WS_EX_APPWINDOW, WS_POPUP,
+            };
+            use windows::core::w;
+
+            let window = unsafe {
+                // SAFETY: STATIC is a system class; strings are static and terminated.
+                // This thread owns each hidden fixture and its supplied owner. No window
+                // is shown or activated, and no user focus is changed.
+                CreateWindowExW(
+                    if app_window {
+                        WS_EX_APPWINDOW
+                    } else {
+                        WINDOW_EX_STYLE::default()
+                    },
+                    w!("STATIC"),
+                    w!("AltTabio ownership fixture"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    10,
+                    10,
+                    owner,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .unwrap_or_else(|error| panic!("could not create ownership fixture: {error}"));
+            Self(window)
+        }
+    }
+
+    impl Drop for FixtureWindow {
+        fn drop(&mut self) {
+            // SAFETY: fixtures are destroyed on their owning thread in child-to-owner order.
+            unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) }
+                .unwrap_or_else(|error| panic!("could not destroy ownership fixture: {error}"));
+        }
+    }
+
+    #[test]
+    fn native_popup_uses_nearest_listed_owner_for_initial_cycling() {
+        let root = FixtureWindow::new(None, true);
+        let app = FixtureWindow::new(Some(root.0), true);
+        let popup = FixtureWindow::new(Some(app.0), false);
+        let other = FixtureWindow::new(None, true);
+        let candidates = capture_foreground_windows(popup.0);
+        assert_eq!(
+            candidates,
+            [popup.0.0 as isize, app.0.0 as isize, root.0.0 as isize]
+        );
+        let tasks = vec![
+            SwitchTask::new(1, app.0.0 as isize, "Application", "app"),
+            SwitchTask::new(2, root.0.0 as isize, "Root", "app"),
+            SwitchTask::new(3, other.0.0 as isize, "Other", "other"),
+        ];
+        let anchor = foreground_task(&tasks, &candidates);
+        assert_eq!(
+            anchor,
+            Some(app.0.0 as isize),
+            "the root owner displaced a nearer listed task"
+        );
+        for (direction, expected) in [(1, root.0), (-1, other.0)] {
+            let mut session = SwitcherSession::new(SwitcherSessionSettings {
+                typed_search: true,
+                release_alt_switches: true,
+            });
+            session.open_relative_to(tasks.clone(), Some(direction), anchor, |_| false);
+            assert_eq!(
+                session.handle_input(InputAction::AltReleased),
+                SwitcherEffect::Activate(expected.0 as isize)
+            );
+        }
+        assert_eq!(
+            foreground_task(&tasks, &capture_foreground_windows(app.0)),
+            Some(app.0.0 as isize),
+            "a listed foreground must remain ahead of every owner",
+        );
     }
 }
