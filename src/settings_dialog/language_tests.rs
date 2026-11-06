@@ -4,8 +4,61 @@ use super::*;
 use alttabio::dialog_layout::{BASE_DPI, scale};
 use alttabio::settings_form::SELECTOR_WIDTH;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, CB_SETCURSEL, GetWindowTextW, SendMessageW,
+    BM_CLICK, CB_SETCURSEL, GWL_STYLE, GetWindowLongPtrW, GetWindowTextW, SendMessageW, WS_VISIBLE,
 };
+
+fn visible_controls(state: &DialogState) -> Vec<Control> {
+    state
+        .controls
+        .iter()
+        .filter_map(|(control, window)| {
+            // SAFETY: this hidden test dialog owns every queried child.
+            let visible = unsafe { GetWindowLongPtrW(window, GWL_STYLE) }.cast_unsigned()
+                & WS_VISIBLE.0 as usize
+                != 0;
+            visible.then_some(control)
+        })
+        .collect()
+}
+
+#[test]
+fn language_preview_preserves_page_visibility_and_scroll_position() -> Result<()> {
+    let dialog = dialog()?;
+    let host = dialog.host()?;
+    resize_client(&dialog, Size::new(640, 420))?;
+    for category in Category::visible() {
+        let mut state = host.state_mut()?;
+        state.select_category(category)?;
+        state.scroll_to(i32::MAX)?;
+        let offset = state.pages.offset();
+        let visible = visible_controls(&state);
+        let combo = state.controls.get(Control::Selector(Selector::Language));
+        for index in [2, 3, 1, 0] {
+            // SAFETY: the hidden test combo contains all four language entries.
+            unsafe { SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(index)), None) };
+            state.apply_selected_language()?;
+            assert_eq!(
+                state.pages.offset(),
+                offset,
+                "{category:?} scrolled on a language change"
+            );
+            assert_eq!(
+                visible_controls(&state),
+                visible,
+                "{category:?} changed visible controls"
+            );
+            // SAFETY: querying the fixture's own visibility does not affect the desktop.
+            assert_eq!(
+                unsafe { GetWindowLongPtrW(dialog.window(), GWL_STYLE) }.cast_unsigned()
+                    & WS_VISIBLE.0 as usize,
+                0,
+                "language preview revealed the hidden dialog"
+            );
+        }
+    }
+    dialog.destroy()?;
+    Ok(())
+}
 
 fn window_text(window: HWND) -> String {
     let mut buffer = [0_u16; 512];

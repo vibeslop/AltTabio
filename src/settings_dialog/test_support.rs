@@ -6,6 +6,54 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, HBITMAP, HDC, HGDIOBJ, SRCCOPY, SelectObject,
 };
 use windows::core::{Error, Result};
+
+use windows::Win32::System::StationsAndDesktops::{
+    CloseDesktop, CreateDesktopW, DESKTOP_CONTROL_FLAGS, GetThreadDesktop, HDESK, SetThreadDesktop,
+};
+use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::core::PCWSTR;
+
+/// A drawable fixture desktop that is never selected as the user's input desktop.
+pub(super) struct PrivateDesktop {
+    original: HDESK,
+    desktop: HDESK,
+}
+
+impl PrivateDesktop {
+    /// Call before creating windows; destroy those windows before dropping this guard.
+    pub(super) fn new() -> Result<Self> {
+        // SAFETY: GetThreadDesktop borrows the live test thread's desktop.
+        let original = unsafe { GetThreadDesktop(GetCurrentThreadId()) }?;
+        let name = crate::win32::wide(&format!("AltTabio-language-{}", std::process::id()));
+        // SAFETY: the terminated name is live; this guard owns the created desktop.
+        let desktop = unsafe {
+            CreateDesktopW(
+                PCWSTR(name.as_ptr()),
+                None,
+                None,
+                DESKTOP_CONTROL_FLAGS(0),
+                0x01ff,
+                None,
+            )
+        }?;
+        let guard = Self { original, desktop };
+        // SAFETY: this fresh test thread has no windows or hooks. No input desktop is switched.
+        unsafe { SetThreadDesktop(desktop) }?;
+        Ok(guard)
+    }
+}
+
+impl Drop for PrivateDesktop {
+    fn drop(&mut self) {
+        // SAFETY: every fixture window has been destroyed. Restore the borrowed original
+        // before releasing our desktop, including when a test assertion unwinds.
+        unsafe {
+            assert!(SetThreadDesktop(self.original).is_ok());
+            assert!(CloseDesktop(self.desktop).is_ok());
+        }
+    }
+}
+
 pub(super) struct RenderTarget {
     pub(super) dc: HDC,
     bitmap: HBITMAP,

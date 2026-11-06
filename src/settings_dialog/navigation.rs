@@ -38,6 +38,12 @@ impl DialogState {
 
     pub(super) fn select_category(&mut self, category: Category) -> Result<()> {
         self.pages.select(category);
+        self.refresh_category_text()?;
+        self.place_controls()
+    }
+
+    pub(super) fn refresh_category_text(&self) -> Result<()> {
+        let category = self.pages.category;
         for (control, text) in [
             (Control::PageHeading, category.title()),
             (Control::PageIntro, category.intro()),
@@ -48,7 +54,7 @@ impl DialogState {
                 SetWindowTextW(self.controls.get(control), PCWSTR(text.as_ptr()))?;
             }
         }
-        self.place_controls()
+        Ok(())
     }
 
     pub(super) fn focus_category(&mut self, category: Category) -> Result<()> {
