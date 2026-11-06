@@ -166,7 +166,7 @@
       <h1 id="hero-title">Find the right window on the first Alt+Tab.</h1>
       <p class="sub">AltTabio replaces the Windows switcher with a list of your open windows and a large live preview. Type a few letters and the list narrows; number labels are optional.</p>
       <div class="cta">
-        <a class="btn" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+        <a class="btn" href="#install"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
         <a class="link only-mac" href="../mac/">On a Mac? <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
       </div>
       <p class="note">One .exe for 64-bit Windows. Free, no installer, no account.</p>
@@ -271,23 +271,24 @@
   <section id="install" aria-labelledby="install-title">
     <div class="wrap">
       <div class="head">
-        <h2 id="install-title">Up and running in a minute.</h2>
+        <h2 id="install-title">Verify before the first launch.</h2>
         <p>One executable. No installer, no store account, no runtime.</p>
       </div>
       <div class="get">
         <div>
           <span class="os">Install</span>
-          <h3>Download, unzip, run</h3>
+          <h3>Download, verify, unzip, run</h3>
           <ol class="steps">
-            <li><span>Get the Windows zip from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a>.</span></li>
-            <li><span>Unzip it into a folder you'll keep, such as <code class="inline">C:\Program Files\AltTabio</code>.</span></li>
+            <li><span>Get the Windows zip and its matching <code class="inline">.zip.minisig</code> from the same <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub release</a>.</span></li>
+            <li><span>Follow <a href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-install.md">Windows first-install verification</a>. Build the verifier from separately trusted source and verify the archive and signed release identity. Stop if the signature is missing or verification fails.</span></li>
+            <li><span>After verification succeeds, unzip that archive into a folder only administrators can change, such as <code class="inline">C:\Program Files\AltTabio</code>.</span></li>
             <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
           </ol>
           <div class="prose">
             <p>Release builds check GitHub for updates about a minute after startup and then daily. They download newer releases, verify the archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. Your settings and startup task are preserved.</p>
             <p>Turn off automatic updates in Settings if you prefer to check yourself. The tray menu has <strong>Check for Updates</strong> and, when an update is ready, <strong>Relaunch to Update</strong>. Ordinary Windows source builds do not check for or install published updates.</p>
           </div>
-          <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+          <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-install.md"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Verify and install for Windows</a>
         </div>
         <div>
           <span class="os">For autostart and updates</span>
@@ -381,16 +382,8 @@
 
 <dialog class="sheet" id="mac-sheet" aria-labelledby="sheet-title">
   <h2 id="sheet-title">Install AltTabio on your Mac</h2>
-  <p>Paste this line into Terminal. It checks the download's signature, puts AltTabio in Applications, and opens it.</p>
-  <div class="cmd">
-            <span class="p" aria-hidden="true">$</span>
-            <code id="sheet-cmd"><span class="t-prog">curl</span> <span class="t-flag">-fsSL</span> <span class="t-path">https://vibeslop.github.io/AltTabio/install.sh</span> <span class="t-op">|</span> <span class="t-prog">sh</span></code>
-            <button class="icon-btn" type="button" data-copy="sheet-cmd" aria-label="Copy the command">
-              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
-              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
-            </button>
-            <span class="sr-only copy-status" aria-live="polite"></span>
-          </div>
+  <p>Copy the bootstrap block from the README into Terminal. It verifies the installer image with the pinned release certificate before running its script.</p>
+  <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
   <div class="row">
     <a href="../mac/#install">Other ways to install</a>
     <form method="dialog"><button class="btn btn-quiet btn-sm">Done</button></form>
