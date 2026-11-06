@@ -6,6 +6,7 @@ mod keyboard_state;
 mod mouse_replay;
 #[cfg(test)]
 mod mouse_tests;
+mod provenance;
 mod recovery;
 mod replay;
 
@@ -16,14 +17,17 @@ use alttabio::hook_flags::{
     OVERLAY_ACTIVE, OVERLAY_FLAGS, SEARCH_ACTIVE,
 };
 use alttabio::input::{
-    HookOutcome, HookSettings, HookState, InputAction, KeyEvent, KeyTransition, Modifiers,
-    MouseEvent, decode_virtual_key,
+    HookOutcome, HookSettings, HookState, InputAction, InputProvenance, KeyEvent, KeyTransition,
+    Modifiers, MouseEvent, decode_virtual_key,
 };
 use alttabio::passthrough::PassthroughPolicy;
 use delivery::post_actions;
 use keyboard_state::{KeyboardState, translate_search_character};
+use provenance::{
+    filter_keyboard_input, filter_mouse_input, keyboard_provenance, mouse_provenance,
+};
 use recovery::{KeyboardRecoveryWatcher, publish_recovery_flags, recover_keyboard_state};
-use replay::{is_own_replayed_input, replay_key_events};
+use replay::replay_key_events;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{
@@ -33,12 +37,10 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_RWIN, VK_SHIFT,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, GetWindowThreadProcessId, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
+    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW,
     PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_QUIT,
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
@@ -382,6 +384,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     }
 
     std::panic::catch_unwind(|| {
+        if let Some(result) =
+            filter_keyboard_input(lparam, || forward_keyboard(code, wparam, lparam))
+        {
+            return result;
+        }
         finish_callback_with(
             process_keyboard_message(wparam, lparam),
             post_actions,
@@ -419,6 +426,9 @@ fn commit_keyboard_delivery(wparam: WPARAM, lparam: LPARAM) {
         (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
     };
     if let Some(data) = data {
+        if keyboard_provenance(data) == InputProvenance::Injected {
+            return;
+        }
         let _committed = process_with_context(|context| {
             context
                 .keyboard_state
@@ -433,6 +443,9 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     }
 
     std::panic::catch_unwind(|| {
+        if let Some(result) = filter_mouse_input(lparam, || call_next(code, wparam, lparam)) {
+            return result;
+        }
         finish_mouse_callback_with(process_mouse_message(wparam, lparam), post_actions, || {
             call_next(code, wparam, lparam)
         })
@@ -451,18 +464,11 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         // to a KBDLLHOOKSTRUCT for the callback duration.
         (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
     }?;
-    if is_own_replayed_input(data.dwExtraInfo) {
+    let provenance = keyboard_provenance(data);
+    if provenance != InputProvenance::Physical {
         return None;
     }
     let key = decode_virtual_key(data.vkCode);
-    let modifiers = Modifiers {
-        alt: data.flags.contains(LLKHF_ALTDOWN),
-        control: false,
-        shift: false,
-        left_windows: key_pressed(VK_LWIN.0),
-        right_windows: key_pressed(VK_RWIN.0),
-    };
-
     let (mut outcome, replayed_key_events) = process_with_context(|context| {
         context
             .keyboard_state
@@ -470,7 +476,7 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         let modifiers = Modifiers {
             control: context.keyboard_state.pressed(VK_CONTROL),
             shift: context.keyboard_state.pressed(VK_SHIFT),
-            ..modifiers
+            ..Modifiers::default()
         };
         let flags = context.sync_interception();
         let search_active = flags & SEARCH_ACTIVE != 0;
@@ -488,7 +494,8 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         } else {
             None
         };
-        let outcome = context.state.process_key(
+        let outcome = context.state.process_key_from(
+            provenance,
             KeyEvent {
                 key,
                 transition,
@@ -496,10 +503,10 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
                 text,
             },
             settings,
-        );
+        )?;
         let replayed_key_events = context.state.take_replayed_key_events();
-        (outcome, replayed_key_events)
-    })?;
+        Some((outcome, replayed_key_events))
+    })??;
     if !replay_key_events(replayed_key_events, &mut outcome) {
         record_callback_error(HOOK_ERROR_REPLAY_INPUT);
     }
@@ -543,7 +550,8 @@ fn process_mouse_message_with(
 ) -> Option<HookOutcome> {
     // SAFETY: the hook passes a live MSLLHOOKSTRUCT for the callback duration.
     let data = unsafe { (lparam.0 as *const MSLLHOOKSTRUCT).as_ref() }?;
-    if is_own_replayed_input(data.dwExtraInfo) {
+    let provenance = mouse_provenance(data);
+    if provenance != InputProvenance::Physical {
         return None;
     }
     let message = u32::try_from(wparam.0).ok()?;
@@ -592,7 +600,9 @@ fn process_mouse_message_with(
         )
         .apply(context.settings);
         let owned = context.state.owns_right_button();
-        let mut outcome = context.state.process_mouse(event, settings);
+        let mut outcome = context
+            .state
+            .process_mouse_from(provenance, event, settings)?;
         if event == MouseEvent::RightButtonPressed {
             context
                 .right_button_release
@@ -604,8 +614,8 @@ fn process_mouse_message_with(
             // A hook restart cancelled the gesture but still owes its swallowed press a release.
             outcome.suppress = true;
         }
-        (outcome, context.state.take_replayed_right_click())
-    })?;
+        Some((outcome, context.state.take_replayed_right_click()))
+    })??;
     if replay && !queue_click() {
         record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
     }
