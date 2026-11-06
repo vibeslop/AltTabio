@@ -12,6 +12,7 @@ pub mod hook_delivery;
 pub mod hook_flags;
 pub mod input;
 pub mod localization;
+pub mod macos_cli;
 pub mod overlay_layout;
 pub mod overlay_pointer;
 pub mod overlay_window;

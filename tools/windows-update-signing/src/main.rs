@@ -1,4 +1,5 @@
-//! Offline release preparation. Never contacts GitHub or publishes anything.
+//! Offline release preparation and first-install verification. Never executes an archive.
+mod install;
 use alttabio::{update::Version, update_signature};
 use minisign::{KeyPair, PublicKey, SecretKey, SecretKeyBox};
 use std::{env, error::Error, fs, io::Cursor, path::Path};
@@ -7,7 +8,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Windows update signing failed: {error}");
+        eprintln!("Windows archive operation failed: {error}");
         std::process::exit(1);
     }
 }
@@ -77,6 +78,10 @@ fn run() -> Result<()> {
         ["verify", archive, signature, release_version, public] => {
             update_signature::verify(fs::File::open(archive)?, &fs::read_to_string(signature)?, version(release_version)?, &fs::read_to_string(public)?)?;
         }
+        ["verify-install", archive, release_version] => {
+            install::verify(Path::new(archive), version(release_version)?)?;
+            println!("Verified AltTabio {release_version} Windows x64 archive and signed release identity. Extract only this verified archive.");
+        }
         ["fixtures", archive, release_version, directory] => {
             // Ephemeral test keys are unrelated to production. Never persist private keys.
             let version = version(release_version)?;
@@ -88,7 +93,7 @@ fn run() -> Result<()> {
             let other = KeyPair::generate_unencrypted_keypair()?;
             fs::write(directory.join("wrong-key.minisig"), sign(Path::new(archive), version, &other.sk, &other.pk.to_box()?.to_string())?)?;
         }
-        _ => return Err("Usage: windows-update-signing keygen PRIVATE_DIRECTORY | sign ARCHIVE VERSION | verify ARCHIVE SIGNATURE VERSION PUBLIC_KEY | fixtures ARCHIVE VERSION DIRECTORY".into()),
+        _ => return Err("Usage: windows-update-signing verify-install ARCHIVE VERSION | keygen PRIVATE_DIRECTORY | sign ARCHIVE VERSION | verify ARCHIVE SIGNATURE VERSION PUBLIC_KEY | fixtures ARCHIVE VERSION DIRECTORY".into()),
     }
     Ok(())
 }
