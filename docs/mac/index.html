@@ -286,11 +286,25 @@
           <span class="os">By hand</span>
           <h3>Download the app</h3>
           <ol class="steps">
-            <li><span>Download <code class="inline">AltTabio-&lt;version&gt;-macos.zip</code> from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a> and unzip it.</span></li>
-            <li><span>Move <code class="inline">AltTabio.app</code> to Applications and open it. When macOS says it could not verify the app, choose <strong>Done</strong>.</span></li>
-            <li><span>Open <strong>System Settings, Privacy &amp; Security</strong>, click <strong>Open Anyway</strong> next to the message about AltTabio, and confirm.</span></li>
+            <li><span>Download <code class="inline">AltTabio-&lt;version&gt;-macos.zip</code> from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a> and unzip it in Downloads. Leave the app there without opening it.</span></li>
+            <li><div class="prose">
+              <p>In Terminal, run this command to verify the app's signature, bundle identifier, and pinned release certificate. If you unzipped it elsewhere, change the quoted app path to that location.</p>
+              <div class="cmd">
+                <span class="p" aria-hidden="true">$</span>
+                <!-- Keep the requirement aligned with scripts/mac/release-certificate.sha1 and docs/install.sh. -->
+                <code id="manual-verify-cmd">codesign --verify --deep --strict -R '=identifier "com.vibeslop.AltTabio" and certificate leaf = H"617A82407E9767025EDE4A62A9B990ADEA21F53B"' "$HOME/Downloads/AltTabio.app" &amp;&amp; printf '%s\n' 'Verified AltTabio release identity.'</code>
+                <button class="icon-btn" type="button" data-copy="manual-verify-cmd" aria-label="Copy the command">
+                  <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+                  <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+                </button>
+                <span class="sr-only copy-status" aria-live="polite"></span>
+              </div>
+              <p>Continue only if Terminal prints <strong>Verified AltTabio release identity.</strong> If it does not, stop. Do not move or open the app, or use Open Anyway.</p>
+            </div></li>
+            <li><span>Only after verification succeeds, move that same <code class="inline">AltTabio.app</code> to Applications and open it. When macOS says it could not verify the app, choose <strong>Done</strong>.</span></li>
+            <li><span>For the verified app only, open <strong>System Settings, Privacy &amp; Security</strong>, click <strong>Open Anyway</strong> next to the message about AltTabio, and confirm.</span></li>
           </ol>
-          <p class="note">macOS asks because AltTabio is not notarized by Apple, which takes a paid developer account. The Terminal line avoids the question.</p>
+          <p class="note">macOS asks because AltTabio is not notarized by Apple, which takes a paid developer account. Open Anyway does not verify the release identity; the check above is required first. The recommended installer checks the same identity before installing.</p>
         </div>
       </div>
       <div class="solo" id="uninstall">

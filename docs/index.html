@@ -183,7 +183,7 @@
       <h1 id="hero-title">Stop tabbing past the window you&nbsp;want.</h1>
       <p class="sub">AltTabio replaces Alt+Tab on Windows and Cmd+Tab on the Mac with a list of your windows. Press 1 to 9 and you're there.</p>
       <div class="cta">
-        <a class="btn only-win" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+        <a class="btn only-win" href="windows/#install"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
         <a class="link only-win" href="mac/">Also for Mac <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
         <a class="btn only-mac" href="#install-mac" data-sheet="mac-sheet"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-terminal"/></svg>Install on Mac</a>
         <a class="link only-mac" href="windows/">Also for Windows <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
@@ -247,12 +247,13 @@
       <div class="get">
         <div id="install-windows">
           <span class="os">Windows 10 and 11, 64-bit</span>
-          <h3>Download, unzip, run</h3>
+          <h3>Download, verify, unzip, run</h3>
           <ol class="steps">
-            <li><span>Unzip it into a folder you'll keep. For autostart and updates, pick one only administrators can change, such as Program Files.</span></li>
+            <li><span>Download the Windows zip and matching <code class="inline">.zip.minisig</code>, then follow <a href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-install.md">Windows first-install verification</a> using a verifier built from separately trusted source. Stop if verification fails or the signature is missing.</span></li>
+            <li><span>After verification succeeds, unzip that archive into a folder only administrators can change, such as Program Files.</span></li>
             <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
           </ol>
-          <a class="btn" href="https://github.com/vibeslop/AltTabio/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+          <a class="btn" href="windows/#install"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Verify and install for Windows</a>
         </div>
         <div id="install-mac">
           <span class="os">macOS 26 or later</span>

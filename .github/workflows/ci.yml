@@ -50,6 +50,11 @@ jobs:
           sh scripts/mac/test-bootstrap.sh
           sh scripts/mac/test-bootstrap-limits.sh
 
+      - name: Check manual macOS install instructions
+        run: |
+          sh -n scripts/mac/test-manual-install.sh
+          sh scripts/mac/test-manual-install.sh
+
   verify:
     runs-on: windows-latest
 
