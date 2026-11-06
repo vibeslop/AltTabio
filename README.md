@@ -16,15 +16,16 @@ AltTabio is an independent project and is not affiliated with Alt+Tab Terminator
 
 ### Windows
 
-1. Download the Windows archive from [GitHub Releases](https://github.com/vibeslop/AltTabio/releases/latest).
-2. Extract it to a folder that only administrators can change, such as `C:\Program Files\AltTabio`.
-3. Run `AltTabio.exe` and accept the administrator prompt.
+1. Download the Windows archive and its matching `.zip.minisig` from the same [GitHub release](https://github.com/vibeslop/AltTabio/releases/latest).
+2. Follow [Windows first-install verification](docs/windows-install.md) to authenticate the archive and signed release identity with the existing AltTabio public key. Build the verifier from separately trusted source, never from the downloaded archive. Stop if verification fails or the signature is missing.
+3. After verification succeeds, extract that archive to a folder that only administrators can change, such as `C:\Program Files\AltTabio`.
+4. Run `AltTabio.exe` and accept the administrator prompt.
 
 AltTabio needs administrator rights. With **Autostart** on, it gets them at every logon, and so would anyone who replaced `AltTabio.exe`. That is why it belongs in a folder only administrators can change. Autostart and the Windows updater both refuse an executable that non-elevated processes can replace.
 
 Release builds check GitHub for updates about a minute after startup and then daily, download newer releases, verify the Windows archive's Minisign signature with a public key embedded in the app and GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The signature also binds the version, Windows x64 platform and archive name. Missing or invalid signatures stop the update before extraction. You can turn off automatic updates in Settings and still use **Check for Updates** or **Relaunch to Update** in the tray menu. Updates replace the executable in its current folder and preserve `AltTabio.ini` and the startup task. Ordinary Windows builds from source do not check for or install published updates.
 
-When upgrading to 1.3.0, an existing `AutoUpdate=true` enables Windows updates; earlier Windows versions saved the key but ignored it. Signing is required by builds containing this change; older executables do not gain signature enforcement retroactively. This is update authenticity, and does not change SmartScreen or the administrator prompt. The initial manual download still needs a trusted source. See the [Windows updater trust model](docs/windows-updater.md).
+When upgrading to 1.3.0, an existing `AutoUpdate=true` enables Windows updates; earlier Windows versions saved the key but ignored it. Signing is required by builds containing this change; older executables do not gain signature enforcement retroactively. Signature verification does not change SmartScreen or the administrator prompt. See the [Windows updater trust model](docs/windows-updater.md).
 
 ### macOS
 
