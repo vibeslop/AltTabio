@@ -1,5 +1,5 @@
 //! Looking for a newer release and putting it in place of the running copy, the way
-//! `docs/install.sh` does: the GitHub release list, `curl`, `ditto`, and `codesign` against the
+//! `docs/install.sh` does: the GitHub release list, bounded ZIP streams, and `codesign` against the
 //! pinned release certificate. All of it blocks, so each job runs on a thread of its own and
 //! reports back through `post_to_app`.
 
@@ -22,6 +22,8 @@ use std::process::{Command, Stdio};
 const RELEASES_URL: &str = "https://api.github.com/repos/vibeslop/AltTabio/releases?per_page=30";
 // scripts/mac/package.sh packages nothing signed with another certificate.
 const RELEASE_CERTIFICATE: &str = include_str!("../../scripts/mac/release-certificate.sha1");
+// Share the standalone installer's download/extraction limits, not just its ZIP metadata checks.
+const INSTALLER: &str = include_str!("../../docs/install.sh");
 
 /// The running copy's bundle, which an update replaces.
 pub fn bundle_path() -> PathBuf {
@@ -154,25 +156,22 @@ fn install_now(update: &Update, bundle: &Path) -> Result<(), String> {
         .ok_or_else(|| "This copy is not in a folder it could be replaced in".to_owned())?;
     let work = WorkFolder::create()?;
     let archive = work.path.join("AltTabio.zip");
-    run(curl()
-        .args([
-            "--max-time",
-            "600",
-            "--max-filesize",
-            "104857600",
-            "--output",
-        ])
-        .arg(&archive)
-        .arg(&update.url))
+    run(Command::new("/bin/sh")
+        .args(["-c", INSTALLER, "sh", "--download-update-archive"])
+        .arg(&update.url)
+        .arg(&archive))
     .map_err(|error| format!("Could not download AltTabio {version}: {error}"))?;
-    run(Command::new("/usr/bin/ditto")
-        .args(["-x", "-k"])
+    let extracted = work.path.join("extracted");
+    run(Command::new("/bin/sh")
+        .args(["-c", INSTALLER, "sh", "--extract-update-archive"])
         .arg(&archive)
-        .arg(&work.path))
+        .arg(&extracted))
     .map_err(|error| {
-        format!("The download of AltTabio {version} is not a readable archive: {error}")
+        format!(
+            "The download of AltTabio {version} is malformed or exceeds the archive limits: {error}"
+        )
     })?;
-    let app = work.path.join("AltTabio.app");
+    let app = extracted.join("AltTabio.app");
     verify(&app).map_err(|error| {
         format!("The download of AltTabio {version} failed its signature check: {error}")
     })?;

@@ -52,3 +52,4 @@ rm -f "$archive"
 ditto -c -k --keepParent "$app" "$archive"
 print -- "Packaged $archive for the v$version release"
 shasum -a 256 "$archive"
+sh scripts/mac/package-installer.sh
