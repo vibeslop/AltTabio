@@ -27,7 +27,7 @@ function run() {
         if (release.draft || release.prerelease) continue;
         const name = `AltTabio-${release.tag_name.replace(/^v/, "")}-macos.zip`;
         const asset = release.assets.find((asset) => asset.name === name);
-        if (asset) return `${release.tag_name} ${asset.browser_download_url}`;
+        if (asset) return `${release.tag_name}\t${asset.browser_download_url}`;
     }
     return "";
 }'
@@ -71,6 +71,41 @@ verify_bundle() {
         fail "the downloaded AltTabio.app fails its signature or release identity check; nothing was changed."
 }
 
+# Stable releases use three unsigned 32-bit numbers. Require canonical decimal spelling.
+# Reject whitespace and suffixes rather than normalizing signed bundle metadata.
+valid_version() {
+    printf '%s\n' "$1" | LC_ALL=C awk -F. '
+        NR != 1 || NF != 3 { exit 1 }
+        {
+            for (i = 1; i <= 3; i++) {
+                if ($i !~ /^(0|[1-9][0-9]*)$/ || length($i) > 10 || $i + 0 > 4294967295)
+                    exit 1
+            }
+        }'
+}
+
+bundle_version() {
+    # Preserve trailing newlines in the value so shell interpolation cannot hide a mismatch.
+    found=$(plutil -extract CFBundleShortVersionString raw -expect string -n -o - "$1/Contents/Info.plist" && printf '.') ||
+        fail "could not read the version of $1; nothing was changed."
+    found=${found%.}
+    valid_version "$found" || fail "invalid version in $1; nothing was changed."
+    printf '%s\n' "$found"
+}
+
+# Both arguments have already passed valid_version, so numeric comparison is exact in awk.
+version_at_least() {
+    LC_ALL=C awk -v candidate="$1" -v installed="$2" 'BEGIN {
+        split(candidate, c, ".")
+        split(installed, p, ".")
+        for (i = 1; i <= 3; i++) {
+            if (c[i] + 0 > p[i] + 0) exit 0
+            if (c[i] + 0 < p[i] + 0) exit 1
+        }
+        exit 0
+    }'
+}
+
 main() {
     macos=$(sw_vers -productVersion)
     if [ "${macos%%.*}" -lt 26 ]; then
@@ -82,9 +117,11 @@ main() {
     release=$(printf '%s' "$releases" | osascript -l JavaScript -e "$pick_release") ||
         fail "could not read the list of releases from GitHub."
     [ -n "$release" ] || fail "no release has a macOS download yet."
-    tag=${release%% *}
-    url=${release#* }
+    separator=$(printf '\t')
+    tag=${release%%"$separator"*}
+    url=${release#*"$separator"}
     version=${tag#v}
+    valid_version "$version" || fail "the selected release has an invalid version."
 
     work=$(mktemp -d)
     trap cleanup EXIT
@@ -97,6 +134,9 @@ main() {
     ditto -x -k "$work/AltTabio.zip" "$work" || fail "the download is not a readable archive."
     [ -d "$work/AltTabio.app" ] || fail "the download holds no AltTabio.app."
     verify_bundle "$work/AltTabio.app"
+    found=$(bundle_version "$work/AltTabio.app") || exit 1
+    [ "$found" = "$version" ] ||
+        fail "the download of AltTabio $version holds version $found; nothing was changed."
     new_certificate=$(certificate "$work/AltTabio.app")
     [ -n "$new_certificate" ] ||
         fail "the downloaded AltTabio.app is not signed with a certificate; nothing was changed."
@@ -113,6 +153,18 @@ main() {
     fi
     [ -w "$target" ] ||
         fail "this account cannot replace $target/AltTabio.app; run the command as an administrator."
+
+    # Refuse a replay of an older release even when its metadata and signed version agree.
+    # A copy set aside by an interrupted install is still the installed version for this check.
+    installed=$target/AltTabio.app
+    if [ ! -e "$installed" ] && [ -e "$target/.AltTabio.app.old" ]; then
+        installed=$target/.AltTabio.app.old
+    fi
+    if [ -e "$installed" ]; then
+        installed_version=$(bundle_version "$installed") || exit 1
+        version_at_least "$version" "$installed_version" ||
+            fail "refusing to replace AltTabio $installed_version with older version $version; nothing was changed."
+    fi
 
     # The new copy goes next to the old one first, so the swap below is two renames on one volume.
     staged=$target/.AltTabio.app.new
