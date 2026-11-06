@@ -200,6 +200,9 @@ jobs:
       - name: Package
         run: scripts/mac/package.sh
 
+      - name: Verify hardened runtime before upload
+        run: sh scripts/mac/verify-hardened-runtime.sh target/mac/AltTabio.app
+
       - name: Attach the archive to the release
         env:
           GH_TOKEN: ${{ github.token }}

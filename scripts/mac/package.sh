@@ -24,7 +24,7 @@ release=$(<"$pin_file")
 scripts/mac/build-app.sh --universal
 
 app=target/mac/AltTabio.app
-codesign --verify --deep --strict "$app"
+sh scripts/mac/verify-hardened-runtime.sh "$app"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
