@@ -10,6 +10,8 @@ mod mouse;
 mod overlay;
 mod passthrough;
 mod refresh;
+#[cfg(test)]
+mod refresh_tests;
 mod shell_dismissal;
 mod update;
 mod wndproc;
