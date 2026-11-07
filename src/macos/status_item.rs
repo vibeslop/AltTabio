@@ -5,14 +5,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightSemibold,
-    NSForegroundColorAttributeName, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSStringDrawing,
+    NSBezierPath, NSColor, NSImage, NSLineCapStyle, NSLineJoinStyle, NSMenu, NSMenuItem,
+    NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{
-    NSAttributedStringKey, NSDictionary, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
-    NSString,
-};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -208,8 +204,7 @@ fn template_icon() -> Retained<NSImage> {
     const SIZE: NSSize = NSSize::new(25.0, 16.0);
     const STROKE: f64 = 1.25;
     let handler = RcBlock::new(|_rect: NSRect| -> Bool {
-        let ink = NSColor::blackColor();
-        ink.setStroke();
+        NSColor::blackColor().setStroke();
         let key = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
             NSRect::new(
                 NSPoint::new(STROKE / 2.0, STROKE / 2.0),
@@ -221,31 +216,19 @@ fn template_icon() -> Retained<NSImage> {
         key.setLineWidth(STROKE);
         key.stroke();
 
-        let font = unsafe {
-            // SAFETY: the font weight constant is a static value exported by AppKit.
-            NSFont::systemFontOfSize_weight(10.0, NSFontWeightSemibold)
-        };
-        let keys: [&NSAttributedStringKey; 2] = unsafe {
-            // SAFETY: the attribute name constants are static strings exported by AppKit.
-            [NSFontAttributeName, NSForegroundColorAttributeName]
-        };
-        let objects: [&AnyObject; 2] = [&font, &ink];
-        let attributes = NSDictionary::from_slices(&keys, &objects);
-        let legend = NSString::from_str("tab");
-        let width = unsafe {
-            // SAFETY: the attributes dictionary is live for the synchronous measurement.
-            legend.sizeWithAttributes(Some(&attributes)).width
-        };
-        // "tab" has no descender, so its ink runs from the baseline up about the cap height;
-        // centering that, rather than the line box, keeps the word in the middle of the key.
-        let baseline = f64::midpoint(SIZE.height, font.capHeight());
-        unsafe {
-            // SAFETY: the drawing handler runs with the image's graphics context current.
-            legend.drawAtPoint_withAttributes(
-                NSPoint::new((SIZE.width - width) / 2.0, baseline - font.ascender()),
-                Some(&attributes),
-            );
-        }
+        // The app icon's legend: an arrow running into a stop bar, centred on the key.
+        let legend = NSBezierPath::bezierPath();
+        legend.moveToPoint(NSPoint::new(6.5, 8.0));
+        legend.lineToPoint(NSPoint::new(15.5, 8.0));
+        legend.moveToPoint(NSPoint::new(12.5, 5.0));
+        legend.lineToPoint(NSPoint::new(15.5, 8.0));
+        legend.lineToPoint(NSPoint::new(12.5, 11.0));
+        legend.moveToPoint(NSPoint::new(18.5, 4.75));
+        legend.lineToPoint(NSPoint::new(18.5, 11.25));
+        legend.setLineWidth(1.5);
+        legend.setLineCapStyle(NSLineCapStyle::Round);
+        legend.setLineJoinStyle(NSLineJoinStyle::Round);
+        legend.stroke();
         Bool::YES
     });
     let image = NSImage::imageWithSize_flipped_drawingHandler(SIZE, true, &handler);
