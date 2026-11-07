@@ -182,13 +182,14 @@
         <picture>
           <source type="image/avif" srcset="../images/switcher-windows.avif" />
           <source type="image/webp" srcset="../images/switcher-windows.webp" />
-          <img src="../images/hero-switcher.png" width="2177" height="1125" decoding="async" alt="AltTabio on Windows 11: a numbered list of three File Explorer windows on the left, and a live preview of the selected Documents window on the right." />
+          <img src="../images/hero-switcher.png" width="1600" height="847" decoding="async" alt="AltTabio on Windows 11: a compact window list on the left and a live preview of AltTabio.png in Paint on the right." />
         </picture>
+        <figcaption><a href="https://github.com/vibeslop/AltTabio/blob/main/docs/screenshots.md">More Windows screenshots</a>: scrolling, search, expanded rows, and light and dark themes.</figcaption>
       </figure>
       <dl class="promises three">
         <div><dt>Number shortcuts</dt><dd>Press 1 to 9 when the query is empty to switch to that window. Turn on Number shortcuts in Settings to show the labels, which are hidden by default.</dd></div>
         <div><dt>Large live preview</dt><dd>See the selected window alone, or in its place on the full desktop.</dd></div>
-        <div><dt>Type to filter</dt><dd>Start typing while you hold Alt. The list narrows by title, app, or number. The query stays visible above the list and supports selection, copy, paste, undo, and redo.</dd></div>
+        <div><dt>Type to filter</dt><dd>Start typing while you hold Alt. The list narrows by title, app, or number. The query stays visible below the list and supports selection, copy, paste, undo, and redo.</dd></div>
         <div><dt>The shortcut you know</dt><dd>Alt+Tab opens it and letting go of Alt switches. Win+Tab can open it too.</dd></div>
         <div><dt>Fix a stuck window</dt><dd>F4 closes it, F5 to F7 minimize, maximize, and restore, and F8 ends a frozen program.</dd></div>
         <div><dt>Works across monitors</dt><dd>It scales per monitor, and can list only the windows on the one you're using.</dd></div>
@@ -285,8 +286,8 @@
             <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
           </ol>
           <div class="prose">
-            <p>Release builds check GitHub for updates about a minute after startup and then daily. They download newer releases, verify the archive against GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. Your settings and startup task are preserved.</p>
-            <p>Turn off automatic updates in Settings if you prefer to check yourself. The tray menu has <strong>Check for Updates</strong> and, when an update is ready, <strong>Relaunch to Update</strong>. Ordinary Windows source builds do not check for or install published updates.</p>
+            <p>Release builds check GitHub for updates about a minute after startup and then daily. They download newer releases, verify the archive's Minisign signature and GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. Your settings and startup task are preserved.</p>
+            <p>Turn off automatic updates in Settings if you prefer to check yourself. Choose <strong>Check for Updates</strong> or <strong>Update status</strong> in the tray menu, then <strong>Install and restart</strong> or <strong>Restart now</strong> in the status window. Ordinary Windows source builds do not check for or install published updates.</p>
           </div>
           <a class="btn btn-primary" href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-install.md"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Verify and install for Windows</a>
         </div>
@@ -294,11 +295,11 @@
           <span class="os">For autostart and updates</span>
           <h3>Keep it in a safe folder</h3>
           <div class="prose">
-            <p>Start with Windows creates a scheduled task that runs AltTabio with the highest privileges at every logon. If a program without administrator rights could replace <code class="inline">AltTabio.exe</code>, it could use that task to gain them.</p>
+            <p><strong>Start at sign-in</strong> creates a scheduled task that runs AltTabio with the highest privileges at every logon. If a program without administrator rights could replace <code class="inline">AltTabio.exe</code>, it could use that task to gain them.</p>
             <p>Move AltTabio to a folder only administrators can change, such as <strong>Program Files</strong>. Both autostart and the updater refuse an executable that non-elevated processes can replace.</p>
           </div>
           <h3 id="uninstall" style="margin-top:6px">Uninstall</h3>
-          <div class="prose"><p>Turn off start with Windows if you enabled it, choose <strong>Exit</strong> from the tray icon, and delete the folder. The settings file lives in that folder, so nothing else is left.</p></div>
+          <div class="prose"><p>Turn off <strong>Start at sign-in</strong> if you enabled it, choose <strong>Exit</strong> from the tray icon, and delete the folder. The settings file lives in that folder, so nothing else is left.</p></div>
         </div>
       </div>
     </div>
