@@ -13,6 +13,9 @@ mod paint;
 mod paint_state;
 mod redraw;
 mod selectors;
+mod switch_glyph;
+#[cfg(test)]
+mod switch_tests;
 #[cfg(test)]
 mod test_support;
 mod theme;
@@ -175,6 +178,7 @@ struct DialogState {
     controls: DialogControls,
     fonts: Option<Rc<DialogFonts>>,
     previews: Option<Rc<selectors::Previews>>,
+    switches: Rc<switch_glyph::Painter>,
     background: Option<Rc<OwnedBrush>>,
     paint: paint_state::PaintCache,
     palette: ThemePalette,
@@ -223,6 +227,7 @@ impl DialogState {
             controls: DialogControls::default(),
             fonts: None,
             previews: None,
+            switches: Rc::new(switch_glyph::Painter::default()),
             background: None,
             paint: paint_state::PaintCache::default(),
             palette: ThemePalette::new(false),

@@ -408,47 +408,15 @@ fn paint_switch(
             fonts.help.0,
         )?;
     }
-    let height = scale(20, state.dpi);
     let rect = RECT {
         left: client.right - scale(38, state.dpi),
         right: client.right - scale(4, state.dpi),
         top: client.top + scale(7, state.dpi),
-        bottom: client.top + scale(7, state.dpi) + height,
+        bottom: client.top + scale(7, state.dpi) + scale(20, state.dpi),
     };
-    rounded(
-        dc,
-        rect,
-        scale(10, state.dpi),
-        if checked {
-            ink
-        } else {
-            state.palette.control_border
-        },
-    )?;
-    if !checked {
-        rounded(
-            dc,
-            inset(rect, hairline(state.dpi)),
-            scale(9, state.dpi),
-            state.palette.background,
-        )?;
-    }
-    let x = rect.left + scale(if checked { 17 } else { 3 }, state.dpi);
-    rounded(
-        dc,
-        RECT {
-            left: x,
-            top: rect.top + scale(4, state.dpi),
-            right: x + scale(12, state.dpi),
-            bottom: rect.top + scale(16, state.dpi),
-        },
-        scale(6, state.dpi),
-        if checked {
-            state.palette.background
-        } else {
-            state.palette.secondary
-        },
-    )?;
+    state
+        .switches
+        .paint(dc, rect, state.dpi, state.palette, checked, enabled)?;
     focus(hwnd, dc, client, state)
 }
 
