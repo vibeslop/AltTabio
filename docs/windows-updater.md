@@ -1,5 +1,17 @@
 # Windows update authenticity
 
+## Update behavior and upgrades
+
+Release builds check GitHub for updates about a minute after startup and then daily. With automatic updates enabled, they download and verify newer releases, then restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. Updates replace the executable in its current folder and preserve `AltTabio.ini` and the startup task. Ordinary Windows builds from source do not check for or install published updates.
+
+Turn off automatic updates in Settings to check manually. Choose **Check for Updates** or **Update status** in the tray menu to open the status window, then **Install and restart** to download and install an offered update, or **Restart now** when it is ready. Opening or closing the status window does not approve an immediate restart.
+
+AltTabio requires administrator rights. Both **Start at sign-in** and the updater refuse an executable that non-elevated processes can replace. Keep the app in a folder only administrators can change, such as `C:\Program Files\AltTabio`.
+
+When upgrading to 1.3.0, an existing `AutoUpdate=true` enables Windows updates; earlier Windows versions saved the key but ignored it. Builds with signature verification require a valid Minisign signature before extraction, but older executables do not gain this protection retroactively. Signing authenticates updates; it does not change SmartScreen or the administrator prompt. For the initial manual download, follow [first-install verification](windows-install.md) before extracting or running the app.
+
+## Implementation and trust
+
 Windows checks and installs updates inside the Rust executable. HTTPS uses WinHTTP, SHA-256 uses Windows CNG, JSON uses `serde_json`, and ZIP extraction uses `zip` with the Rust `flate2` backend. No PowerShell, curl, script file, or script interpreter runs during updates.
 
 Manual checks open a modeless status window immediately. The same window shows the result, measured download progress, verification, and restart preparation. Closing it leaves background work running; results do not reopen it. Automatic updates remain silent. Viewing an automatic download does not approve an immediate restart: only Install and restart, Retry and restart, or Restart now does that. The existing automatic restart while the user is away remains governed by the automatic-update setting.

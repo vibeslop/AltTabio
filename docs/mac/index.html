@@ -277,7 +277,7 @@
           <h3>Verify the installer before it runs</h3>
           <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
           <ol class="steps">
-            <li><span>The script downloads the newest release, checks its signature, puts <code class="inline">AltTabio.app</code> in <code class="inline">/Applications</code> (or in <code class="inline">~/Applications</code> when your account can't write there), and opens it.</span></li>
+            <li><span>The script downloads the newest release, checks its signature, and updates an existing installation in place, preferring <code class="inline">/Applications</code> over <code class="inline">~/Applications</code> if both exist. A new installation goes in <code class="inline">/Applications</code> if writable, otherwise <code class="inline">~/Applications</code>. An existing copy in <code class="inline">/Applications</code> still requires permission to replace it. The script then opens AltTabio.</span></li>
             <li><span>Allow <strong>Accessibility</strong> when AltTabio asks, then press Cmd+Tab.</span></li>
             <li><span>AltTabio updates itself from then on, and <strong>Check for Updates…</strong> in its menu bar menu looks right away. Running the same bootstrap block again updates it too. If an update fails partway, the installed copy stays as it was.</span></li>
           </ol>
