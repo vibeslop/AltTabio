@@ -587,7 +587,10 @@ fn process_mouse_message_with(
     let event = match message {
         WM_RBUTTONDOWN => MouseEvent::RightButtonPressed,
         WM_RBUTTONUP => MouseEvent::RightButtonReleased,
-        WM_MOUSEWHEEL => MouseEvent::Wheel(high_word(data.mouseData as usize).cast_signed()),
+        WM_MOUSEWHEEL => MouseEvent::Wheel(
+            high_word(data.mouseData as usize).cast_signed(),
+            (data.pt.x, data.pt.y),
+        ),
         _ => return None,
     };
     let (outcome, replay) = process_with_context(|context| {
@@ -740,6 +743,38 @@ fn test_context() -> HookContext {
     }
 }
 
+/// Send a captured native event through the real callback and `PostMessage` delivery without
+/// installing a global hook or injecting input into another application.
+#[cfg(test)]
+pub(crate) fn test_post_mouse(
+    target: HWND,
+    flags: Arc<HookFlags>,
+    message: u32,
+    data: &MSLLHOOKSTRUCT,
+    gesture: bool,
+) {
+    CONTEXT.with(|slot| {
+        let mut context = slot.borrow_mut();
+        let context = context.get_or_insert_with(test_context);
+        context.target = target;
+        context.flags = flags;
+        context.settings.right_button_wheel_switching = gesture;
+    });
+    let outcome = process_mouse_message(
+        WPARAM(message as usize),
+        LPARAM(std::ptr::from_ref(data) as isize),
+    );
+    let result = finish_mouse_callback_with(outcome, post_actions, || {
+        panic!("captured wheel gesture must not reach the background application")
+    });
+    assert_eq!(result, LRESULT(1));
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_mouse() {
+    CONTEXT.with(|slot| *slot.borrow_mut() = None);
+}
+
 /// Exercise UI publication and cancellation with a real owning queue, without installing
 /// global hooks or sending input to the user's desktop.
 #[cfg(test)]
@@ -795,7 +830,7 @@ mod tests {
                 posts += 1;
                 assert_eq!(
                     outcome.actions().collect::<Vec<_>>(),
-                    [InputAction::OverlayWheel(-30)]
+                    [InputAction::OverlayWheel(-30, (0, 0))]
                 );
                 true
             },
@@ -831,7 +866,7 @@ mod tests {
                 outcome,
                 |outcome| {
                     for action in outcome.actions() {
-                        if matches!(action, InputAction::MouseWheel(_)) {
+                        if matches!(action, InputAction::MouseWheel(_, _)) {
                             flags.set(OVERLAY_ACTIVE, true);
                         }
                         if action == InputAction::MouseWheelReleased {
@@ -893,7 +928,7 @@ mod tests {
                 assert_eq!(
                     outcome.actions().collect::<Vec<_>>(),
                     if captured_wheel {
-                        vec![InputAction::OverlayWheel(120)]
+                        vec![InputAction::OverlayWheel(120, (0, 0))]
                     } else {
                         Vec::new()
                     }
@@ -919,7 +954,7 @@ mod tests {
             (
                 WM_MOUSEWHEEL,
                 0xff88_0000,
-                Some(InputAction::MouseWheel(1)),
+                Some(InputAction::MouseWheel(1, (0, 0))),
                 true,
             ),
             (WM_RBUTTONUP, 0, Some(InputAction::MouseWheelReleased), true),

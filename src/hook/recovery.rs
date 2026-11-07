@@ -231,8 +231,10 @@ mod tests {
             let flags = std::sync::Arc::clone(&context.flags);
             let generation = flags.load();
             assert!(flags.begin_opening(generation, true));
-            let (origin, _) =
-                encode_action(alttabio::input::InputAction::MouseWheel(1), generation);
+            let (origin, _) = encode_action(
+                alttabio::input::InputAction::MouseWheel(1, (0, 0)),
+                generation,
+            );
             if visible {
                 flags.sync_overlay(true, true, true);
             }
@@ -261,7 +263,7 @@ mod tests {
                 assert_eq!(typing.suppress, visible);
                 let wheel = context
                     .state
-                    .process_mouse(MouseEvent::Wheel(-120), settings);
+                    .process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
                 assert_eq!(wheel.suppress, visible);
             });
             CONTEXT.with(|slot| *slot.borrow_mut() = None);

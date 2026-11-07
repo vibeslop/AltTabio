@@ -7,6 +7,10 @@ use windows::Win32::Foundation::{HWND, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use windows::core::Error;
 
+#[cfg(test)]
+#[path = "wheel_tests.rs"]
+mod wheel_tests;
+
 pub(super) struct PendingShellDismissal {
     window: HWND,
     origin: WPARAM,
@@ -171,7 +175,7 @@ mod tests {
             &[
                 InputAction::MouseWheelReleased,
                 InputAction::RightButtonPressed,
-                InputAction::MouseWheel(2),
+                InputAction::MouseWheel(2, (0, 0)),
                 InputAction::MouseWheelReleased,
             ],
             1,
@@ -184,7 +188,7 @@ mod tests {
         assert_deferred_mouse_completion(
             &[
                 InputAction::MouseWheelReleased,
-                InputAction::OverlayWheel(-120),
+                InputAction::OverlayWheel(-120, (0, 0)),
             ],
             0,
             &[20],
@@ -245,10 +249,13 @@ mod tests {
             SwitchTask::new(3, 30, "Three", "three"),
         ];
         // A's opening has already been previewed, while shell focus remains pending.
-        let _opening = app.session.handle_input(InputAction::MouseWheel(1));
+        let _opening = app.session.handle_input(InputAction::MouseWheel(1, (0, 0)));
         app.session.open(tasks.clone(), Some(1));
-        let mut input = DeferredSwitch::new(InputAction::MouseWheel(1));
-        assert_eq!(input.take_preview_actions(), [InputAction::MouseWheel(1)]);
+        let mut input = DeferredSwitch::new(InputAction::MouseWheel(1, (0, 0)));
+        assert_eq!(
+            input.take_preview_actions(),
+            [InputAction::MouseWheel(1, (0, 0))]
+        );
         app.pending_shell = Some(PendingShellDismissal {
             window: owner.0,
             origin: WPARAM(0),

@@ -178,7 +178,7 @@ mod tests {
                 ));
                 if index == 1 && visible {
                     flags.sync_overlay(true, true, false);
-                    retire_opening(&flags, InputAction::MouseWheel(1), queue[0].0);
+                    retire_opening(&flags, InputAction::MouseWheel(1, (0, 0)), queue[0].0);
                 }
                 if index == 2 {
                     super::super::report_callback_errors();
@@ -197,7 +197,10 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(
                 actions,
-                [InputAction::MouseWheel(1), InputAction::MouseWheelReleased],
+                [
+                    InputAction::MouseWheel(1, (0, 0)),
+                    InputAction::MouseWheelReleased
+                ],
                 "failed step cancelled the accepted gesture's release"
             );
             assert_eq!(results, [LRESULT(1); 4]);
@@ -477,7 +480,10 @@ mod tests {
     }
 
     fn retire_opening(flags: &HookFlags, action: InputAction, origin: usize) {
-        if matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_)) {
+        if matches!(
+            action,
+            InputAction::Switch(_) | InputAction::MouseWheel(_, _)
+        ) {
             flags.retire_action_openings(origin, 1);
         }
     }
@@ -491,7 +497,7 @@ mod tests {
         let mut events = if mouse {
             vec![
                 Event::Mouse(MouseEvent::RightButtonPressed),
-                Event::Mouse(MouseEvent::Wheel(-120)),
+                Event::Mouse(MouseEvent::Wheel(-120, (0, 0))),
                 Event::Mouse(MouseEvent::RightButtonReleased),
             ]
         } else {
@@ -630,8 +636,8 @@ mod tests {
         let mut queue = Vec::new();
         for (index, event) in [
             MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(-120),
-            MouseEvent::Wheel(-120),
+            MouseEvent::Wheel(-120, (0, 0)),
+            MouseEvent::Wheel(-120, (0, 0)),
             MouseEvent::RightButtonReleased,
         ]
         .into_iter()
@@ -698,7 +704,7 @@ mod tests {
         assert_eq!(
             context
                 .state
-                .process_mouse(MouseEvent::Wheel(-120), context.settings),
+                .process_mouse(MouseEvent::Wheel(-120, (0, 0)), context.settings),
             HookOutcome::default()
         );
         let _fresh_press = context
@@ -707,10 +713,10 @@ mod tests {
         assert_eq!(
             context
                 .state
-                .process_mouse(MouseEvent::Wheel(-120), context.settings)
+                .process_mouse(MouseEvent::Wheel(-120, (0, 0)), context.settings)
                 .actions()
                 .next(),
-            Some(InputAction::MouseWheel(1))
+            Some(InputAction::MouseWheel(1, (0, 0)))
         );
     }
 
@@ -727,7 +733,7 @@ mod tests {
             .process_mouse(MouseEvent::RightButtonPressed, context.settings);
         let _wheel = context
             .state
-            .process_mouse(MouseEvent::Wheel(-120), context.settings);
+            .process_mouse(MouseEvent::Wheel(-120, (0, 0)), context.settings);
         CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
         crate::hook::handle_gesture_reset();
         let release = process_with_context(|context| {

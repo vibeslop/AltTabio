@@ -72,10 +72,10 @@ pub enum InputAction {
     Switch(i32),
     /// Cycle an existing panel without opening a new session after a queued completion.
     CycleSelection(i32),
-    /// Raw wheel delta captured while the overlay is open; positive scrolls up.
-    OverlayWheel(i32),
-    /// Whole wheel steps, negative for up and positive for down.
-    MouseWheel(i32),
+    /// Raw wheel delta and captured screen position; positive scrolls up.
+    OverlayWheel(i16, (i32, i32)),
+    /// Whole wheel steps and captured screen position, negative for up and positive for down.
+    MouseWheel(i16, (i32, i32)),
     MouseWheelReleased,
     RightButtonPressed,
     Navigate(i32),
@@ -284,13 +284,13 @@ impl HookState {
         );
         if !outcome.suppress
             && outcome.actions().next().is_none()
-            && let MouseEvent::Wheel(delta) = event
+            && let MouseEvent::Wheel(delta, position) = event
         {
-            return self.process_overlay_wheel(i32::from(delta));
+            return self.process_overlay_wheel(delta, position);
         }
         if outcome
             .actions()
-            .any(|action| matches!(action, InputAction::MouseWheel(_)))
+            .any(|action| matches!(action, InputAction::MouseWheel(_, _)))
         {
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
@@ -311,9 +311,9 @@ impl HookState {
     }
 
     #[must_use]
-    pub fn process_overlay_wheel(&self, delta: i32) -> HookOutcome {
+    pub fn process_overlay_wheel(&self, delta: i16, position: (i32, i32)) -> HookOutcome {
         if delta != 0 && self.overlay_active && !self.interception.suspended {
-            HookOutcome::one(true, InputAction::OverlayWheel(delta))
+            HookOutcome::one(true, InputAction::OverlayWheel(delta, position))
         } else {
             HookOutcome::default()
         }
@@ -3429,21 +3429,30 @@ mod overlay_wheel_tests {
     #[test]
     fn ordinary_wheel_is_captured_only_while_the_overlay_is_open() {
         let mut state = HookState::default();
-        assert_eq!(state.process_overlay_wheel(-30), HookOutcome::default());
+        assert_eq!(
+            state.process_overlay_wheel(-30, (0, 0)),
+            HookOutcome::default()
+        );
         state.set_overlay_active(true);
-        assert_eq!(state.process_overlay_wheel(0), HookOutcome::default());
-        let wheel = state.process_overlay_wheel(-30);
+        assert_eq!(
+            state.process_overlay_wheel(0, (0, 0)),
+            HookOutcome::default()
+        );
+        let wheel = state.process_overlay_wheel(-30, (0, 0));
         assert!(
             wheel.suppress,
             "wheel input leaked to the background application"
         );
         assert_eq!(
             wheel.actions().collect::<Vec<_>>(),
-            [InputAction::OverlayWheel(-30)]
+            [InputAction::OverlayWheel(-30, (0, 0))]
         );
         state.set_interception_suspended(true);
         state.set_overlay_active(true);
-        assert_eq!(state.process_overlay_wheel(-30), HookOutcome::default());
+        assert_eq!(
+            state.process_overlay_wheel(-30, (0, 0)),
+            HookOutcome::default()
+        );
     }
 
     #[test]
@@ -3462,8 +3471,8 @@ mod overlay_wheel_tests {
         );
         state.set_overlay_active(true);
         assert_eq!(
-            state.process_overlay_wheel(-120).actions().next(),
-            Some(InputAction::OverlayWheel(-120))
+            state.process_overlay_wheel(-120, (0, 0)).actions().next(),
+            Some(InputAction::OverlayWheel(-120, (0, 0)))
         );
         let release =
             state.process_key(KeyEvent::released(Key::Alt, Modifiers::default()), settings);

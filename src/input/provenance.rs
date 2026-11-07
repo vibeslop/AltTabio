@@ -189,14 +189,14 @@ mod tests {
             );
         }
         assert_eq!(
-            state.process_mouse_from(PHYSICAL, MouseEvent::Wheel(-120), settings),
+            state.process_mouse_from(PHYSICAL, MouseEvent::Wheel(-120, (0, 0)), settings),
             Some(HookOutcome::default())
         );
         let _down = state.process_mouse_from(PHYSICAL, MouseEvent::RightButtonPressed, settings);
         for source in [INJECTED, REPLAY] {
             for event in [
                 MouseEvent::LeftButtonPressed,
-                MouseEvent::Wheel(-120),
+                MouseEvent::Wheel(-120, (0, 0)),
                 MouseEvent::RightButtonReleased,
             ] {
                 assert_eq!(state.process_mouse_from(source, event, settings), None);
@@ -206,9 +206,9 @@ mod tests {
         assert!(!state.take_replayed_right_click());
         assert_eq!(
             state
-                .process_mouse_from(PHYSICAL, MouseEvent::Wheel(-120), settings)
+                .process_mouse_from(PHYSICAL, MouseEvent::Wheel(-120, (0, 0)), settings)
                 .map(|o| o.actions().collect::<Vec<_>>()),
-            Some(vec![InputAction::MouseWheel(1)])
+            Some(vec![InputAction::MouseWheel(1, (0, 0))])
         );
         assert_eq!(
             state.process_mouse_from(INJECTED, MouseEvent::RightButtonReleased, settings),

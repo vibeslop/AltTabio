@@ -7,7 +7,8 @@ pub enum MouseEvent {
     LeftButtonPressed,
     RightButtonPressed,
     RightButtonReleased,
-    Wheel(i16),
+    /// Raw delta and original screen position from the native event.
+    Wheel(i16, (i32, i32)),
 }
 
 #[derive(Debug, Default)]
@@ -82,14 +83,18 @@ impl MouseGesture {
                     HookOutcome::suppressed()
                 }
             },
-            MouseEvent::Wheel(delta) if delta != 0 => {
+            MouseEvent::Wheel(delta, position) if delta != 0 => {
                 let (remainder, active) = match self.press {
                     MousePress::PendingClick => (0, false),
                     MousePress::Scrolling { remainder, active } => (remainder, active),
                     MousePress::Idle | MousePress::Cancelled => return HookOutcome::default(),
                 };
                 let total = remainder + i32::from(delta);
-                let steps = -(total / 120);
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "an i16 native delta plus a remainder of at most 119 yields at most 274 steps"
+                )]
+                let steps = -(total / 120) as i16;
                 self.press = MousePress::Scrolling {
                     remainder: total % 120,
                     active: active || steps != 0,
@@ -97,10 +102,10 @@ impl MouseGesture {
                 if steps == 0 {
                     HookOutcome::suppressed()
                 } else {
-                    HookOutcome::one(true, InputAction::MouseWheel(steps))
+                    HookOutcome::one(true, InputAction::MouseWheel(steps, position))
                 }
             }
-            MouseEvent::Wheel(_) => HookOutcome::default(),
+            MouseEvent::Wheel(_, _) => HookOutcome::default(),
         }
     }
 }
@@ -120,23 +125,48 @@ mod tests {
     };
 
     #[test]
+    fn fractional_gesture_keeps_the_point_that_completes_each_detent() {
+        let mut state = HookState::default();
+        let _press = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
+        for (index, (delta, steps)) in [
+            (-30, None),
+            (-30, None),
+            (-30, None),
+            (-30, Some(1)),
+            (119, None),
+            (i16::MAX, Some(-274)),
+            (-119, None),
+            (i16::MIN, Some(274)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let position = (i32::try_from(index).unwrap_or_default() - 70000, 80000);
+            let outcome = state.process_mouse(MouseEvent::Wheel(delta, position), ENABLED);
+            assert!(outcome.suppress);
+            let expected = steps.map(|steps| InputAction::MouseWheel(steps, position));
+            assert_eq!(outcome.actions().next(), expected);
+        }
+    }
+
+    #[test]
     fn ordinary_overlay_wheel_and_rmb_gestures_keep_distinct_ownership() {
         for settings in [HookSettings::default(), ENABLED] {
             let mut state = HookState::default();
             state.set_overlay_active(true);
-            let ordinary = state.process_mouse(MouseEvent::Wheel(30), settings);
+            let ordinary = state.process_mouse(MouseEvent::Wheel(30, (0, 0)), settings);
             assert!(ordinary.suppress);
             assert_eq!(
                 ordinary.actions().collect::<Vec<_>>(),
-                [InputAction::OverlayWheel(30)]
+                [InputAction::OverlayWheel(30, (0, 0))]
             );
             if settings.right_button_wheel_switching {
                 let _press = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-                let gesture = state.process_mouse(MouseEvent::Wheel(-120), settings);
+                let gesture = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
                 assert!(gesture.suppress);
                 assert_eq!(
                     gesture.actions().collect::<Vec<_>>(),
-                    [InputAction::MouseWheel(1)]
+                    [InputAction::MouseWheel(1, (0, 0))]
                 );
                 assert_eq!(
                     state
@@ -155,7 +185,7 @@ mod tests {
         for click in [false, true] {
             let mut state = HookState::default();
             let _press = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
-            let _wheel = state.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+            let _wheel = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
             state.set_overlay_active(true);
             if click {
                 let _click = state.process_mouse(MouseEvent::LeftButtonPressed, ENABLED);
@@ -178,11 +208,11 @@ mod tests {
             }
             // Until the UI acknowledges closing, capture ordinary wheel input without
             // reviving the completed right-button gesture.
-            let wheel = state.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+            let wheel = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
             assert!(wheel.suppress);
             assert_eq!(
                 wheel.actions().next(),
-                Some(InputAction::OverlayWheel(-120))
+                Some(InputAction::OverlayWheel(-120, (0, 0)))
             );
             assert_eq!(
                 state.process_mouse(MouseEvent::RightButtonReleased, ENABLED),
@@ -190,7 +220,7 @@ mod tests {
             );
             state.set_overlay_active(false);
             assert_eq!(
-                state.process_mouse(MouseEvent::Wheel(-120), ENABLED),
+                state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED),
                 HookOutcome::default()
             );
         }
@@ -226,7 +256,7 @@ mod tests {
         let mut queue = Vec::new();
         let _down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         post(
-            state.process_mouse(MouseEvent::Wheel(-120), ENABLED),
+            state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED),
             &flags,
             &mut queue,
         );
@@ -239,7 +269,7 @@ mod tests {
             &flags,
             &mut queue,
         );
-        let wheel_after_escape = state.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+        let wheel_after_escape = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
         let release_after_escape = state.process_mouse(MouseEvent::RightButtonReleased, ENABLED);
         post(wheel_after_escape, &flags, &mut queue);
         post(release_after_escape, &flags, &mut queue);
@@ -286,17 +316,17 @@ mod tests {
         assert!(wheel_after_escape.suppress);
         assert_eq!(
             wheel_after_escape.actions().next(),
-            Some(InputAction::OverlayWheel(-120))
+            Some(InputAction::OverlayWheel(-120, (0, 0)))
         );
         assert_eq!(release_after_escape, HookOutcome::suppressed());
 
         let _fresh_down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         assert_eq!(
             state
-                .process_mouse(MouseEvent::Wheel(-120), ENABLED)
+                .process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED)
                 .actions()
                 .next(),
-            Some(InputAction::MouseWheel(1)),
+            Some(InputAction::MouseWheel(1, (0, 0))),
             "a fresh RMB press must start a new gesture"
         );
     }
@@ -376,7 +406,7 @@ mod tests {
         );
         post_query_outcome(
             &flags,
-            hook.process_mouse(MouseEvent::Wheel(-120), settings),
+            hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings),
             &mut queue,
         );
         if modifiers.shift {
@@ -409,7 +439,7 @@ mod tests {
         if more_wheel {
             post_query_outcome(
                 &flags,
-                hook.process_mouse(MouseEvent::Wheel(-120), settings),
+                hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings),
                 &mut queue,
             );
         }
@@ -467,11 +497,10 @@ mod tests {
                 continue;
             };
             let effect = match action {
-                InputAction::MouseWheel(steps) if session.is_visible() => {
-                    session.handle_gesture_wheel(WheelBehavior::SelectWindow, steps * -120, 3)
-                }
-                InputAction::OverlayWheel(delta) if session.is_visible() => {
-                    session.handle_mouse_wheel(WheelBehavior::SelectWindow, delta, 3)
+                InputAction::MouseWheel(steps, _) if session.is_visible() => session
+                    .handle_gesture_wheel(WheelBehavior::SelectWindow, i32::from(steps) * -120, 3),
+                InputAction::OverlayWheel(delta, _) if session.is_visible() => {
+                    session.handle_mouse_wheel(WheelBehavior::SelectWindow, i32::from(delta), 3)
                 }
                 _ => session.handle_input(action),
             };
@@ -518,10 +547,10 @@ mod tests {
                     ..ENABLED
                 };
                 let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
-                let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+                let _wheel = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
                 hook.set_overlay_active(true);
                 let mut session = mouse_preview_session(typed_search);
-                let mut deferred = DeferredSwitch::new(InputAction::MouseWheel(1));
+                let mut deferred = DeferredSwitch::new(InputAction::MouseWheel(1, (0, 0)));
                 let _previewed = deferred.take_preview_actions();
                 let modifiers = Modifiers {
                     shift,
@@ -599,7 +628,7 @@ mod tests {
             typed_search,
             release_alt_switches: true,
         });
-        let _opening = session.handle_input(InputAction::MouseWheel(1));
+        let _opening = session.handle_input(InputAction::MouseWheel(1, (0, 0)));
         session.open(
             [
                 SwitchTask::new(1, 10, "One", "one"),
@@ -627,7 +656,7 @@ mod tests {
                 ..ENABLED
             };
             let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
-            let opening = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+            let opening = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
             let Some(first) = opening.actions().next() else {
                 panic!("gesture must open");
             };
@@ -721,12 +750,15 @@ mod tests {
         let mut partial = HookState::default();
         let _press = partial.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         partial.set_overlay_active(false);
-        let first = partial.process_mouse(MouseEvent::Wheel(-60), ENABLED);
+        let first = partial.process_mouse(MouseEvent::Wheel(-60, (0, 0)), ENABLED);
         assert!(first.suppress);
         assert!(first.actions().next().is_none());
         partial.set_overlay_active(false);
-        let second = partial.process_mouse(MouseEvent::Wheel(-60), ENABLED);
-        assert_eq!(second.actions().next(), Some(InputAction::MouseWheel(1)));
+        let second = partial.process_mouse(MouseEvent::Wheel(-60, (0, 0)), ENABLED);
+        assert_eq!(
+            second.actions().next(),
+            Some(InputAction::MouseWheel(1, (0, 0)))
+        );
         partial.set_overlay_active(true);
         assert_eq!(
             partial
@@ -751,7 +783,7 @@ mod tests {
                 ..ENABLED
             };
             let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
-            let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+            let _wheel = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
             let mut session = SwitcherSession::new(SwitcherSessionSettings {
                 typed_search: true,
                 release_alt_switches: true,
@@ -965,7 +997,7 @@ mod tests {
         }
         state.set_overlay_active(true);
         let _down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
-        let _wheel = state.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+        let _wheel = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
         let release = state.process_mouse(MouseEvent::RightButtonReleased, ENABLED);
         assert_eq!(
             release.actions().next(),
@@ -1053,7 +1085,7 @@ mod tests {
                 release_alt_switches: true,
             });
             let _down = hook.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
-            let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+            let _wheel = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
             session.open(
                 [
                     SwitchTask::new(1, 10, "One1", "one"),
@@ -1115,7 +1147,7 @@ mod tests {
         use crate::text_edit::TextCommand;
         let mut state = HookState::default();
         let _press = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
-        let _wheel = state.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+        let _wheel = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
         state.set_overlay_active(true);
         let editing = state.process_key(
             KeyEvent::pressed(
@@ -1146,10 +1178,10 @@ mod tests {
         let _fresh = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         assert_eq!(
             state
-                .process_mouse(MouseEvent::Wheel(-120), ENABLED)
+                .process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED)
                 .actions()
                 .next(),
-            Some(InputAction::MouseWheel(1))
+            Some(InputAction::MouseWheel(1, (0, 0)))
         );
     }
 
@@ -1165,7 +1197,7 @@ mod tests {
             release_alt_switches: true,
         });
         let _down = hook.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
-        let opening = hook.process_mouse(MouseEvent::Wheel(-120), ENABLED);
+        let opening = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
         let Some(action) = opening.actions().next() else {
             panic!("missing open action");
         };
@@ -1211,7 +1243,7 @@ mod tests {
         for settings in [HookSettings::default(), ENABLED] {
             let mut state = HookState::default();
             assert_eq!(
-                state.process_mouse(MouseEvent::Wheel(120), settings),
+                state.process_mouse(MouseEvent::Wheel(120, (0, 0)), settings),
                 HookOutcome::default()
             );
             assert_eq!(
@@ -1224,7 +1256,7 @@ mod tests {
             );
             if !settings.right_button_wheel_switching {
                 assert_eq!(
-                    state.process_mouse(MouseEvent::Wheel(-120), settings),
+                    state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings),
                     HookOutcome::default()
                 );
             }
@@ -1250,11 +1282,11 @@ mod tests {
         let down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         assert!(down.suppress);
         for (delta, steps) in [(120, -1), (-240, 2)] {
-            let wheel = state.process_mouse(MouseEvent::Wheel(delta), ENABLED);
+            let wheel = state.process_mouse(MouseEvent::Wheel(delta, (0, 0)), ENABLED);
             assert!(wheel.suppress);
             assert_eq!(
                 wheel.actions().collect::<Vec<_>>(),
-                [InputAction::MouseWheel(steps)]
+                [InputAction::MouseWheel(steps, (0, 0))]
             );
         }
         let release = state.process_mouse(MouseEvent::RightButtonReleased, ENABLED);
@@ -1268,7 +1300,7 @@ mod tests {
             HookOutcome::default()
         );
         assert_eq!(
-            state.process_mouse(MouseEvent::Wheel(120), ENABLED),
+            state.process_mouse(MouseEvent::Wheel(120, (0, 0)), ENABLED),
             HookOutcome::default()
         );
     }
@@ -1278,23 +1310,23 @@ mod tests {
         let mut state = HookState::default();
         let _down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         for _ in 0..3 {
-            let partial = state.process_mouse(MouseEvent::Wheel(30), ENABLED);
+            let partial = state.process_mouse(MouseEvent::Wheel(30, (0, 0)), ENABLED);
             assert!(partial.suppress);
             assert!(partial.actions().next().is_none());
         }
         assert_eq!(
             state
-                .process_mouse(MouseEvent::Wheel(30), ENABLED)
+                .process_mouse(MouseEvent::Wheel(30, (0, 0)), ENABLED)
                 .actions()
                 .next(),
-            Some(InputAction::MouseWheel(-1))
+            Some(InputAction::MouseWheel(-1, (0, 0)))
         );
-        let _partial = state.process_mouse(MouseEvent::Wheel(30), ENABLED);
+        let _partial = state.process_mouse(MouseEvent::Wheel(30, (0, 0)), ENABLED);
         let _release = state.process_mouse(MouseEvent::RightButtonReleased, ENABLED);
         let _down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
         assert!(
             state
-                .process_mouse(MouseEvent::Wheel(90), ENABLED)
+                .process_mouse(MouseEvent::Wheel(90, (0, 0)), ENABLED)
                 .actions()
                 .next()
                 .is_none()
@@ -1313,24 +1345,24 @@ mod tests {
         for boundary in 0..3 {
             let mut state = HookState::default();
             let _down = state.process_mouse(MouseEvent::RightButtonPressed, ENABLED);
-            let _wheel = state.process_mouse(MouseEvent::Wheel(120), ENABLED);
+            let _wheel = state.process_mouse(MouseEvent::Wheel(120, (0, 0)), ENABLED);
             match boundary {
                 0 => {
                     state.set_interception_suspended(true);
                     assert_eq!(
-                        state.process_mouse(MouseEvent::Wheel(120), ENABLED),
+                        state.process_mouse(MouseEvent::Wheel(120, (0, 0)), ENABLED),
                         HookOutcome::default()
                     );
                     state.set_interception_suspended(false);
                 }
                 1 => state.reset_gestures(),
                 _ => {
-                    let _disabled =
-                        state.process_mouse(MouseEvent::Wheel(120), HookSettings::default());
+                    let _disabled = state
+                        .process_mouse(MouseEvent::Wheel(120, (0, 0)), HookSettings::default());
                 }
             }
             assert_eq!(
-                state.process_mouse(MouseEvent::Wheel(120), ENABLED),
+                state.process_mouse(MouseEvent::Wheel(120, (0, 0)), ENABLED),
                 HookOutcome::default()
             );
             assert_eq!(
