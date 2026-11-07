@@ -1,31 +1,36 @@
 {
-  "fill-specializations": [
+  "fill": {
+    "linear-gradient": [
+      "srgb:0.239,0.251,0.275,1",
+      "srgb:0.145,0.153,0.169,1"
+    ]
+  },
+  "groups": [
     {
-      "value": {
-        "linear-gradient": [
-          "display-p3:0.24000,0.24000,0.24000,1.00000",
-          "display-p3:0.07000,0.07000,0.07000,1.00000"
-        ]
+      "name": "key",
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "key.png",
+          "name": "key"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
       }
     },
     {
-      "appearance": "dark",
-      "value": {
-        "linear-gradient": [
-          "display-p3:0.13000,0.13000,0.13000,1.00000",
-          "display-p3:0.02000,0.02000,0.02000,1.00000"
-        ]
-      }
-    }
-  ],
-  "groups": [
-    {
+      "name": "shadow",
       "layers": [
         {
           "glass": false,
-          "image-name": "legend.svg",
-          "name": "legend",
-          "opacity": 0.94
+          "image-name": "shadow.png",
+          "name": "shadow"
         }
       ],
       "shadow": {
@@ -33,8 +38,8 @@
         "opacity": 0
       },
       "translucency": {
-        "enabled": true,
-        "value": 0.4
+        "enabled": false,
+        "value": 0
       }
     }
   ],
