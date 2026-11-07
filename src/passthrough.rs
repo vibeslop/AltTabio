@@ -147,7 +147,7 @@ mod tests {
         let mut state = HookState::default();
         for event in [
             MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(120),
+            MouseEvent::Wheel(120, (0, 0)),
             MouseEvent::RightButtonReleased,
         ] {
             assert_eq!(state.process_mouse(event, settings), HookOutcome::default());

@@ -162,7 +162,7 @@ fn a_failed_completion_post_cannot_forward_an_owned_button_release() {
         ..HookSettings::default()
     };
     let _down = state.process_mouse(MouseEvent::RightButtonPressed, settings);
-    let _wheel = state.process_mouse(MouseEvent::Wheel(-120), settings);
+    let _wheel = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
     let release = state.process_mouse(MouseEvent::RightButtonReleased, settings);
     assert_eq!(
         finish_mouse_callback_with(
@@ -356,7 +356,7 @@ fn native_mouse_release_fixture() {
                     outcome,
                     |outcome| {
                         for action in outcome.actions() {
-                            if matches!(action, InputAction::MouseWheel(_)) {
+                            if matches!(action, InputAction::MouseWheel(_, _)) {
                                 flags.set(OVERLAY_ACTIVE, true);
                             }
                             if action == InputAction::MouseWheelReleased {

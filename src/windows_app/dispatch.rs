@@ -229,7 +229,10 @@ impl App {
     pub(super) fn handle_hook_input(&mut self, action: InputAction, origin: WPARAM) {
         if self.pending_shell.is_none()
             && !self.is_visible()
-            && matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_))
+            && matches!(
+                action,
+                InputAction::Switch(_) | InputAction::MouseWheel(_, _)
+            )
             && let Some(window) = shell_menu::foreground_menu()
         {
             self.begin_shell_dismissal(window, action, origin);
@@ -241,8 +244,10 @@ impl App {
     }
 
     pub(super) fn retire_hook_opening(&self, action: InputAction, origin: WPARAM) {
-        if matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_))
-            && let Some(hooks) = &self.hooks
+        if matches!(
+            action,
+            InputAction::Switch(_) | InputAction::MouseWheel(_, _)
+        ) && let Some(hooks) = &self.hooks
         {
             hooks.retire_openings(origin, 1);
         }
@@ -256,12 +261,12 @@ impl App {
         else {
             return;
         };
-        if let InputAction::OverlayWheel(delta) = action {
-            self.handle_overlay_wheel(delta);
+        if let InputAction::OverlayWheel(delta, position) = action {
+            self.handle_overlay_wheel(i32::from(delta), position);
             return;
         }
-        if let InputAction::MouseWheel(steps) = action
-            && self.handle_gesture_wheel(steps)
+        if let InputAction::MouseWheel(steps, position) = action
+            && self.handle_gesture_wheel(i32::from(steps), position)
         {
             return;
         }

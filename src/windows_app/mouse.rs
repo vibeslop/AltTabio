@@ -49,21 +49,32 @@ impl App {
         self.handle_wheel_at(delta, screen_point, false);
     }
 
-    pub(super) fn handle_overlay_wheel(&mut self, delta: i32) {
-        if self.is_visible()
-            && let Some(point) = self.read_mouse_position()
-        {
-            self.handle_wheel_at(delta, point, false);
+    pub(super) fn handle_overlay_wheel(&mut self, delta: i32, position: (i32, i32)) {
+        if self.is_visible() {
+            self.handle_wheel_at(
+                delta,
+                POINT {
+                    x: position.0,
+                    y: position.1,
+                },
+                false,
+            );
         }
     }
 
     /// A held-right-button gesture uses the same routing as ordinary captured wheel input.
-    pub(super) fn handle_gesture_wheel(&mut self, steps: i32) -> bool {
+    pub(super) fn handle_gesture_wheel(&mut self, steps: i32, position: (i32, i32)) -> bool {
         if !self.is_visible() {
             return false;
         }
-        self.read_mouse_position()
-            .is_some_and(|point| self.handle_wheel_at(steps.saturating_mul(-120), point, true))
+        self.handle_wheel_at(
+            steps.saturating_mul(-120),
+            POINT {
+                x: position.0,
+                y: position.1,
+            },
+            true,
+        )
     }
 
     fn handle_wheel_at(&mut self, delta: i32, screen_point: POINT, gesture: bool) -> bool {

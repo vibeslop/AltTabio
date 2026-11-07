@@ -46,6 +46,10 @@ const ACTION_SEARCH_NAVIGATION: usize = 21;
 const ACTION_CODE_MASK: usize = 0xFF;
 // Keep the epoch within 32 bits so an epoch and opening count fit one atomic word.
 const ACTION_EPOCH_MASK: usize = (usize::MAX >> 8) & u32::MAX as usize;
+// Supported Windows and macOS builds are 64-bit. A wheel message uses 8 code bits,
+// 32 epoch bits and 16 signed wheel bits in WPARAM, and two full i32 coordinates in LPARAM.
+const _: () = assert!(usize::BITS == 64, "hook messages require 64-bit parameters");
+const WHEEL_DELTA_SHIFT: u32 = 40;
 static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
 
 fn next_hook_generation() -> usize {
@@ -62,8 +66,12 @@ pub fn encode_action(action: InputAction, generation: usize) -> (usize, isize) {
     let (code, value) = match action {
         InputAction::Switch(delta) => (ACTION_SWITCH, delta as isize),
         InputAction::CycleSelection(delta) => (ACTION_CYCLE_SELECTION, delta as isize),
-        InputAction::OverlayWheel(delta) => (ACTION_OVERLAY_WHEEL, delta as isize),
-        InputAction::MouseWheel(delta) => (ACTION_MOUSE_WHEEL, delta as isize),
+        InputAction::OverlayWheel(delta, position) => {
+            return encode_wheel(ACTION_OVERLAY_WHEEL, generation, delta, position);
+        }
+        InputAction::MouseWheel(delta, position) => {
+            return encode_wheel(ACTION_MOUSE_WHEEL, generation, delta, position);
+        }
         InputAction::MouseWheelReleased => (ACTION_MOUSE_WHEEL_RELEASED, 0),
         InputAction::RightButtonPressed => (ACTION_RIGHT_BUTTON_PRESSED, 0),
         InputAction::Navigate(delta) => (ACTION_NAVIGATE, delta as isize),
@@ -105,8 +113,14 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
     match wparam & ACTION_CODE_MASK {
         ACTION_SWITCH => i32::try_from(lparam).ok().map(InputAction::Switch),
         ACTION_CYCLE_SELECTION => i32::try_from(lparam).ok().map(InputAction::CycleSelection),
-        ACTION_OVERLAY_WHEEL => i32::try_from(lparam).ok().map(InputAction::OverlayWheel),
-        ACTION_MOUSE_WHEEL => i32::try_from(lparam).ok().map(InputAction::MouseWheel),
+        ACTION_OVERLAY_WHEEL => {
+            let (delta, position) = decode_wheel(wparam, lparam);
+            Some(InputAction::OverlayWheel(delta, position))
+        }
+        ACTION_MOUSE_WHEEL => {
+            let (steps, position) = decode_wheel(wparam, lparam);
+            Some(InputAction::MouseWheel(steps, position))
+        }
         ACTION_MOUSE_WHEEL_RELEASED => Some(InputAction::MouseWheelReleased),
         ACTION_RIGHT_BUTTON_PRESSED => Some(InputAction::RightButtonPressed),
         ACTION_ACTIVATE_POSITION => usize::try_from(lparam)
@@ -147,6 +161,37 @@ pub fn decode_action(wparam: usize, lparam: isize) -> Option<InputAction> {
             .map(InputAction::WindowCommand),
         _ => None,
     }
+}
+
+fn encode_wheel(
+    code: usize,
+    generation: usize,
+    delta: i16,
+    position: (i32, i32),
+) -> (usize, isize) {
+    (
+        action_wparam(code, generation) | (usize::from(delta.cast_unsigned()) << WHEEL_DELTA_SHIFT),
+        ((position.0.cast_unsigned() as usize) | ((position.1.cast_unsigned() as usize) << 32))
+            .cast_signed(),
+    )
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "each cast extracts exactly the encoded low 16 or 32 bits from a scalar payload"
+)]
+fn decode_wheel(wparam: usize, lparam: isize) -> (i16, (i32, i32)) {
+    (
+        ((wparam >> WHEEL_DELTA_SHIFT) as u16).cast_signed(),
+        (
+            (lparam.cast_unsigned() as u32).cast_signed(),
+            ((lparam.cast_unsigned() >> 32) as u32).cast_signed(),
+        ),
+    )
+}
+
+const fn action_epoch(wparam: usize) -> usize {
+    (wparam >> 8) & ACTION_EPOCH_MASK
 }
 
 // Four bits hold positions 1-9; the remaining 21 bits hold a Unicode scalar plus one, with zero
@@ -229,7 +274,7 @@ impl HookFlags {
         let flags = self.load();
         !self.recovery_pending()
             && flags & INTERCEPTION_SUSPENDED == 0
-            && (wparam >> 8) == ((flags >> GENERATION_SHIFT) & ACTION_EPOCH_MASK)
+            && action_epoch(wparam) == ((flags >> GENERATION_SHIFT) & ACTION_EPOCH_MASK)
     }
 
     /// Whether work begun under `generation`, as the hook last synchronized it, may still reach
@@ -342,7 +387,7 @@ impl HookFlags {
     }
 
     pub fn retire_action_openings(&self, wparam: usize, count: usize) {
-        self.retire_openings((wparam >> 8) << GENERATION_SHIFT, count);
+        self.retire_openings(action_epoch(wparam) << GENERATION_SHIFT, count);
     }
 
     pub fn retire_openings(&self, generation: usize, count: usize) {
@@ -481,7 +526,10 @@ pub struct HookActionGuard {
 
 impl HookActionGuard {
     pub fn new(flags: Arc<HookFlags>, origin: usize, action: InputAction) -> Option<Self> {
-        let opening = matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_));
+        let opening = matches!(
+            action,
+            InputAction::Switch(_) | InputAction::MouseWheel(_, _)
+        );
         if !flags.action_is_current(origin) {
             if opening {
                 flags.retire_action_openings(origin, 1);
@@ -534,7 +582,7 @@ mod tests {
         let flags = Arc::new(HookFlags::new());
         let generation = flags.load();
         assert!(flags.begin_opening(generation, true));
-        let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
+        let (origin, _) = encode_action(InputAction::MouseWheel(1, (0, 0)), generation);
         {
             let _modal = HookInterceptionGuard::new(Arc::clone(&flags));
             assert!(!flags.action_is_current(origin));
@@ -557,7 +605,7 @@ mod tests {
         );
         assert!(
             !hook
-                .process_mouse(MouseEvent::Wheel(-120), settings)
+                .process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings)
                 .suppress
         );
     }
@@ -623,7 +671,7 @@ mod tests {
         };
         hook.set_overlay_active(true);
         let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
-        let _wheel = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+        let _wheel = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
         assert!(flags.begin_opening(generation, true));
         // The searched session completes before the queued fresh session reaches the UI.
         flags.complete_overlay();
@@ -682,7 +730,7 @@ mod tests {
             };
             let mut hook = HookState::default();
             let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
-            let opening = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+            let opening = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
             assert_eq!(
                 deliver(&flags, generation, typed_search, opening, |_| true),
                 Delivery::Posted
@@ -698,10 +746,12 @@ mod tests {
                 release.actions().next(),
                 Some(InputAction::MouseWheelReleased)
             );
-            let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
-            let Some(applying) =
-                HookActionGuard::new(Arc::clone(&flags), origin, InputAction::MouseWheel(1))
-            else {
+            let (origin, _) = encode_action(InputAction::MouseWheel(1, (0, 0)), generation);
+            let Some(applying) = HookActionGuard::new(
+                Arc::clone(&flags),
+                origin,
+                InputAction::MouseWheel(1, (0, 0)),
+            ) else {
                 panic!("accepted opening must stay current");
             };
             flags.sync_overlay(true, typed_search, false);
@@ -726,7 +776,7 @@ mod tests {
             typed_search: true,
             release_alt_switches: true,
         });
-        let _opening = session.handle_input(InputAction::MouseWheel(1));
+        let _opening = session.handle_input(InputAction::MouseWheel(1, (0, 0)));
         session.open(tasks.clone(), Some(1));
         flags.sync_overlay(true, true, false);
         assert!(flags.begin_opening(generation, true));
@@ -735,8 +785,8 @@ mod tests {
         let mut activations = Vec::new();
         for action in [
             InputAction::MouseWheelReleased,
-            InputAction::MouseWheel(1),
-            InputAction::MouseWheel(1),
+            InputAction::MouseWheel(1, (0, 0)),
+            InputAction::MouseWheel(1, (0, 0)),
             InputAction::MouseWheelReleased,
         ] {
             let (origin, _) = encode_action(action, generation);
@@ -775,10 +825,12 @@ mod tests {
         let generation = flags.load();
         assert!(flags.begin_opening(generation, true)); // A failed to post.
         assert!(flags.begin_opening(generation, true)); // B reached the UI.
-        let (origin, _) = encode_action(InputAction::MouseWheel(1), generation);
-        let Some(applying) =
-            HookActionGuard::new(Arc::clone(&flags), origin, InputAction::MouseWheel(1))
-        else {
+        let (origin, _) = encode_action(InputAction::MouseWheel(1, (0, 0)), generation);
+        let Some(applying) = HookActionGuard::new(
+            Arc::clone(&flags),
+            origin,
+            InputAction::MouseWheel(1, (0, 0)),
+        ) else {
             panic!("opening must be current");
         };
         // B is enumerating windows and has not published visibility yet.
@@ -818,10 +870,10 @@ mod tests {
             hook.set_overlay_active(true);
             let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
             assert_eq!(
-                hook.process_mouse(MouseEvent::Wheel(-120), settings)
+                hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings)
                     .actions()
                     .next(),
-                Some(InputAction::MouseWheel(1))
+                Some(InputAction::MouseWheel(1, (0, 0)))
             );
             // Run the same publication policy and CAS, with completion precisely between
             // the opening read and publication. No opening is posted after refusal.
@@ -897,23 +949,52 @@ mod tests {
 
     #[test]
     fn captured_wheel_preserves_raw_deltas_and_the_interception_epoch() {
-        let flags = HookFlags::new();
-        for delta in [
-            i32::from(i16::MIN),
-            -120,
-            -30,
-            0,
-            30,
-            120,
-            i32::from(i16::MAX),
-        ] {
-            let action = InputAction::OverlayWheel(delta);
-            let (wparam, lparam) = encode_action(action, flags.load());
-            assert_eq!(decode_action(wparam, lparam), Some(action));
-            assert!(flags.action_is_current(wparam));
-            flags.advance_generation();
-            assert!(!flags.action_is_current(wparam));
+        for epoch in [1, 0x8000_0000, u32::MAX] {
+            for delta in [i16::MIN, -120, -30, 0, 30, 120, i16::MAX] {
+                for position in [
+                    (i32::MIN, i32::MAX),
+                    (i32::MAX, i32::MIN),
+                    (-70000, -80000),
+                    (90000, 100_000),
+                    (0, 0),
+                ] {
+                    for action in [
+                        InputAction::OverlayWheel(delta, position),
+                        InputAction::MouseWheel(delta, position),
+                    ] {
+                        let flags = HookFlags::with_value((epoch as usize) << GENERATION_SHIFT);
+                        let (wparam, lparam) = encode_action(action, flags.load());
+                        assert_eq!(decode_action(wparam, lparam), Some(action));
+                        assert!(flags.action_is_current(wparam));
+                        flags.advance_generation();
+                        assert!(!flags.action_is_current(wparam));
+                    }
+                }
+            }
         }
+    }
+
+    #[test]
+    fn wheel_payload_bits_do_not_leak_openings_or_retire_a_later_epoch() {
+        let flags = HookFlags::new();
+        let first = flags.load();
+        let action = InputAction::MouseWheel(-274, (i32::MIN, i32::MAX));
+        let (stale, _) = encode_action(action, first);
+        assert!(flags.begin_opening(first, true));
+        flags.advance_generation();
+        let generation = flags.load() & !OVERLAY_FLAGS;
+        assert!(flags.begin_opening(generation, true));
+        flags.retire_action_openings(stale, 1);
+        assert_eq!(
+            flags.value.load(Ordering::Acquire) & OPENING_MASK,
+            OPENING_STEP
+        );
+        let (current, _) = encode_action(action, generation);
+        assert!(flags.action_is_current(current));
+        flags.retire_action_openings(current, 1);
+        flags.complete_overlay();
+        assert_eq!(flags.load() & OVERLAY_FLAGS, 0);
+        assert_eq!(flags.value.load(Ordering::Acquire) & OPENING_MASK, 0);
     }
 
     #[test]
@@ -933,7 +1014,7 @@ mod tests {
         };
         hook.set_overlay_active(true);
         let _down = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
-        let opening = hook.process_mouse(MouseEvent::Wheel(-120), settings);
+        let opening = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
         assert_eq!(
             deliver(&flags, completion_read, true, opening, |_| true),
             Delivery::Posted
@@ -1187,7 +1268,7 @@ mod tests {
                 command: crate::text_edit::TextCommand::Left,
                 modified: false,
             },
-            InputAction::MouseWheel(-1),
+            InputAction::MouseWheel(-1, (0, 0)),
             InputAction::MouseWheelReleased,
             InputAction::RightButtonPressed,
             InputAction::Navigate(1),

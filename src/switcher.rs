@@ -404,11 +404,12 @@ impl SwitcherSession {
         self.track_switch_gesture(action);
         if !self.visible {
             return match action {
-                InputAction::Switch(delta) | InputAction::MouseWheel(delta) => {
-                    SwitcherEffect::Open {
-                        selection_delta: Some(delta),
-                    }
-                }
+                InputAction::MouseWheel(delta, _) => SwitcherEffect::Open {
+                    selection_delta: Some(i32::from(delta)),
+                },
+                InputAction::Switch(delta) => SwitcherEffect::Open {
+                    selection_delta: Some(delta),
+                },
                 _ => SwitcherEffect::None,
             };
         }
@@ -420,9 +421,11 @@ impl SwitcherSession {
             InputAction::SearchNavigation { command, modified } if self.settings.typed_search => {
                 self.navigate_search(command, modified)
             }
-            InputAction::Switch(delta)
-            | InputAction::MouseWheel(delta)
-            | InputAction::CycleSelection(delta) => {
+            InputAction::MouseWheel(delta, _) => {
+                self.switcher.select_next(i32::from(delta));
+                SwitcherEffect::Redraw
+            }
+            InputAction::Switch(delta) | InputAction::CycleSelection(delta) => {
                 self.switcher.select_next(delta);
                 SwitcherEffect::Redraw
             }
@@ -485,7 +488,7 @@ impl SwitcherSession {
                 SwitcherEffect::Redraw
             }
             InputAction::AltReleased
-            | InputAction::OverlayWheel(_)
+            | InputAction::OverlayWheel(_, _)
             | InputAction::MouseWheelReleased
             | InputAction::AppendSearchCharacter(_)
             | InputAction::BackspaceSearch
@@ -508,12 +511,12 @@ impl SwitcherSession {
 
     fn track_switch_gesture(&mut self, action: InputAction) {
         if !self.visible {
-            self.mouse_selection = if matches!(action, InputAction::MouseWheel(_)) {
+            self.mouse_selection = if matches!(action, InputAction::MouseWheel(_, _)) {
                 MouseSelection::Active
             } else {
                 MouseSelection::Inactive
             };
-        } else if matches!(action, InputAction::MouseWheel(_)) {
+        } else if matches!(action, InputAction::MouseWheel(_, _)) {
             self.start_mouse_wheel();
         }
         if matches!(action, InputAction::Switch(_)) {
@@ -884,8 +887,8 @@ mod tests {
         let mut activated = None;
         for event in [
             MouseEvent::RightButtonPressed,
-            MouseEvent::Wheel(-120),
-            MouseEvent::Wheel(-120),
+            MouseEvent::Wheel(-120, (0, 0)),
+            MouseEvent::Wheel(-120, (0, 0)),
             MouseEvent::RightButtonReleased,
         ] {
             let outcome = hook.process_mouse(event, settings);
@@ -939,7 +942,7 @@ mod tests {
             release_alt_switches: true,
         });
         assert!(matches!(
-            session.handle_input(InputAction::MouseWheel(-1)),
+            session.handle_input(InputAction::MouseWheel(-1, (0, 0))),
             SwitcherEffect::Open { .. }
         ));
         session.open([SwitchTask::new(1, 10, "One", "one")], None);

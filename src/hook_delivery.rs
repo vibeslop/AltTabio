@@ -33,7 +33,10 @@ pub fn deliver(
         if !flags.generation_is_current(generation) {
             return Delivery::Stale;
         }
-        let opens_overlay = matches!(action, InputAction::Switch(_) | InputAction::MouseWheel(_));
+        let opens_overlay = matches!(
+            action,
+            InputAction::Switch(_) | InputAction::MouseWheel(_, _)
+        );
         if opens_overlay && !flags.begin_opening(generation, typed_search) {
             return Delivery::OverlayRefused;
         }
