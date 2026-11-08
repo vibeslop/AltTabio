@@ -4,7 +4,7 @@
 # Usage: scripts/mac/package.sh
 #
 # Output: target/mac/AltTabio-<version>-macos.zip, to be attached to the v<version> release, where
-# docs/install.sh looks for it.
+# scripts/mac/install.sh looks for it.
 #
 # Users keep their Accessibility and Screen Recording grants across updates only while every
 # release is signed with the same certificate. scripts/mac/release-certificate.sha1 names it by the

@@ -15,15 +15,10 @@ export TEST_FIXTURE=$fixture
 expected_certificate=$(tr -d '[:space:]' < "$root/scripts/mac/release-certificate.sha1")
 export EXPECTED_REQUIREMENT="=identifier \"com.vibeslop.AltTabio.installer\" and certificate leaf = H\"$expected_certificate\""
 
-# The copied command must execute exactly the reviewed local bootstrap, including its pin.
-sed -n "/^\/bin\/sh <<'ALTTABIO_BOOTSTRAP'$/,/^ALTTABIO_BOOTSTRAP$/p" "$root/README.md" > "$fixture/copied.sh"
-sed '1d;$d' "$fixture/copied.sh" > "$fixture/copied-body.sh"
-sed '1,3d' "$root/scripts/mac/bootstrap.sh" > "$fixture/bootstrap-body.sh"
-cmp "$fixture/bootstrap-body.sh" "$fixture/copied-body.sh"
-
 cat > "$fixture/bin/curl" <<'MOCK'
 #!/bin/sh
 set -eu
+printf 'fetch\n' >> "$TEST_FIXTURE/fetches"
 output=
 url=
 while [ "$#" -gt 0 ]; do
@@ -105,7 +100,7 @@ for test_case in missing_signature invalid_signature wrong_certificate wrong_ide
     export TEST_CASE=$test_case
     : > "$fixture/events"
     result=0
-    TMPDIR="$fixture" PATH="$fixture/bin:$original_path" /bin/sh "$fixture/copied.sh" > "$fixture/output" 2>&1 || result=$?
+    TMPDIR="$fixture" PATH="$fixture/bin:$original_path" /bin/sh < "$root/docs/install.sh" > "$fixture/output" 2>&1 || result=$?
     case $test_case in
         metadata_failure|no_asset|download_failure) expected=;;
         mount_failure) expected=$(printf 'verify\nmount');;
@@ -117,6 +112,18 @@ for test_case in missing_signature invalid_signature wrong_certificate wrong_ide
        { [ "$test_case" != trusted ] && [ "$result" -eq 0 ]; }; then
         cat "$fixture/output" "$fixture/events" >&2
         printf 'Bootstrap failed case: %s (exit %s)\n' "$test_case" "$result" >&2
+        exit 1
+    fi
+done
+
+# A download cut short by the pipe, before or inside main, must fetch nothing.
+export TEST_CASE=trusted
+for keep in "$(($(wc -l < "$root/docs/install.sh") - 1))" "$(grep -n '^main() {$' "$root/docs/install.sh" | cut -d: -f1)"; do
+    rm -f "$fixture/fetches"
+    head -n "$keep" "$root/docs/install.sh" |
+        TMPDIR="$fixture" PATH="$fixture/bin:$original_path" /bin/sh > "$fixture/output" 2>&1 || :
+    if [ -e "$fixture/fetches" ]; then
+        printf 'Bootstrap cut after line %s still fetched\n' "$keep" >&2
         exit 1
     fi
 done

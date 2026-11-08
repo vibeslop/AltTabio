@@ -80,7 +80,7 @@ for test_case in metadata_oversize image_oversize settings; do
     : > "$fixture/events"
     rm -f "$fixture/bytes"
     status=0
-    PATH="$fixture/bin:$PATH" sh "$root/scripts/mac/bootstrap.sh" > "$fixture/output" 2>&1 || status=$?
+    PATH="$fixture/bin:$PATH" sh "$root/docs/install.sh" > "$fixture/output" 2>&1 || status=$?
     case $test_case in
         metadata_oversize) expected=; ceiling=4194304;;
         image_oversize) expected=parse; ceiling=33554432;;

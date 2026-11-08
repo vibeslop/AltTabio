@@ -27,57 +27,15 @@ To uninstall, turn off **Start at sign-in** if enabled, choose **Exit** from the
 
 ### macOS
 
-Expand the command below to install or update AltTabio.
-
-<details>
-<summary>Verified macOS installer command</summary>
-
-Copy this whole block into Terminal. It downloads the newest published macOS installer image and verifies it against AltTabio's pinned release certificate **before mounting it or running its script**. No script from GitHub Pages is executed.
+Paste this into Terminal to install or update AltTabio:
 
 ```sh
-/bin/sh <<'ALTTABIO_BOOTSTRAP'
-set -eu
-
-work=$(mktemp -d)
-mounted=false
-trap 'if ! $mounted || hdiutil detach "$work/mount" -quiet; then rm -rf "$work"; fi' EXIT
-trap 'exit 1' HUP INT TERM
-# Bound actual file writes even when Content-Length is absent or an older curl only
-# checks advertised sizes. ulimit -f blocks can be 512 or 1024 bytes; use the larger unit.
-fetch() (
-    ulimit -c 0
-    ulimit -f "$(($3 / 1024))"
-    curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
-        --connect-timeout 15 --max-time "$4" --max-filesize "$3" --output "$2" -- "$1"
-    [ "$(wc -c < "$2")" -le "$3" ]
-)
-fetch 'https://api.github.com/repos/vibeslop/AltTabio/releases?per_page=30' "$work/releases.json" 4194304 30
-url=$(osascript -l JavaScript -e 'function run() {
-        ObjC.import("Foundation");
-        const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
-        const releases = JSON.parse($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js);
-        for (const release of releases) {
-            if (release.draft || release.prerelease) continue;
-            const asset = release.assets.find(a => a.name === "AltTabio-macos-installer.dmg");
-            if (asset) return asset.browser_download_url;
-        }
-        return "";
-    }' < "$work/releases.json")
-[ -n "$url" ] || { echo 'No signed macOS installer is published yet.' >&2; exit 1; }
-fetch "$url" "$work/installer.dmg" 33554432 180
-codesign --verify --strict -R '=identifier "com.vibeslop.AltTabio.installer" and certificate leaf = H"617A82407E9767025EDE4A62A9B990ADEA21F53B"' "$work/installer.dmg"
-mkdir "$work/mount"
-hdiutil attach "$work/installer.dmg" -readonly -nobrowse -mountpoint "$work/mount" -quiet
-mounted=true
-/bin/sh "$work/mount/install.sh"
-ALTTABIO_BOOTSTRAP
+curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 ```
 
-The bootstrap and its certificate pin must come from a copy of this README you trust. They match [the local bootstrap](scripts/mac/bootstrap.sh) and [the existing release-certificate pin](scripts/mac/release-certificate.sha1). Release metadata and download hosting can choose an image, but cannot authorize a modified installer without that signing key. The protected macOS release job signs the image with the same certificate used for the app. This authenticates release authorization, not freshness; it cannot prevent replay of an older signed installer. Until a release includes the signed image, the command stops without running an installer.
+[The script](docs/install.sh) downloads the newest installer and runs it only if it is signed with AltTabio's [release certificate](scripts/mac/release-certificate.sha1).
 
-</details>
-
-The script updates an existing installation in place, preferring `/Applications` over `~/Applications` if both exist. For a new installation, it uses `/Applications` if writable, otherwise `~/Applications`, then starts AltTabio in the menu bar. An existing copy in `/Applications` still requires permission to replace it.
+The installer updates an existing installation in place, preferring `/Applications` over `~/Applications` if both exist. For a new installation, it uses `/Applications` if writable, otherwise `~/Applications`, then starts AltTabio in the menu bar. An existing copy in `/Applications` still requires permission to replace it.
 
 Allow Accessibility when prompted. Screen Recording is optional and used only for previews; the window list and switching work without it. See [permissions](https://vibeslop.github.io/AltTabio/mac/#permissions).
 

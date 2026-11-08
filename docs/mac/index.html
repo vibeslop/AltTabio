@@ -291,7 +291,7 @@
               <p>In Terminal, run this command to verify the app's signature, bundle identifier, and pinned release certificate. If you unzipped it elsewhere, change the quoted app path to that location.</p>
               <div class="cmd">
                 <span class="p" aria-hidden="true">$</span>
-                <!-- Keep the requirement aligned with scripts/mac/release-certificate.sha1 and docs/install.sh. -->
+                <!-- Keep the requirement aligned with scripts/mac/release-certificate.sha1 and scripts/mac/install.sh. -->
                 <code id="manual-verify-cmd">codesign --verify --deep --strict -R '=identifier "com.vibeslop.AltTabio" and certificate leaf = H"617A82407E9767025EDE4A62A9B990ADEA21F53B"' "$HOME/Downloads/AltTabio.app" &amp;&amp; printf '%s\n' 'Verified AltTabio release identity.'</code>
                 <button class="icon-btn" type="button" data-copy="manual-verify-cmd" aria-label="Copy the command">
                   <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
