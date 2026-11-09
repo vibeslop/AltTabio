@@ -14,6 +14,16 @@ On Windows, search open windows as you type and see a live preview of the select
 
 ### Windows
 
+Paste this into PowerShell:
+
+```powershell
+irm https://vibeslop.github.io/AltTabio/install.ps1 | iex
+```
+
+[The script](docs/install.ps1) downloads the newest release and installs it only if its Minisign signature and signed release identity match the release key pinned in the script, the check the app's updater makes. Windows asks once for permission, for PowerShell. AltTabio is then installed in `C:\Program Files\AltTabio`, a folder only administrators can change, and started. Running the command again updates that copy and keeps its settings.
+
+To install by hand instead:
+
 1. Download the Windows archive and its matching `.zip.minisig` from the same [GitHub release](https://github.com/vibeslop/AltTabio/releases/latest).
 2. Follow [Windows first-install verification](docs/windows-install.md) to authenticate the archive and signed release identity with the existing AltTabio public key. Build the verifier from separately trusted source, never from the downloaded archive. Stop if verification fails or the signature is missing.
 3. After verification succeeds, extract that archive to a folder that only administrators can change, such as `C:\Program Files\AltTabio`.

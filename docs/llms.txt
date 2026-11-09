@@ -14,6 +14,7 @@ AltTabio is an independent project. It is not affiliated with Microsoft, Apple, 
 ## Download and source
 
 - [Latest release for Windows and macOS](https://github.com/vibeslop/AltTabio/releases/latest)
+- [Windows install command](https://github.com/vibeslop/AltTabio#windows): run `irm https://vibeslop.github.io/AltTabio/install.ps1 | iex` in PowerShell; it installs the release only if its Minisign signature matches the pinned release key
 - [macOS install command](https://github.com/vibeslop/AltTabio#macos): run `curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh` in Terminal; it runs the installer only if it is signed with the pinned release certificate
 - [GitHub repository](https://github.com/vibeslop/AltTabio)
 - [MIT License](https://github.com/vibeslop/AltTabio/blob/main/LICENSE)

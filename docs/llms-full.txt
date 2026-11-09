@@ -35,6 +35,8 @@ When the user holds Alt and taps Tab (or optionally Win+Tab), AltTabio shows an 
 
 The user can also press 1-9 to jump when the query is empty, use arrows or the mouse, close or terminate a window, and dismiss with Escape. Once a query is entered, number keys type digits; Left, Right, Home, and End edit the query. The query stays visible in a capsule on the panel's top edge and supports mouse selection, clipboard shortcuts, undo, and redo. The mouse wheel scrolls the window list without changing the selection.
 
+Install: run `irm https://vibeslop.github.io/AltTabio/install.ps1 | iex` in PowerShell. It downloads the newest release and installs it only if its Minisign signature and signed release identity match the pinned release key. Windows asks once for permission, for PowerShell; the app is installed in `C:\Program Files\AltTabio` and started. The archive and its signature can also be downloaded and verified by hand.
+
 ## Windows updates
 
 Release builds check GitHub for updates about a minute after startup and then daily, with an hourly retry after a failed check. They download newer stable releases, verify the archive's pinned-key Minisign signature and GitHub's SHA-256 digest, and restart after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. The executable is replaced in its current folder, preserving `AltTabio.ini` and the startup task. Automatic updates can be turned off in Settings. The tray menu has Check for Updates to check immediately and offer installation, and Relaunch to Update when an update is ready. Ordinary Windows source builds do not check for or install published updates.
