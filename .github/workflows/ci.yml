@@ -99,6 +99,15 @@ jobs:
       - name: Test signing tool
         run: cargo test --manifest-path tools/windows-update-signing/Cargo.toml --locked --quiet
 
+      # The install command runs in whichever PowerShell a visitor opens, so check it in both.
+      - name: Check the install script in Windows PowerShell
+        shell: powershell
+        run: scripts/windows/test-bootstrap.ps1
+
+      - name: Check the install script in PowerShell 7
+        shell: pwsh
+        run: scripts/windows/test-bootstrap.ps1
+
       - name: Verify Rust release artifact
         shell: pwsh
         run: |
