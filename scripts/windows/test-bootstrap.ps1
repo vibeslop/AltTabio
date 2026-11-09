@@ -42,7 +42,8 @@ $archive = [System.IO.File]::ReadAllBytes((Join-Path $fixtures 'archive.txt'))
 $valid = [System.IO.File]::ReadAllText((Join-Path $fixtures 'valid.minisig'))
 $wrongKey = [System.IO.File]::ReadAllText((Join-Path $fixtures 'wrong-key.minisig'))
 $key = @(Get-Content -LiteralPath (Join-Path $fixtures 'fixture.pub'))[1]
-$lines = $valid.TrimEnd("`n").Split("`n")
+# A Windows checkout may give the fixture CRLF line endings.
+$lines = @($valid -split "\r?\n" | Where-Object { $_ })
 
 Check 'a signed archive verifies' ($null -eq (Test-AltTabioArchive $archive $valid '9.0.0' $key))
 Check 'the signed identity is the one the app writes' ($lines[2] -ceq "trusted comment: $(Get-AltTabioIdentity '9.0.0')")
