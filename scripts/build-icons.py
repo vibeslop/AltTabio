@@ -102,6 +102,11 @@ def master(key):
             '<rect x="33" y="33" width="958" height="958" rx="215" fill="none" stroke="url(#rim)" stroke-width="2"/></svg>')
 
 
+def favicon(key):
+    """The key alone, without the tile, filling a square around its footprint."""
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{KX - 15:g} {KY + KH / 2 - 400:g} 800 800">{key_svg(key)}</svg>'
+
+
 def pixels(cells, w=2, h=2):
     return "".join(f'<rect x="{x}" y="{y}" width="{w}" height="{h}"/>' for x, y in cells)
 
@@ -126,20 +131,26 @@ SMALL = {
                     + '<rect x="11" y="3" width="2" height="8"/></g>'),
 }
 
+# Without the tile, the 16 px key widens to the canvas edge to keep the master's proportions.
+BARE = {16: dict(key=(0, 2, 16, 12), face=(0, 2, 16, 10))}
 
-def small(key, n):
-    d = SMALL[n]
+
+def small(key, n, bare=False):
+    """The pixel-grid icon at n px; without the tile it is the bare key, as the favicon draws it."""
+    d = {**SMALL[n], **BARE[n]} if bare else SMALL[n]
     skirt_top, skirt_bottom, face_top, face_bottom, ink = palette(key)
     tx, ty, tw, th, tr = d["tile"]
     tile = f'<rect x="{tx:g}" y="{ty:g}" width="{tw:g}" height="{th:g}" rx="{tr:g}"/>'
     edge = (f'<rect x="{tx + .5:g}" y="{ty + .5:g}" width="{tw - 1:g}" height="{th - 1:g}" rx="{tr - .5:g}" '
-            'fill="none" stroke="#fff" stroke-opacity=".16"/>' if n >= 24 else "")
+            'fill="none" stroke="#fff" stroke-opacity=".16"/>' if n >= 24 and not bare else "")
+    clip = "" if bare else ' clip-path="url(#c)"'
+    tile = "" if bare else f'<g fill="url(#t)">{tile}</g>'
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {n} {n}"><defs>'
             f'<linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{TILE[0]}"/><stop offset="1" stop-color="{TILE[1]}"/></linearGradient>'
             f'<linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{skirt_top}"/><stop offset="1" stop-color="{skirt_bottom}"/></linearGradient>'
             f'<linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{face_top}"/><stop offset="1" stop-color="{face_bottom}"/></linearGradient>'
-            f'<clipPath id="c">{tile}</clipPath></defs>'
-            f'<g fill="url(#t)">{tile}</g><g clip-path="url(#c)">'
+            f'<clipPath id="c"><rect x="{tx:g}" y="{ty:g}" width="{tw:g}" height="{th:g}" rx="{tr:g}"/></clipPath></defs>'
+            f'{tile}<g{clip}>'
             + rect(d["key"], d["r"], ' fill="url(#s)"') + rect(d["face"], d["r"] - .5, ' fill="url(#f)"')
             + d["legend"].format(c=ink) + '</g>' + edge + '</svg>')
 
@@ -196,8 +207,9 @@ def srgb(c):
     "supported-platforms": {"squares": ["macOS"]},
 }, indent=2) + "\n")
 
-# Website: favicons and the touch icon, in the default azure.
+# Website, in the default azure: the bare key for browser tabs, the full icon for home screens.
 docs = ROOT / "docs"
-(docs / "favicon.svg").write_text(master(COLORS["azure"]) + "\n")
-(docs / "favicon.ico").write_bytes(ico([(s, drawing(COLORS["azure"], s)) for s in (16, 32, 48)]))
+(docs / "favicon.svg").write_text(favicon(COLORS["azure"]) + "\n")
+(docs / "favicon.ico").write_bytes(ico([(16, png(small(COLORS["azure"], 16, bare=True), 16))]
+                                       + [(s, png(favicon(COLORS["azure"]), s)) for s in (32, 48)]))
 (docs / "alttabio-icon.png").write_bytes(drawing(COLORS["azure"], 256))
