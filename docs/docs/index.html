@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AltTabio Docs: install, shortcuts, and settings for Windows and Mac</title>
+<meta name="description" content="How to install, verify, use, update, and uninstall AltTabio on Windows and Mac: every shortcut and setting, the permissions it asks for, and how it differs from the built-in switcher." />
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+<meta name="theme-color" content="#090d16" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#090d16" media="(prefers-color-scheme: dark)" />
+<meta name="color-scheme" content="light dark" />
+<link rel="canonical" href="https://vibeslop.github.io/AltTabio/docs/" />
+<link rel="alternate" type="application/atom+xml" title="AltTabio releases" href="https://github.com/vibeslop/AltTabio/releases.atom" />
+<link rel="icon" href="../favicon.ico" sizes="any" />
+<link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="../alttabio-icon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="AltTabio" />
+<meta property="og:locale" content="en_US" />
+<meta property="og:title" content="AltTabio Docs" />
+<meta property="og:description" content="Install, shortcuts, settings, permissions, updates, and uninstall for AltTabio on Windows and Mac." />
+<meta property="og:url" content="https://vibeslop.github.io/AltTabio/docs/" />
+<meta property="og:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
+<meta property="og:image:type" content="image/jpeg" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="AltTabio: Stop tabbing past the window you want. The Mac switcher open over a desktop, with numbered windows." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="AltTabio Docs" />
+<meta name="twitter:description" content="Install, shortcuts, settings, permissions, updates, and uninstall for AltTabio on Windows and Mac." />
+<meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
+<link rel="stylesheet" href="../site.css" />
+<link rel="stylesheet" href="docs.css" />
+<script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var stored = localStorage.getItem("alttabio-theme");
+    root.dataset.theme = stored === "light" || stored === "dark" ? stored
+      : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  } catch (e) {
+    root.dataset.theme = "light";
+  }
+  // Picks the download to lead with before the first paint. iPads report a Mac platform
+  // but have touch points, and AltTabio does not run on them.
+  var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+  root.dataset.os = /mac/i.test(platform) && navigator.maxTouchPoints < 2 ? "mac" : /win/i.test(platform) ? "windows" : "other";
+  // The docs show one system's instructions: the one a link points into, else this computer's,
+  // else Windows. Without script both stay. #windows and #mac only pick the system.
+  var hash = location.hash;
+  var pick = /^#(windows|mac)$/.exec(hash);
+  root.dataset.platform = pick ? pick[1]
+    : /-mac$|^#remote-desktops$/.test(hash) ? "mac"
+    : /-windows$/.test(hash) ? "windows"
+    : root.dataset.os === "mac" ? "mac" : "windows";
+  if (pick) history.replaceState(null, "", location.pathname + location.search);
+})();
+</script>
+<script src="../site.js" defer></script>
+<script src="docs.js" defer></script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://vibeslop.github.io/AltTabio/docs/#article",
+      "url": "https://vibeslop.github.io/AltTabio/docs/",
+      "headline": "AltTabio Docs",
+      "description": "How to install, verify, use, update, and uninstall AltTabio on Windows and Mac.",
+      "isPartOf": {"@id": "https://vibeslop.github.io/AltTabio/#website"},
+      "breadcrumb": {"@id": "https://vibeslop.github.io/AltTabio/docs/#breadcrumb"},
+      "inLanguage": "en",
+      "dateModified": "2026-11-09"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://vibeslop.github.io/AltTabio/docs/#breadcrumb",
+      "itemListElement": [
+        {"@type": "ListItem", "position": 1, "name": "AltTabio", "item": "https://vibeslop.github.io/AltTabio/"},
+        {"@type": "ListItem", "position": 2, "name": "Docs", "item": "https://vibeslop.github.io/AltTabio/docs/"}
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 25 16">
+    <rect x=".625" y=".625" width="23.75" height="14.75" rx="4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+    <path d="M6.5 8H15.5M12.5 5L15.5 8L12.5 11M18.5 4.75V11.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-github" viewBox="0 0 256 256"><path fill="currentColor" d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 256 256"><path fill="currentColor" d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 256 256"><path fill="currentColor" d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/><path d="M15.5 8.5V6.5a2.5 2.5 0 0 0-2.5-2.5H6.5A2.5 2.5 0 0 0 4 6.5V13a2.5 2.5 0 0 0 2.5 2.5h2"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></g></symbol>
+</svg>
+
+<header class="site-head">
+  <nav class="wrap nav" aria-label="Site">
+    <a class="brand" href="../" aria-label="AltTabio home">
+      <svg class="mark" viewBox="0 0 25 16" aria-hidden="true"><use href="#mark"/></svg>
+      <span>AltTabio</span>
+    </a>
+    <div class="navlinks">
+      <a href="./" aria-current="page">Docs</a>
+      <a href="../#faq">FAQ</a>
+    </div>
+    <div class="nav-tools">
+      <button class="icon-btn" id="theme-btn" type="button" aria-label="Use the dark appearance">
+        <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-moon"/></svg>
+      </button>
+      <a class="icon-btn nav-github" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
+        <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-github"/></svg>
+      </a>
+      <a class="btn btn-sm btn-quiet nav-cta" data-only="windows" href="#install-windows">Install</a>
+      <a class="btn btn-sm btn-quiet nav-cta" data-only="mac" href="#install-mac">Install</a>
+    </div>
+  </nav>
+</header>
+
+<main id="main" class="wrap docs">
+  <div class="docs-head">
+    <h1>AltTabio Docs</h1>
+    <p class="lede">How to install AltTabio, use it, change it, and remove it.</p>
+    <div class="platform" role="group" aria-label="System">
+      <button type="button" data-platform-pick="mac" aria-pressed="false">Mac</button>
+      <button type="button" data-platform-pick="windows" aria-pressed="false">Windows</button>
+    </div>
+  </div>
+
+  <nav class="toc" aria-label="On this page">
+    <h2 class="toc-title">On this page</h2>
+    <ul>
+      <li><a href="#getting-started">Getting started</a></li>
+      <li data-only="windows"><a href="#install-windows">Install on Windows</a></li>
+      <li data-only="mac"><a href="#install-mac">Install on Mac</a></li>
+      <li data-only="windows"><a href="#shortcuts-windows">Shortcuts on Windows</a></li>
+      <li data-only="mac"><a href="#shortcuts-mac">Shortcuts on Mac</a></li>
+      <li><a href="#settings">Settings</a></li>
+      <li><a href="#permissions">Permissions</a></li>
+      <li data-only="mac"><a href="#remote-desktops">Remote desktops</a></li>
+      <li><a href="#updates">Updates</a></li>
+      <li><a href="#uninstall">Uninstall</a></li>
+      <li><a href="#compare">How it compares</a></li>
+    </ul>
+  </nav>
+
+  <div class="docs-body">
+    <section id="getting-started" aria-labelledby="getting-started-title">
+      <h2 id="getting-started-title">Getting started</h2>
+      <p>AltTabio is a free, open-source window switcher. It replaces Alt+Tab on 64-bit Windows 10 and 11, and Cmd+Tab on macOS 26 and later. It keeps the shortcut you already know and shows you more once the switcher is open.</p>
+
+      <div data-only="windows">
+        <p>On Windows, Alt+Tab opens a list of your open windows beside a large live preview of the selected one. Start typing while you hold Alt and the list narrows by title, app, or number. Letting go of Alt switches.</p>
+        <figure class="docs-shot">
+          <img src="../images/windows-zed.png" width="1600" height="847" decoding="async" alt="AltTabio on Windows 11: four numbered windows on the left and a live preview of the selected one, its source code in Zed, on the right." />
+          <figcaption><a href="https://github.com/vibeslop/AltTabio/blob/main/docs/screenshots.md">More Windows screenshots</a>: scrolling, search, expanded rows, and light and dark themes.</figcaption>
+        </figure>
+        <dl class="facts-list">
+          <div><dt>Runs on</dt><dd>64-bit Windows 10 and 11, with several monitors and high-DPI displays</dd></div>
+          <div><dt>Comes as</dt><dd>One small program, installed with one line in PowerShell. No store account, no runtime.</dd></div>
+          <div><dt>Next</dt><dd><a href="#install-windows">Install on Windows</a></dd></div>
+        </dl>
+      </div>
+
+      <div data-only="mac">
+        <p>On a Mac, Cmd+Tab opens a strip of your running apps, most recently used first, and lists every window of the selected app below it. Minimized windows, windows of hidden apps, and windows on other desktops are in the list, each marked. The first Tab lands on the previous app, and letting go of Cmd switches.</p>
+        <dl class="facts-list">
+          <div><dt>Runs on</dt><dd>macOS 26 or later, on Apple silicon and Intel</dd></div>
+          <div><dt>Comes as</dt><dd>A universal app, installed with one line in Terminal</dd></div>
+          <div><dt>Next</dt><dd><a href="#install-mac">Install on Mac</a></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section id="install-windows" data-only="windows" aria-labelledby="install-windows-title">
+      <h2 id="install-windows-title">Install on Windows</h2>
+      <p>Paste one line into PowerShell. AltTabio updates itself after that.</p>
+
+      <h3 id="powershell-windows">Install with PowerShell <span class="tag">Recommended</span></h3>
+      <div class="cmd">
+        <span class="p" aria-hidden="true">&gt;</span>
+        <code id="install-cmd-windows">irm https://vibeslop.github.io/AltTabio/install.ps1 | iex</code>
+        <button class="icon-btn" type="button" data-copy="install-cmd-windows" aria-label="Copy the install command">
+          <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+          <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+        </button>
+        <span class="sr-only copy-status" aria-live="polite"></span>
+      </div>
+      <ol class="steps">
+        <li><span>Press Start, type PowerShell, and open it. Paste the line and press Enter.</span></li>
+        <li><span>Windows asks whether PowerShell may make changes. Choose <strong>Yes</strong>. A second window finishes the install and opens AltTabio.</span></li>
+        <li><span>Press Alt+Tab.</span></li>
+      </ol>
+      <p><a href="https://github.com/vibeslop/AltTabio/blob/main/docs/install.ps1">The script</a> downloads the newest release and installs it only if it is signed with AltTabio’s pinned release key, the same check the app’s updater makes. It installs in <code class="inline">C:\Program Files\AltTabio</code>, a folder only administrators can change, and keeps your settings when it updates a copy there.</p>
+      <p>Why PowerShell? The certificate that stops Windows warning about an app costs its developer a yearly fee, and AltTabio doesn’t pay it, so Windows warns about a copy downloaded in a browser. The command checks that the download really is AltTabio’s, then installs it.</p>
+
+      <h3 id="download-windows">Download and verify by hand</h3>
+      <ol class="steps">
+        <li><span>Get the Windows zip and its matching <code class="inline">.zip.minisig</code> from the same <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub release</a>.</span></li>
+        <li><span>Follow <a href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-install.md">Windows first-install verification</a>. Build the verifier from separately trusted source, never from the downloaded archive, and verify the archive and signed release identity. Stop if the signature is missing or verification fails.</span></li>
+        <li><span>After verification succeeds, unzip that archive into a folder only administrators can change, such as <code class="inline">C:\Program Files\AltTabio</code>.</span></li>
+        <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
+      </ol>
+      <p>Windows asks for administrator permission because AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. <a href="#permissions-windows">More about the prompt</a>.</p>
+
+      <h3 id="safe-folder-windows">Keep it in a safe folder</h3>
+      <p><strong>Start at sign-in</strong> creates a scheduled task that runs AltTabio with the highest privileges at every logon. If a program without administrator rights could replace <code class="inline">AltTabio.exe</code>, it could use that task to gain them.</p>
+      <p>So keep AltTabio in a folder only administrators can change, such as <strong>Program Files</strong>. Both autostart and the updater refuse an executable that non-elevated processes can replace.</p>
+    </section>
+
+    <section id="install-mac" data-only="mac" aria-labelledby="install-mac-title">
+      <h2 id="install-mac-title">Install on Mac</h2>
+      <p>Paste one line into Terminal. AltTabio updates itself after that.</p>
+
+      <h3 id="terminal-mac">Install with Terminal <span class="tag">Recommended</span></h3>
+      <div class="cmd">
+        <span class="p" aria-hidden="true">$</span>
+        <code id="install-cmd">curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh</code>
+        <button class="icon-btn" type="button" data-copy="install-cmd" aria-label="Copy the install command">
+          <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+          <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+        </button>
+        <span class="sr-only copy-status" aria-live="polite"></span>
+      </div>
+      <ol class="steps">
+        <li><span>Open Terminal, paste the line, and press Return. It installs AltTabio in Applications, or updates your copy, then opens it.</span></li>
+        <li><span>Allow <strong>Accessibility</strong> when AltTabio asks, then press Cmd+Tab.</span></li>
+        <li><span>AltTabio updates itself from then on. To check now, choose <strong>Check for Updates…</strong> in its menu bar menu.</span></li>
+      </ol>
+      <p><a href="https://github.com/vibeslop/AltTabio/blob/main/docs/install.sh">The script</a> downloads the newest installer and runs it only if it is signed with AltTabio’s pinned release certificate. A new copy goes in <code class="inline">/Applications</code> if that folder is writable, otherwise in <code class="inline">~/Applications</code>. An existing copy is updated where it is.</p>
+      <p>Why Terminal? Apple charges developers to notarize their apps, and AltTabio doesn’t pay, so macOS blocks a copy downloaded in a browser. The command checks that the download really is AltTabio’s, then installs it.</p>
+
+      <h3 id="first-run-mac">First run</h3>
+      <p>AltTabio asks for <strong>Accessibility</strong> on first launch, keeps its settings window open until you allow it, and picks up the grant while it runs. After your first Cmd+Tab it asks for <strong>Screen Recording</strong>, which only window previews use. The list works without it. <a href="#permissions-mac">More about both permissions</a>.</p>
+
+      <h3 id="manual-mac">Download the app by hand</h3>
+      <ol class="steps">
+        <li><span>Download <code class="inline">AltTabio-&lt;version&gt;-macos.zip</code> from <a href="https://github.com/vibeslop/AltTabio/releases/latest">GitHub Releases</a> and unzip it in Downloads. Leave the app there without opening it.</span></li>
+        <li><div class="prose">
+          <p>In Terminal, run this command to verify the app’s signature, bundle identifier, and pinned release certificate. If you unzipped it elsewhere, change the quoted app path to that location.</p>
+          <div class="cmd">
+            <span class="p" aria-hidden="true">$</span>
+            <!-- Keep the requirement aligned with scripts/mac/release-certificate.sha1 and scripts/mac/install.sh. -->
+            <code id="manual-verify-cmd">codesign --verify --deep --strict -R '=identifier "com.vibeslop.AltTabio" and certificate leaf = H"617A82407E9767025EDE4A62A9B990ADEA21F53B"' "$HOME/Downloads/AltTabio.app" &amp;&amp; printf '%s\n' 'Verified AltTabio release identity.'</code>
+            <button class="icon-btn" type="button" data-copy="manual-verify-cmd" aria-label="Copy the command">
+              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+            </button>
+            <span class="sr-only copy-status" aria-live="polite"></span>
+          </div>
+          <p>Continue only if Terminal prints <strong>Verified AltTabio release identity.</strong> If it does not, stop. Do not move or open the app, or use Open Anyway.</p>
+        </div></li>
+        <li><span>Only after verification succeeds, move that same <code class="inline">AltTabio.app</code> to Applications and open it. When macOS says it could not verify the app, choose <strong>Done</strong>.</span></li>
+        <li><span>For the verified app only, open <strong>System Settings, Privacy &amp; Security</strong>, click <strong>Open Anyway</strong> next to the message about AltTabio, and confirm.</span></li>
+      </ol>
+      <p class="callout">Open Anyway does not verify the release identity; the check in step 2 is required first. The Terminal installer checks the same identity before installing.</p>
+    </section>
+
+    <section id="shortcuts-windows" data-only="windows" aria-labelledby="shortcuts-windows-title">
+      <h2 id="shortcuts-windows-title">Shortcuts on Windows</h2>
+      <p>Alt+Tab and Enter are all you need. The rest are there when a window misbehaves.</p>
+      <p>Letting go of Alt switches to the selected window. Once you start a search, the switcher stays open after you let go; press Enter or click a result to switch.</p>
+      <div class="table-wrap">
+        <table class="table keys">
+          <caption class="sr-only">AltTabio shortcuts on Windows</caption>
+          <tbody>
+          <tr><th scope="row"><kbd>Alt</kbd> <kbd>Tab</kbd></th><td>Open the switcher and move through it. Win+Tab can open it too.</td></tr>
+          <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Shift</kbd> <kbd>Tab</kbd></th><td>Change the selected window</td></tr>
+          <tr><th scope="row">Mouse wheel</th><td>Over the list, scroll it without changing the selection; elsewhere, select the previous or next window</td></tr>
+          <tr><th scope="row"><kbd>Enter</kbd>, click</th><td>Switch to the selected window</td></tr>
+          <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Switch to that window when the query is empty; otherwise type the digit. The number labels are hidden until you turn on <strong>Number shortcuts</strong>.</td></tr>
+          <tr><th scope="row">Type</th><td>Filter by window title, app name, or number</td></tr>
+          <tr><th scope="row"><kbd>Backspace</kbd></th><td>Remove a filter character</td></tr>
+          <tr><th scope="row"><kbd>←</kbd> <kbd>→</kbd> <kbd>Home</kbd> <kbd>End</kbd></th><td>Edit an active query; otherwise navigate the windows</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + <kbd>A</kbd> <kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd></th><td>Select, copy, cut, or paste query text</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Y</kbd></th><td>Undo or redo a query edit</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the switcher. So does a click outside it.</td></tr>
+          <tr><th scope="row"><kbd>F4</kbd></th><td>Close the selected window</td></tr>
+          <tr><th scope="row"><kbd>F5</kbd> <kbd>F6</kbd> <kbd>F7</kbd></th><td>Minimize, maximize, restore</td></tr>
+          <tr><th scope="row"><kbd>F8</kbd></th><td>End the selected window’s program</td></tr>
+          <tr><th scope="row"><kbd>F9</kbd></th><td>Open another window of the same app, without administrator rights</td></tr>
+          <tr><th scope="row">Right-click</th><td>Window commands for that row</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="shortcuts-mac" data-only="mac" aria-labelledby="shortcuts-mac-title">
+      <h2 id="shortcuts-mac-title">Shortcuts on Mac</h2>
+      <p>The keys follow macOS. Hold Cmd for all of them, as in the system switcher.</p>
+      <div class="table-wrap">
+        <table class="table keys">
+          <caption class="sr-only">AltTabio shortcuts on macOS</caption>
+          <tbody>
+          <tr><th scope="row"><kbd>⌘</kbd> <kbd>Tab</kbd></th><td>Open the switcher on the previous app. Tab steps on, Shift+Tab steps back.</td></tr>
+          <tr><th scope="row"><kbd>⌥</kbd> <kbd>Tab</kbd></th><td>The same, when <strong>Also open with ⌥ Tab</strong> is on</td></tr>
+          <tr><th scope="row"><kbd>←</kbd> <kbd>`</kbd> / <kbd>→</kbd></th><td>Previous app / next app</td></tr>
+          <tr><th scope="row"><kbd>↑</kbd> <kbd>↓</kbd></th><td>The selected app’s windows</td></tr>
+          <tr><th scope="row"><kbd>1</kbd> to <kbd>9</kbd></th><td>Switch to that window of the selected app</td></tr>
+          <tr><th scope="row">Release <kbd>⌘</kbd>, <kbd>Return</kbd>, click</th><td>Switch to the selected window, or bring forward an app that has none</td></tr>
+          <tr><th scope="row"><kbd>W</kbd> <kbd>M</kbd></th><td>Close or minimize the selected window</td></tr>
+          <tr><th scope="row"><kbd>H</kbd> <kbd>Q</kbd></th><td>Hide or quit the selected app</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the switcher. So does a click outside it.</td></tr>
+          <tr><th scope="row">Right-click</th><td>Window and app commands, including Force Quit</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="settings" aria-labelledby="settings-title">
+      <h2 id="settings-title">Settings</h2>
+      <p>AltTabio works without changing anything. Settings open from the tray icon on Windows and from the menu bar icon on a Mac.</p>
+
+      <div data-only="windows" id="settings-windows">
+        <p>On Windows, settings are saved in <code class="inline">AltTabio.ini</code> next to the executable, so a copy on a USB stick keeps its setup.</p>
+        <div class="table-wrap">
+          <table class="table settings">
+            <caption class="sr-only">AltTabio settings on Windows</caption>
+            <tbody>
+            <tr><th scope="row">Start at sign-in</th><td>Runs AltTabio at every logon, through a scheduled task with the highest privileges. Needs a <a href="#safe-folder-windows">safe folder</a>.</td></tr>
+            <tr><th scope="row">Replace Alt+Tab<br />Replace Win+Tab</th><td>Each is replaced separately, so you can keep either one as Windows made it, such as Win+Tab for Task View.</td></tr>
+            <tr><th scope="row">Type to search</th><td>Typing while you hold Alt filters the list by window title, app name, or number.</td></tr>
+            <tr><th scope="row">Switch when Alt is released</th><td>Letting go of Alt switches to the selected window.</td></tr>
+            <tr><th scope="row">Select on hover</th><td>The pointer selects the row it is over.</td></tr>
+            <tr><th scope="row">Live window preview</th><td>A large live preview of the selected window beside the list.</td></tr>
+            <tr><th scope="row">Preview in desktop position</th><td>Shows the selected window in its place on the full desktop, instead of alone.</td></tr>
+            <tr><th scope="row">Only show windows on the current monitor</th><td>Lists only the windows on the monitor you are using.</td></tr>
+            <tr><th scope="row">Number shortcuts</th><td>Shows number labels on the first nine rows. They are hidden by default.</td></tr>
+            <tr><th scope="row">Compact list<br />Large icons<br />App names under titles<br />Visible borders</th><td>How the list looks.</td></tr>
+            <tr><th scope="row">Theme</th><td>Light, dark, or the system’s.</td></tr>
+            <tr><th scope="row">Icon color</th><td>Eight to choose from.</td></tr>
+            <tr><th scope="row">Automatic updates</th><td>Downloads and installs verified releases. Turn it off to <a href="#updates-windows">check yourself</a>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div data-only="mac" id="settings-mac">
+        <p>On a Mac, settings are saved in <code class="inline">~/Library/Application Support/AltTabio</code>.</p>
+        <div class="table-wrap">
+          <table class="table settings">
+            <caption class="sr-only">AltTabio settings on macOS</caption>
+            <tbody>
+            <tr><th scope="row">Replace ⌘ Tab</th><td>Turn it off to get the system Cmd+Tab back without quitting AltTabio.</td></tr>
+            <tr><th scope="row">Also open with ⌥ Tab</th><td>Option+Tab opens the switcher too.</td></tr>
+            <tr><th scope="row">Show window previews</th><td>A live preview of the selected window. It needs <a href="#permissions-mac">Screen Recording</a>; with previews off, AltTabio doesn’t ask for it.</td></tr>
+            <tr><th scope="row">Only windows on the current display</th><td>Lists only the windows on the display you are using.</td></tr>
+            <tr><th scope="row">Launch at login</th><td>Starts AltTabio when you log in, through the system.</td></tr>
+            <tr><th scope="row">Update automatically</th><td>Installs new releases on its own. Turn it off to <a href="#updates-mac">check yourself</a>.</td></tr>
+            <tr><th scope="row">Appearance</th><td>System, light, or dark.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <h3 id="language">Language</h3>
+      <p>The interface is in English, Russian, and Simplified Chinese. Choose a language in Settings, or leave <strong>System</strong> selected to use the first supported language in your system’s preferred languages, with English as the fallback.</p>
+      <p data-only="windows">On Windows, a new language shows at once and is kept with <strong>Save changes</strong>; <strong>Cancel</strong> restores the previous one.</p>
+      <p data-only="mac">On a Mac, the change applies immediately.</p>
+    </section>
+
+    <section id="permissions" aria-labelledby="permissions-title">
+      <h2 id="permissions-title">Permissions</h2>
+
+      <div data-only="windows" id="permissions-windows">
+        <h3>Administrator rights</h3>
+        <p>Windows asks for administrator permission when AltTabio starts. AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. Those are the only reasons.</p>
+        <p><strong>Start at sign-in</strong> runs AltTabio with those rights at every logon, which is why it needs a <a href="#safe-folder-windows">safe folder</a>. <kbd>F9</kbd> opens another window of an app without them.</p>
+      </div>
+
+      <div data-only="mac" id="permissions-mac">
+        <p>On a Mac, AltTabio asks for two permissions, for two jobs. Both live in <strong>System Settings, Privacy &amp; Security</strong>.</p>
+        <h3>Accessibility</h3>
+        <p>Lets AltTabio see Cmd+Tab before macOS does, and raise, minimize, and close windows. AltTabio asks for it on first launch, keeps its settings window open until you allow it, and picks up the grant while it runs.</p>
+        <h3>Screen Recording, only for previews</h3>
+        <p>AltTabio asks for it after your first Cmd+Tab, and not at all with <strong>Show window previews</strong> off. Without it the list still works, and the preview area shows a hint instead. Once you allow it, macOS offers to quit and reopen AltTabio so the capture sees the change.</p>
+        <h3>Kept across updates</h3>
+        <p>macOS ties both grants to the certificate an app is signed with. Every AltTabio release carries the same one, so an update never asks again.</p>
+      </div>
+    </section>
+
+    <section id="remote-desktops" data-only="mac" aria-labelledby="remote-desktops-title">
+      <h2 id="remote-desktops-title">Remote desktops and virtual machines</h2>
+      <p>Apps such as Windows App, Parallels, and VMware take Cmd+Tab for their guest. AltTabio moves back in front of them whenever the front app changes, so Cmd+Tab keeps opening AltTabio inside them.</p>
+      <p>The one exception is secure keyboard input, which macOS reserves for one app while a password field holds it.</p>
+    </section>
+
+    <section id="updates" aria-labelledby="updates-title">
+      <h2 id="updates-title">Updates</h2>
+      <p>Release builds check GitHub for updates and install them on their own. Update requests contain no window titles, query text, previews, or settings. You can turn automatic updates off in Settings and still check by hand.</p>
+
+      <div data-only="windows" id="updates-windows">
+        <p>On Windows, AltTabio checks about a minute after startup and then daily. It downloads newer releases, verifies the archive’s Minisign signature and GitHub’s SHA-256 digest, and restarts after five minutes without keyboard or mouse input, once the switcher and dialogs are closed. Your settings and startup task are preserved.</p>
+        <p>To check yourself, choose <strong>Check for Updates</strong> or <strong>Update status</strong> in the tray menu, then <strong>Install and restart</strong> or <strong>Restart now</strong> in the status window. The updater refuses an executable that non-elevated processes can replace, so it needs a <a href="#safe-folder-windows">safe folder</a>.</p>
+        <p class="note">Ordinary Windows builds from source do not check for or install published updates. <a href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-updater.md">Update behavior, trust, and upgrade notes</a>.</p>
+      </div>
+
+      <div data-only="mac" id="updates-mac">
+        <p>On a Mac, AltTabio looks for a newer release once a day, installs it, and reopens while the Mac is idle. To check now, choose <strong>Check for Updates…</strong> in its menu bar menu. That still works with <strong>Update automatically</strong> off.</p>
+        <p>Running the install command again also updates your copy. Updates never ask for the permissions again, because every release is signed with the same certificate.</p>
+      </div>
+    </section>
+
+    <section id="uninstall" aria-labelledby="uninstall-title">
+      <h2 id="uninstall-title">Uninstall</h2>
+
+      <div data-only="windows" id="uninstall-windows">
+        <ol class="steps">
+          <li><span>Turn off <strong>Start at sign-in</strong> if you enabled it.</span></li>
+          <li><span>Choose <strong>Exit</strong> from the tray icon.</span></li>
+          <li><span>Delete the folder. The settings file lives in it, so nothing else is left.</span></li>
+        </ol>
+        <h3>Get the Windows switcher back for now</h3>
+        <p>Right-click the AltTabio icon in the system tray and choose <strong>Exit</strong>. Windows goes back to its own switcher at once. To give back only one shortcut, turn off <strong>Replace Alt+Tab</strong> or <strong>Replace Win+Tab</strong>.</p>
+      </div>
+
+      <div data-only="mac" id="uninstall-mac">
+        <ol class="steps">
+          <li><span>Turn off <strong>Launch at login</strong> in the settings.</span></li>
+          <li><span>Quit AltTabio from its menu bar icon.</span></li>
+          <li><span>Delete <code class="inline">AltTabio.app</code>.</span></li>
+          <li><div class="prose">
+            <p>Remove its settings and permissions:</p>
+            <div class="cmd">
+              <span class="p" aria-hidden="true">$</span>
+              <code id="uninstall-cmd"><span class="t-prog">rm</span> <span class="t-flag">-rf</span> <span class="t-path">~/Library/Application\ Support/AltTabio</span> <span class="t-op">&amp;&amp;</span> <span class="t-prog">tccutil</span> reset All com.vibeslop.AltTabio</code>
+              <button class="icon-btn" type="button" data-copy="uninstall-cmd" aria-label="Copy the command">
+                <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+                <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+              </button>
+              <span class="sr-only copy-status" aria-live="polite"></span>
+            </div>
+          </div></li>
+        </ol>
+        <h3>Get the system Cmd+Tab back for now</h3>
+        <p>Turn off <strong>Replace ⌘ Tab</strong> in the AltTabio settings, or quit AltTabio from its menu bar icon.</p>
+      </div>
+    </section>
+
+    <section id="compare" aria-labelledby="compare-title">
+      <h2 id="compare-title">Compared with the built-in switcher</h2>
+
+      <div data-only="windows" id="compare-windows">
+        <p>Same shortcut, same muscle memory. The difference is what you can see and do once the switcher is open.</p>
+        <div class="table-wrap">
+          <table class="compare">
+            <thead><tr><th scope="col"><span class="sr-only">Feature</span></th><th scope="col">Windows Alt+Tab</th><th scope="col" class="us">AltTabio</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">What you see</th><td>Thumbnails of open windows</td><td class="us">A list of titles with optional number labels and one large live preview</td></tr>
+              <tr><th scope="row">Find a window by typing</th><td class="no">No</td><td class="us">By title, app name, or number</td></tr>
+              <tr><th scope="row">Jump with a number key</th><td class="no">No</td><td class="us">1 to 9</td></tr>
+              <tr><th scope="row">See the window in place on the desktop</th><td class="no">No</td><td class="us">Optional</td></tr>
+              <tr><th scope="row">Minimize, maximize, or restore</th><td class="no">No</td><td class="us">F5, F6, F7</td></tr>
+              <tr><th scope="row">End a frozen program</th><td>Task Manager</td><td class="us">F8, from the list</td></tr>
+              <tr><th scope="row">Price</th><td>Built in</td><td class="us">Free, MIT license</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">Windows 11 can also put browser tabs in Alt+Tab. AltTabio lists windows, one row each.</p>
+      </div>
+
+      <div data-only="mac" id="compare-mac">
+        <p>AltTabio keeps the habits you have. The previous app comes first, Tab steps on, and letting go of Cmd switches. It adds the windows.</p>
+        <div class="table-wrap">
+          <table class="compare">
+            <thead><tr><th scope="col"><span class="sr-only">Feature</span></th><th scope="col">macOS Cmd+Tab</th><th scope="col" class="us">AltTabio</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">What it lists</th><td>Running apps</td><td class="us">Running apps, and every window of the selected one</td></tr>
+              <tr><th scope="row">Minimized windows</th><td class="no">Not in the switcher</td><td class="us">Listed, marked Minimized</td></tr>
+              <tr><th scope="row">Windows on other desktops</th><td class="no">Not in the switcher</td><td class="us">Listed, marked Other desktop</td></tr>
+              <tr><th scope="row">Windows of hidden apps</th><td class="no">Not in the switcher</td><td class="us">Listed, marked Hidden</td></tr>
+              <tr><th scope="row">Pick a window by number</th><td class="no">No</td><td class="us">1 to 9</td></tr>
+              <tr><th scope="row">Close or minimize a window</th><td class="no">No</td><td class="us">W, M</td></tr>
+              <tr><th scope="row">Hide or quit an app</th><td>H, Q</td><td class="us">H, Q</td></tr>
+              <tr><th scope="row">Force Quit</th><td class="no">No</td><td class="us">Right-click menu</td></tr>
+              <tr><th scope="row">Window preview</th><td class="no">No</td><td class="us">Optional, live</td></tr>
+              <tr><th scope="row">Price</th><td>Built in</td><td class="us">Free, MIT license</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">In the system switcher, the down arrow opens App Exposé for the selected app. AltTabio lists the windows in the switcher itself, so an arrow or a number key reaches them without leaving it.</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot thirds">
+    <div>
+      <a class="brand" href="../">
+        <svg class="mark" viewBox="0 0 25 16" aria-hidden="true"><use href="#mark"/></svg>
+        <span>AltTabio</span>
+      </a>
+      <p class="colophon">Independent, and not affiliated with Microsoft, Apple, or Alt+Tab Terminator. Windows and macOS are trademarks of their owners. This site has no trackers.</p>
+    </div>
+    <nav aria-labelledby="foot-product">
+      <h2 id="foot-product">Product</h2>
+      <ul>
+        <li><a href="./">Docs</a></li>
+        <li><a href="../#install">Install</a></li>
+        <li><a href="https://github.com/vibeslop/AltTabio/releases">Release notes</a></li>
+      </ul>
+    </nav>
+    <nav aria-labelledby="foot-project">
+      <h2 id="foot-project">Project</h2>
+      <ul>
+        <li><a href="https://github.com/vibeslop/AltTabio">Source code</a></li>
+        <li><a href="https://github.com/vibeslop/AltTabio/issues">Report a problem</a></li>
+        <li><a href="https://github.com/vibeslop/AltTabio/blob/main/LICENSE">MIT license</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>

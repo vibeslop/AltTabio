@@ -6,9 +6,8 @@ AltTabio is an independent project. It is not affiliated with Microsoft, Apple, 
 
 ## Product
 
-- [Product page](https://vibeslop.github.io/AltTabio/): Landing page for both platforms with screenshots, shortcuts, install steps, and FAQ
-- [AltTabio for Windows](https://vibeslop.github.io/AltTabio/windows/): Alt+Tab replacement for Windows 11 and 10, with a comparison to the built-in Alt+Tab
-- [AltTabio for Mac](https://vibeslop.github.io/AltTabio/mac/): Cmd+Tab replacement for macOS 26 and later, with a comparison to the built-in Cmd+Tab, permissions, and uninstall steps
+- [Product page](https://vibeslop.github.io/AltTabio/): Landing page for both platforms with a switcher demo to try, the install command, and FAQ
+- [Docs](https://vibeslop.github.io/AltTabio/docs/): Install, verification, shortcuts, settings, permissions, updates, and uninstall steps for Windows and Mac, with a comparison to the built-in Alt+Tab and Cmd+Tab
 - [Product notes (Markdown)](https://vibeslop.github.io/AltTabio/product.md): Facts for search engines and language models
 - [Full description](https://vibeslop.github.io/AltTabio/llms-full.txt): Complete product description for AI systems
 

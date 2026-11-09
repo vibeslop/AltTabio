@@ -7,8 +7,8 @@
 <meta name="description" content="AltTabio replaces Alt+Tab on Windows and Cmd+Tab on macOS with a window list, number-key shortcuts, and a preview. Free, open source, no telemetry." />
 <meta name="application-name" content="AltTabio" />
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#090d16" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#090d16" media="(prefers-color-scheme: dark)" />
 <meta name="color-scheme" content="light dark" />
 <link rel="canonical" href="https://vibeslop.github.io/AltTabio/" />
 <link rel="alternate" type="text/markdown" title="AltTabio product notes" href="https://vibeslop.github.io/AltTabio/product.md" />
@@ -28,12 +28,11 @@
 <meta property="og:image:type" content="image/jpeg" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="AltTabio: Stop tabbing past the window you want. Free for Windows and Mac. A dark keyboard with the Tab key lit." />
+<meta property="og:image:alt" content="AltTabio: Stop tabbing past the window you want. The Mac switcher open over a desktop, with numbered windows." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="AltTabio: free Alt+Tab replacement for Windows and Mac" />
 <meta name="twitter:description" content="A window list, number-key shortcuts, and a preview. Replaces Alt+Tab on Windows and Cmd+Tab on macOS." />
 <meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
-<link rel="preload" as="image" type="image/avif" imagesrcset="images/hero-keyboard-1280.avif 1280w, images/hero-keyboard-1920.avif 1920w, images/hero-keyboard-2880.avif 2880w" imagesizes="100vw" media="(min-width: 760px)" fetchpriority="high" />
 <link rel="stylesheet" href="site.css" />
 <script>
 (function () {
@@ -49,6 +48,8 @@
   // but have touch points, and AltTabio does not run on them.
   var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
   root.dataset.os = /mac/i.test(platform) && navigator.maxTouchPoints < 2 ? "mac" : /win/i.test(platform) ? "windows" : "other";
+  // The demo, and the features under it, show this system; the demo's switch changes it.
+  root.dataset.demo = root.dataset.os === "windows" ? "windows" : "mac";
 })();
 </script>
 <script src="site.js" defer></script>
@@ -74,7 +75,7 @@
       "about": {"@id": "https://vibeslop.github.io/AltTabio/#software"},
       "primaryImageOfPage": {"@type": "ImageObject", "url": "https://vibeslop.github.io/AltTabio/images/og-share.jpg"},
       "inLanguage": "en",
-      "dateModified": "2026-10-23"
+      "dateModified": "2026-11-09"
     },
     {
       "@type": "SoftwareApplication",
@@ -114,14 +115,13 @@
       "@id": "https://vibeslop.github.io/AltTabio/#faq-schema",
       "mainEntity": [
         {"@type": "Question", "name": "Is AltTabio really free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. AltTabio is open-source software under the MIT license. There is no trial, no ads, no account, and no paid version."}},
-        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics. Release builds on Windows and macOS contact GitHub to check for and download updates. You can turn off automatic updates in Settings and still check manually. Update requests contain no window titles, query text, previews, or settings. The source code is public, so anyone can check."}},
+        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics. It contacts GitHub only to check for and download its own updates, and those requests carry nothing about your windows, what you type, or your settings. You can turn automatic updates off in Settings and still check by hand. The source code is public, so anyone can check."}},
         {"@type": "Question", "name": "Will AltTabio slow down my computer?", "acceptedAnswer": {"@type": "Answer", "text": "It is a small native program written in Rust. The switcher waits for the shortcut; update checks and downloads run in the background."}},
         {"@type": "Question", "name": "Why does Windows ask for administrator permission?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. Those are the only reasons."}},
         {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works."}},
-        {"@type": "Question", "name": "Why install AltTabio on a Mac with a Terminal command?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The README command verifies the installer image against AltTabio's pinned release certificate before running its script, which installs the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates."}},
+        {"@type": "Question", "name": "Why install AltTabio with a command?", "acceptedAnswer": {"@type": "Answer", "text": "Having Apple or Windows vouch for an app costs its developer a yearly fee, and AltTabio doesn't pay it. So a copy downloaded in a browser is blocked on a Mac and comes with a warning on Windows. The install command checks that the download really is AltTabio's, then installs it. On a Mac every release is signed the same way, so macOS keeps your permissions across updates. It takes a minute. On a Mac, press Cmd+Space, type Terminal and press Return. On Windows, press Start, type PowerShell and press Enter. Then paste the command and press Return or Enter."}},
         {"@type": "Question", "name": "How do I get the built-in switcher back?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, right-click the AltTabio tray icon and choose Exit. On a Mac, quit AltTabio from its menu bar icon, or turn off Replace Cmd+Tab in its settings. On Windows you can also replace only Alt+Tab or only Win+Tab."}},
-        {"@type": "Question", "name": "How do I uninstall AltTabio?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, turn off start with Windows if you enabled it, exit from the tray icon, and delete the folder. On a Mac, turn off Launch at login, quit AltTabio, delete AltTabio.app, and remove its settings folder and permissions."}},
-        {"@type": "Question", "name": "Is AltTabio an Alt+Tab Terminator alternative?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. AltTabio is an independent, open-source window switcher for people who want a list and a live preview on Alt+Tab. It is not affiliated with Alt+Tab Terminator."}}
+        {"@type": "Question", "name": "How do I uninstall AltTabio?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, turn off Start at sign-in if you enabled it, exit from the tray icon, and delete the folder. On a Mac, turn off Launch at login, quit AltTabio, delete AltTabio.app, and remove its settings folder and permissions."}}
       ]
     }
   ]
@@ -138,8 +138,6 @@
   </symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></g></symbol>
   <symbol id="i-github" viewBox="0 0 256 256"><path fill="currentColor" d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z"/></symbol>
-  <symbol id="i-list" viewBox="0 0 256 256"><path fill="currentColor" d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z"/></symbol>
-  <symbol id="i-x" viewBox="0 0 256 256"><path fill="currentColor" d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></symbol>
   <symbol id="i-sun" viewBox="0 0 256 256"><path fill="currentColor" d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
 <symbol id="i-moon" viewBox="0 0 256 256"><path fill="currentColor" d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></g></symbol>
@@ -155,8 +153,7 @@
       <span>AltTabio</span>
     </a>
     <div class="navlinks">
-      <a href="windows/">Windows</a>
-      <a href="mac/">Mac</a>
+      <a href="docs/">Docs</a>
       <a href="#faq">FAQ</a>
     </div>
     <div class="nav-tools">
@@ -166,114 +163,155 @@
       <a class="icon-btn nav-github" href="https://github.com/vibeslop/AltTabio" aria-label="AltTabio on GitHub">
         <svg viewBox="0 0 256 256" aria-hidden="true"><use href="#i-github"/></svg>
       </a>
+      <a class="btn btn-sm btn-quiet nav-cta" href="#install">Install</a>
     </div>
   </nav>
 </header>
 
 <main id="main">
   <section class="stage hero" aria-labelledby="hero-title">
-    <picture class="hero-art">
-      <source media="(max-width: 759px)" type="image/avif" srcset="images/hero-keys-1200.avif" />
-      <source media="(max-width: 759px)" type="image/webp" srcset="images/hero-keys-1200.webp" />
-      <source type="image/avif" srcset="images/hero-keyboard-1280.avif 1280w, images/hero-keyboard-1920.avif 1920w, images/hero-keyboard-2880.avif 2880w" sizes="100vw" />
-      <source type="image/webp" srcset="images/hero-keyboard-1280.webp 1280w, images/hero-keyboard-1920.webp 1920w, images/hero-keyboard-2880.webp 2880w" sizes="100vw" />
-      <img src="images/hero-keyboard-1440.jpg" width="2880" height="1620" alt="" fetchpriority="high" decoding="async" />
-    </picture>
     <div class="wrap hero-copy">
-      <h1 id="hero-title">Stop tabbing past the window you&nbsp;want.</h1>
-      <p class="sub">AltTabio replaces Alt+Tab on Windows and Cmd+Tab on the Mac with a list of your windows. Press 1 to 9 and you're there.</p>
-      <div class="cta">
-        <a class="btn only-win" href="windows/#install"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
-        <a class="link only-win" href="mac/">Also for Mac <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
-        <a class="btn only-mac" href="#install-mac" data-sheet="mac-sheet"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-terminal"/></svg>Install on Mac</a>
-        <a class="link only-mac" href="windows/">Also for Windows <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
-      </div>
-      <p class="note">Free and open source.</p>
-    </div>
-  </section>
-
-  <section id="how" aria-labelledby="how-title">
-    <div class="wrap">
-      <div class="head">
-        <h2 id="how-title">Three keys, and you're there.</h2>
-      </div>
-      <ol class="presses">
-        <li><b>Hold Alt.</b><span>Or Cmd on a Mac. The shortcut you already use.</span></li>
-        <li><b>Tap Tab.</b><span>Your windows appear in a list. On Windows, turn on Number shortcuts in Settings to show labels 1 to 9.</span></li>
-        <li><b>Press the number.</b><span>That window comes to the front. No stepping past the others.</span></li>
-      </ol>
-      <figure class="shot">
-        <picture>
-          <source type="image/avif" srcset="images/switcher-windows.avif" />
-          <source type="image/webp" srcset="images/switcher-windows.webp" />
-          <img src="images/hero-switcher.png" width="1600" height="847" loading="lazy" decoding="async" alt="AltTabio on Windows 11: a compact window list on the left and a live preview of AltTabio.png in Paint on the right." />
-        </picture>
-        <figcaption>AltTabio on Windows 11, with a compact window list and a live Paint preview. <a href="https://github.com/vibeslop/AltTabio/blob/main/docs/screenshots.md">More screenshots</a>.</figcaption>
-      </figure>
-      <div class="platforms">
-        <div>
-          <h3>On Windows</h3>
-          <p>A window list with optional number labels beside a large live preview. Type a few letters and the list narrows; F4 closes a window and F8 ends one that stopped responding.</p>
-          <a class="link" href="windows/">AltTabio for Windows <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <h1 id="hero-title">Stop tabbing past <em>the window you want.</em></h1>
+      <p class="sub">AltTabio puts every window in Alt+Tab and Cmd+Tab. Press 1 to 9 to go straight to one. Free and open&nbsp;source.</p>
+      <div class="hero-get">
+        <div class="get-mac">
+          <div class="cmd hero-cmd">
+            <span class="p" aria-hidden="true">$</span>
+            <code id="hero-install-cmd">curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh</code>
+            <button class="icon-btn copy-btn" type="button" data-copy="hero-install-cmd" aria-label="Copy the install command">
+              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+              <span aria-hidden="true">Copy</span>
+            </button>
+            <span class="sr-only copy-status" aria-live="polite"></span>
+          </div>
+          <p class="hero-meta">Paste it into <a href="#faq-terminal">Terminal</a> · Checks the download is genuine · macOS 26 or later</p>
         </div>
-        <div>
-          <h3>On a Mac</h3>
-          <p>Cmd+Tab keeps its row of apps and lists the selected app's windows below it, including minimized ones and windows on other desktops.</p>
-          <a class="link" href="mac/">AltTabio for Mac <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+        <div class="get-win">
+          <div class="cmd hero-cmd">
+            <span class="p" aria-hidden="true">&gt;</span>
+            <code id="hero-install-cmd-win">irm https://vibeslop.github.io/AltTabio/install.ps1 | iex</code>
+            <button class="icon-btn copy-btn" type="button" data-copy="hero-install-cmd-win" aria-label="Copy the install command">
+              <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+              <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+              <span aria-hidden="true">Copy</span>
+            </button>
+            <span class="sr-only copy-status" aria-live="polite"></span>
+          </div>
+          <p class="hero-meta">Paste it into <a href="#faq-terminal">PowerShell</a> · Checks the download is genuine · Windows 10 and 11</p>
+        </div>
+        <div class="get-other">
+          <div class="cta"><a class="btn only-other" href="#install">Install on your Mac or PC</a></div>
+          <p class="hero-meta">For Windows 10 and 11, and macOS 26 or later</p>
         </div>
       </div>
     </div>
-  </section>
 
-  <section id="promises" aria-labelledby="promises-title">
-    <div class="wrap">
-      <div class="head">
-        <h2 id="promises-title">It asks for nothing else.</h2>
+    <div class="wrap demo" id="demo">
+      <div class="demo-bar">
+        <div class="seg" role="group" aria-label="Show the switcher for">
+          <button type="button" data-os-pick="mac" aria-pressed="true">Mac</button>
+          <button type="button" data-os-pick="windows" aria-pressed="false">Windows</button>
+        </div>
+        <p class="demo-keys" id="demo-keys"><span class="on-keys"><kbd data-k="digit">1</kbd>–<kbd data-k="digit">9</kbd> Try it</span><span class="on-touch">Tap a window</span></p>
       </div>
-      <dl class="promises">
-        <div><dt>Free</dt><dd>MIT license. No trial, no ads, no account.</dd></div>
-        <div><dt>Private</dt><dd>No analytics. Release builds on both platforms contact GitHub for updates. You can turn off automatic updates and still check manually.</dd></div>
-        <div><dt>Small</dt><dd>Native Rust, with no additional runtime to install. Update checks and downloads run in the background.</dd></div>
-        <div><dt>Easy to leave</dt><dd>Quit it and the system switcher is back.</dd></div>
-      </dl>
+      <div class="desk" data-mode="mac">
+        <div class="desk-front" aria-hidden="true"></div>
+        <div class="sw" tabindex="0" role="group" aria-roledescription="switcher demo" aria-label="Try the switcher" aria-describedby="demo-keys"></div>
+        <button class="reopen" type="button" hidden>Show the switcher again</button>
+        <noscript><img class="desk-fallback" src="images/windows-zed.png" width="1600" height="847" alt="AltTabio on Windows 11: four numbered windows beside a live preview of its source in Zed." /></noscript>
+      </div>
+      <p class="sr-only" aria-live="polite" id="demo-status"></p>
     </div>
   </section>
 
-  <section id="install" aria-labelledby="install-title">
+  <section id="features" class="sheet-up" aria-labelledby="features-title">
     <div class="wrap">
-      <div class="head">
-        <h2 id="install-title">Up and running in a minute.</h2>
-      </div>
-      <div class="get">
-        <div id="install-windows">
-          <span class="os">Windows 10 and 11, 64-bit</span>
-          <h3>Download, verify, unzip, run</h3>
-          <ol class="steps">
-            <li><span>Download the Windows zip and matching <code class="inline">.zip.minisig</code>, then follow <a href="https://github.com/vibeslop/AltTabio/blob/main/docs/windows-install.md">Windows first-install verification</a> using a verifier built from separately trusted source. Stop if verification fails or the signature is missing.</span></li>
-            <li><span>After verification succeeds, unzip that archive into a folder only administrators can change, such as Program Files.</span></li>
-            <li><span>Open <code class="inline">AltTabio.exe</code>, click <strong>Yes</strong> on the Windows prompt, and press Alt+Tab.</span></li>
-          </ol>
-          <a class="btn" href="windows/#install"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Verify and install for Windows</a>
-        </div>
-        <div id="install-mac">
-          <span class="os">macOS 26 or later</span>
-          <h3>Verify the installer before it runs</h3>
-          <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
-          <ol class="steps">
-            <li><span>The command verifies the installer image before running its script, which puts AltTabio in Applications and opens it.</span></li>
-            <li><span>Allow <strong>Accessibility</strong> when it asks. <strong>Screen Recording</strong> is only for previews.</span></li>
-          </ol>
-          <a class="more-link" href="mac/#install">Other ways to install on a Mac</a>
-        </div>
+      <h2 id="features-title" class="display">Everything <span class="say-win">Alt+Tab</span><span class="say-mac">⌘&nbsp;Tab</span> should have been.</h2>
+      <!-- Each feature is a piece of the panel, drawn with the demo's styles. site.js adds the
+           Windows icons and lets the first piece answer to the pointer and the number keys. -->
+      <ul class="feats">
+        <li>
+          <div class="for-win" data-mode="windows">
+            <div class="sw fx fx-more fx-pick" aria-hidden="true">
+              <div class="fx-rows">
+                <div class="row"><span class="n">1</span><span class="ic" data-ic="photos"></span><span class="t">Beach weekend<small>Photos</small></span></div>
+                <div class="row"><span class="n">2</span><span class="ic" data-ic="web"></span><span class="t">Lisbon in three days<small>Browser</small></span></div>
+                <div class="row" aria-current="true"><span class="n">3</span><span class="ic" data-ic="mail"></span><span class="t">Inbox<small>Mail</small></span></div>
+                <div class="row"><span class="n">4</span><span class="ic" data-ic="notes"></span><span class="t">Packing for Lisbon<small>Notes</small></span></div>
+                <div class="row"><span class="n">5</span><span class="ic" data-ic="music"></span><span class="t">Morning<small>Music</small></span></div>
+              </div>
+              <span class="fx-key lit">3</span>
+            </div>
+            <h3>Press 1 to 9</h3><p>The first nine windows answer to 1 to 9. Press one and you're there, without stepping through the list.</p></div>
+          <div class="for-mac" data-mode="mac">
+            <div class="sw fx fx-more fx-pick" aria-hidden="true">
+              <div class="fx-rows">
+                <div class="row"><span class="n">1</span><span class="t">Lisbon in three days</span></div>
+                <div class="row"><span class="n">2</span><span class="t">Flights to Lisbon</span></div>
+                <div class="row" aria-current="true"><span class="n">3</span><span class="t">Recipe: green curry</span></div>
+                <div class="row"><span class="n">4</span><span class="t">Train times to Sintra</span></div>
+                <div class="row"><span class="n">5</span><span class="t">Casa Alfama — booking</span></div>
+                <div class="row"><span class="n">6</span><span class="t">Weather this week</span></div>              </div>
+              <span class="fx-key lit">3</span>
+            </div>
+            <h3>Press 1 to 9</h3><p>Each window of the selected app has a number beside it. Press it and you're there.</p></div>
+        </li>
+        <li>
+          <div class="for-win" data-mode="windows">
+            <div class="sw fx" aria-hidden="true">
+              <div class="fx-rows">
+                <div class="row" aria-current="true"><span class="ic" data-ic="web"></span><span class="t">Lisbon in three days<small>Browser</small></span></div>
+                <div class="row"><span class="ic" data-ic="web"></span><span class="t">Flights to Lisbon<small>Browser</small></span></div>
+                <div class="row"><span class="ic" data-ic="notes"></span><span class="t">Packing for Lisbon<small>Notes</small></span></div>
+              </div>
+              <div class="fx-find"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15 15l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>lisbon</span></div>
+            </div>
+            <h3>Type to find</h3><p>Hold Alt and type. The list narrows by title, app or number.</p></div>
+          <div class="for-mac" data-mode="mac">
+            <div class="sw fx fx-more" aria-hidden="true">
+              <div class="fx-rows">
+                <div class="row"><span class="n">1</span><span class="t">Lisbon in three days</span></div>
+                <div class="row" aria-current="true"><span class="n">2</span><span class="t">Recipe: green curry</span><span class="s">Minimized</span></div>
+                <div class="row"><span class="n">3</span><span class="t">Flights to Lisbon</span></div>
+                <div class="row"><span class="n">4</span><span class="t">Weather this week</span><span class="s">Other desktop</span></div>
+                <div class="row"><span class="n">5</span><span class="t">Train times to Sintra</span></div>
+                <div class="row"><span class="n">6</span><span class="t">Casa Alfama — booking</span><span class="s">Minimized</span></div>              </div>
+            </div>
+            <h3>Reach every window</h3><p>Minimized, hidden or on another desktop, each window is listed with a label that says which.</p></div>
+        </li>
+        <li>
+          <div class="for-win" data-mode="windows">
+            <div class="sw fx" aria-hidden="true">
+              <div class="fx-rows">
+                <div class="row"><span class="n">1</span><span class="ic" data-ic="photos"></span><span class="t">Beach weekend<small>Photos</small></span></div>
+                <div class="row" aria-current="true"><span class="n">2</span><span class="ic" data-ic="web"></span><span class="t">Lisbon in three days<small>Browser</small></span></div>
+              </div>
+              <div class="fx-acts"><span class="fx-act"><span class="fx-key">F4</span><small>Close</small></span><span class="fx-act"><span class="fx-key">F5</span><small>Minimize</small></span><span class="fx-act"><span class="fx-key">F6</span><small>Maximize</small></span><span class="fx-act"><span class="fx-key">F8</span><small>Terminate</small></span></div>
+            </div>
+            <h3>Act from the list</h3><p>Close, minimize, maximize or end the selected window's program without leaving the switcher.</p></div>
+          <div class="for-mac" data-mode="mac">
+            <div class="sw fx" aria-hidden="true">
+              <div class="fx-rows">
+                <div class="row"><span class="n">1</span><span class="t">Lisbon in three days</span></div>
+                <div class="row" aria-current="true"><span class="n">2</span><span class="t">Flights to Lisbon</span></div>
+              </div>
+              <div class="fx-acts"><span class="fx-act"><span class="fx-key">W</span><small>Close</small></span><span class="fx-act"><span class="fx-key">M</span><small>Minimize</small></span><span class="fx-act"><span class="fx-key">H</span><small>Hide</small></span><span class="fx-act"><span class="fx-key">Q</span><small>Quit</small></span></div>
+            </div>
+            <h3>Act from the list</h3><p>Close or minimize the selected window, or hide or quit its app, right from the switcher.</p></div>
+        </li>
+      </ul>
+      <div id="about" class="pledge thirds">
+        <h2>Nothing to pay. Nothing sent.</h2>
+        <p>AltTabio is free, with no account and no ads. It goes online for one thing, to check for its own updates, and you can switch that off.</p>
       </div>
     </div>
   </section>
 
   <section id="faq" aria-labelledby="faq-title">
-    <div class="wrap split">
+    <div class="wrap thirds">
       <div class="head">
         <h2 id="faq-title">Questions</h2>
-        <p>Price, privacy, permissions, and how to leave.</p>
       </div>
       <div class="faq">
         <details>
@@ -282,11 +320,7 @@
         </details>
         <details>
           <summary>Does it collect any data?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>No. The app has no analytics. Release builds on Windows and macOS contact GitHub to check for and download updates. You can turn off automatic updates in Settings and still check manually. Update requests contain no window titles, query text, previews, or settings. The <a href="https://github.com/vibeslop/AltTabio">source code</a> is public, so anyone can check.</p></div>
-        </details>
-        <details>
-          <summary>Will it slow my computer down?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>It is a small native program written in Rust. The switcher waits for the shortcut; update checks and downloads run in the background.</p></div>
+          <div class="ans"><p>No. The app has no analytics. It contacts GitHub only to check for and download its own updates, and those requests carry nothing about your windows, what you type, or your settings. You can turn automatic updates off in Settings and still check by hand. The <a href="https://github.com/vibeslop/AltTabio">source code</a> is public, so anyone can check.</p></div>
         </details>
         <details>
           <summary>Why does Windows ask for administrator permission?<span class="plus" aria-hidden="true"></span></summary>
@@ -296,9 +330,9 @@
           <summary>Why does the Mac version ask for Accessibility and Screen Recording?<span class="plus" aria-hidden="true"></span></summary>
           <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works.</p></div>
         </details>
-        <details>
-          <summary>Why install on a Mac with a Terminal command?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>AltTabio is not notarized by Apple, which takes a paid developer account, so macOS blocks a copy downloaded in a browser. The README command verifies the installer image against AltTabio's pinned release certificate before running its script, which installs the app in Applications. Every release is signed with the same certificate, so your permissions carry over to updates.</p><p>You can also <a href="mac/#install">download the zip and allow it by hand</a>.</p></div>
+        <details id="faq-terminal">
+          <summary>Why install with a command?<span class="plus" aria-hidden="true"></span></summary>
+          <div class="ans"><p>Having Apple or Windows vouch for an app costs its developer a yearly fee, and AltTabio doesn't pay it. So a copy downloaded in a browser is blocked on a Mac and comes with a warning on Windows. The install command checks that the download really is AltTabio's, then installs it. On a Mac every release is signed the same way, so macOS keeps your permissions across updates.</p><p>It takes a minute. On a Mac, press ⌘&nbsp;Space, type Terminal and press Return. On Windows, press Start, type PowerShell and press Enter. Then paste the command and press Return or Enter.</p><p>You can also download it and check it by hand, on a <a href="docs/#manual-mac">Mac</a> or on <a href="docs/#download-windows">Windows</a>.</p></div>
         </details>
         <details>
           <summary>How do I get the built-in switcher back?<span class="plus" aria-hidden="true"></span></summary>
@@ -306,42 +340,92 @@
         </details>
         <details>
           <summary>How do I uninstall it?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>On Windows, turn off start with Windows if you enabled it, exit from the tray icon, and delete the folder.</p><p>On a Mac, turn off Launch at login, quit AltTabio, delete <code class="inline">AltTabio.app</code>, and remove its settings and permissions. The <a href="mac/#uninstall">Mac page</a> has the commands.</p></div>
-        </details>
-        <details id="faq-terminator">
-          <summary>Is this an Alt+Tab Terminator alternative?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>Yes. AltTabio is an independent, open-source window switcher for people who want a list and a live preview on Alt+Tab. It is not affiliated with Alt+Tab Terminator.</p></div>
+          <div class="ans"><p>On Windows, turn off <strong>Start at sign-in</strong> if you enabled it, exit from the tray icon, and delete the folder.</p><p>On a Mac, turn off Launch at login, quit AltTabio, delete <code class="inline">AltTabio.app</code>, and remove its settings and permissions. The <a href="docs/#uninstall">docs</a> have the commands.</p></div>
         </details>
       </div>
+    </div>
+  </section>
+
+  <section class="stage closing sheet-up" id="install" aria-labelledby="closing-title">
+    <div class="wrap closing-grid">
+      <div>
+      <h2 id="closing-title" class="display">Every window, one key away.</h2>
+      <div class="cmd closing-cmd only-mac">
+        <span class="p" aria-hidden="true">$</span>
+        <code id="closing-install-cmd">curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh</code>
+        <button class="icon-btn copy-btn" type="button" data-copy="closing-install-cmd" aria-label="Copy the install command">
+          <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+          <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+          <span aria-hidden="true">Copy</span>
+        </button>
+        <span class="sr-only copy-status" aria-live="polite"></span>
+      </div>
+      <p class="hero-meta only-mac">Open Terminal, paste it and press Return.</p>
+      <div class="cmd closing-cmd only-win">
+        <span class="p" aria-hidden="true">&gt;</span>
+        <code id="closing-install-cmd-win">irm https://vibeslop.github.io/AltTabio/install.ps1 | iex</code>
+        <button class="icon-btn copy-btn" type="button" data-copy="closing-install-cmd-win" aria-label="Copy the install command">
+          <svg class="i-copy" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copy"/></svg>
+          <svg class="i-check" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg>
+          <span aria-hidden="true">Copy</span>
+        </button>
+        <span class="sr-only copy-status" aria-live="polite"></span>
+      </div>
+      <p class="hero-meta only-win">Open PowerShell, paste it and press Enter.</p>
+      <div class="cta">
+        <a class="btn only-mac" href="docs/#install-mac"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-terminal"/></svg>Install on Mac</a>
+        <a class="btn only-win" href="docs/#install-windows"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"/></svg>Install on Windows</a>
+        <a class="link only-mac" href="docs/#install-windows">Also for Windows <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+        <a class="link only-win" href="docs/#install-mac">Also for Mac <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      </div>
+      </div>
+      <!-- The app's icon, as key_svg() in scripts/build-icons.py draws it, with its colours as
+           custom properties: pressing it steps through the app's own icon colours. -->
+      <button class="closing-key" type="button" aria-label="Change the key's colour">
+        <svg viewBox="112 108 800 800" aria-hidden="true">
+          <defs>
+            <linearGradient id="key-skirt" x1="0" y1="246" x2="0" y2="770" gradientUnits="userSpaceOnUse"><stop offset="0" style="stop-color: var(--key-skirt-top)"/><stop offset="1" style="stop-color: var(--key-skirt-bottom)"/></linearGradient>
+            <linearGradient id="key-face" x1="0" y1="256" x2="0" y2="686" gradientUnits="userSpaceOnUse"><stop offset="0" style="stop-color: var(--key-face-top)"/><stop offset="1" style="stop-color: var(--key-face-bottom)"/></linearGradient>
+            <radialGradient id="key-dish" cx="512" cy="471" r="415.52" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 471) scale(1 .62) translate(0 -471)"><stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".08"/></radialGradient>
+            <linearGradient id="key-sheen" x1="141" y1="0" x2="883" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".12" stop-color="#fff" stop-opacity=".6"/><stop offset=".88" stop-color="#fff" stop-opacity=".6"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+            <mask id="key-top-edge" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1300" height="1300"><g fill="#fff"><rect x="141" y="256" width="742" height="430" rx="90"/></g><g fill="#000"><rect x="141" y="258" width="742" height="430" rx="90"/></g></mask>
+            <clipPath id="key-face-clip"><rect x="141" y="256" width="742" height="430" rx="90"/></clipPath>
+            <!-- The key's foot stays where it is while the cap sinks into it; above it the cap is free. -->
+            <clipPath id="key-foot"><rect x="0" y="0" width="1024" height="600"/><rect x="127" y="246" width="770" height="524" rx="104"/></clipPath>
+          </defs>
+          <g clip-path="url(#key-foot)">
+            <g class="key-cap">
+              <rect x="127" y="246" width="770" height="524" rx="104" fill="url(#key-skirt)"/>
+              <rect x="141" y="256" width="742" height="430" rx="90" fill="url(#key-face)"/>
+              <rect x="141" y="256" width="742" height="430" rx="90" fill="url(#key-dish)"/>
+              <g mask="url(#key-top-edge)"><rect x="-100" y="-100" width="1300" height="1300" fill="url(#key-sheen)"/></g>
+              <g clip-path="url(#key-face-clip)"><path class="key-legend" d="M275 471H579M465 357L579 471L465 585M735 340V602" fill="none" stroke-width="75" stroke-linecap="round" stroke-linejoin="round"/></g>
+            </g>
+          </g>
+          <rect class="key-ring" x="115" y="234" width="794" height="548" rx="116" fill="none" stroke-width="8"/>
+        </svg>
+      </button>
+      <span class="sr-only" id="key-colour" aria-live="polite"></span>
     </div>
   </section>
 
 </main>
 
 <footer>
-  <div class="wrap foot">
+  <div class="wrap foot thirds">
     <div>
       <a class="brand" href="./">
         <svg class="mark" viewBox="0 0 25 16" aria-hidden="true"><use href="#mark"/></svg>
         <span>AltTabio</span>
       </a>
-      <p class="colophon">A free, open-source Alt+Tab replacement for Windows and Cmd+Tab replacement for macOS. Independent project, not affiliated with Microsoft, Apple, or Alt+Tab Terminator. Windows is a trademark of Microsoft Corporation; macOS is a trademark of Apple Inc. This site has no trackers.</p>
+      <p class="colophon">Independent, and not affiliated with Microsoft, Apple, or Alt+Tab Terminator. Windows and macOS are trademarks of their owners. This site has no trackers.</p>
     </div>
     <nav aria-labelledby="foot-product">
       <h2 id="foot-product">Product</h2>
       <ul>
-        <li><a href="windows/">AltTabio for Windows</a></li>
-        <li><a href="mac/">AltTabio for Mac</a></li>
+        <li><a href="docs/">Docs</a></li>
         <li><a href="#install">Install</a></li>
         <li><a href="https://github.com/vibeslop/AltTabio/releases">Release notes</a></li>
-      </ul>
-    </nav>
-    <nav aria-labelledby="foot-compare">
-      <h2 id="foot-compare">Compare</h2>
-      <ul>
-        <li><a href="windows/#compare">vs. Windows Alt+Tab</a></li>
-        <li><a href="mac/#compare">vs. macOS Cmd+Tab</a></li>
-        <li><a href="#faq-terminator">Alt+Tab Terminator alternative</a></li>
       </ul>
     </nav>
     <nav aria-labelledby="foot-project">
@@ -350,21 +434,10 @@
         <li><a href="https://github.com/vibeslop/AltTabio">Source code</a></li>
         <li><a href="https://github.com/vibeslop/AltTabio/issues">Report a problem</a></li>
         <li><a href="https://github.com/vibeslop/AltTabio/blob/main/LICENSE">MIT license</a></li>
-        <li><a href="product.md">Product notes</a></li>
-        <li><a href="llms.txt">llms.txt</a></li>
       </ul>
     </nav>
   </div>
 </footer>
 
-<dialog class="sheet" id="mac-sheet" aria-labelledby="sheet-title">
-  <h2 id="sheet-title">Install AltTabio on your Mac</h2>
-  <p>Copy the bootstrap block from the README into Terminal. It verifies the installer image with the pinned release certificate before running its script.</p>
-  <a class="btn" href="https://github.com/vibeslop/AltTabio#macos">Get the verified installer command</a>
-  <div class="row">
-    <a href="mac/#install">Other ways to install</a>
-    <form method="dialog"><button class="btn btn-quiet btn-sm">Done</button></form>
-  </div>
-</dialog>
 </body>
 </html>

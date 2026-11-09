@@ -3,8 +3,7 @@
 AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11** it replaces **Alt+Tab** (and optionally Win+Tab) with a list of open windows, optional number labels, a live preview, and search that starts the moment you type. On **macOS 26 and later** it replaces **Cmd+Tab** and lists every window of the selected app, including minimized windows, windows of hidden apps, and windows on other desktops.
 
 - **Website:** https://vibeslop.github.io/AltTabio/
-- **Windows page:** https://vibeslop.github.io/AltTabio/windows/
-- **Mac page:** https://vibeslop.github.io/AltTabio/mac/
+- **Docs:** https://vibeslop.github.io/AltTabio/docs/
 - **Download:** https://github.com/vibeslop/AltTabio/releases/latest
 - **Source:** https://github.com/vibeslop/AltTabio
 - **License:** MIT

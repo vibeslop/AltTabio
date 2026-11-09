@@ -2,7 +2,7 @@
 
 A free, open-source window switcher. It replaces Alt+Tab on 64-bit Windows 10 and 11 and Cmd+Tab on macOS 26 and later.
 
-[Website](https://vibeslop.github.io/AltTabio/) · [Download](https://github.com/vibeslop/AltTabio/releases/latest)
+[Website](https://vibeslop.github.io/AltTabio/) · [Docs](https://vibeslop.github.io/AltTabio/docs/) · [Download](https://github.com/vibeslop/AltTabio/releases/latest)
 
 ![AltTabio on Windows with a compact window list and a live preview of AltTabio.png in Paint](docs/images/hero-switcher.png)
 
@@ -37,11 +37,11 @@ curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
 
 The installer updates an existing installation in place, preferring `/Applications` over `~/Applications` if both exist. For a new installation, it uses `/Applications` if writable, otherwise `~/Applications`, then starts AltTabio in the menu bar. An existing copy in `/Applications` still requires permission to replace it.
 
-Allow Accessibility when prompted. Screen Recording is optional and used only for previews; the window list and switching work without it. See [permissions](https://vibeslop.github.io/AltTabio/mac/#permissions).
+Allow Accessibility when prompted. Screen Recording is optional and used only for previews; the window list and switching work without it. See [permissions](https://vibeslop.github.io/AltTabio/docs/#permissions-mac).
 
 Updates are automatic. Turn off **Update automatically** in Settings to opt out; **Check for Updates** in the menu bar still works.
 
-AltTabio is not notarized, so macOS blocks a copy downloaded in a browser. The [Mac page](https://vibeslop.github.io/AltTabio/mac/#install) covers verified manual installation and removal.
+AltTabio is not notarized, so macOS blocks a copy downloaded in a browser. The [Docs](https://vibeslop.github.io/AltTabio/docs/#install-mac) cover verified manual installation and removal.
 
 ## Essential controls
 
@@ -72,7 +72,7 @@ By default, releasing Alt switches to the selected window. Starting a search kee
 | Right-click | More commands, including Force Quit |
 | Escape or click outside | Close the switcher without switching |
 
-Settings open from the tray icon on Windows and from the menu bar icon on macOS. The website lists every shortcut and setting for [Windows](https://vibeslop.github.io/AltTabio/windows/#shortcuts) and [macOS](https://vibeslop.github.io/AltTabio/mac/#shortcuts).
+Settings open from the tray icon on Windows and from the menu bar icon on macOS. The Docs list every shortcut and setting for [Windows](https://vibeslop.github.io/AltTabio/docs/#shortcuts-windows) and [macOS](https://vibeslop.github.io/AltTabio/docs/#shortcuts-mac).
 
 The interface supports English, Russian, and Simplified Chinese. Choose a language in Settings, or leave **System** selected to use the first supported language in your system's preferred languages, with English as the fallback. On Windows, language changes preview immediately and are kept with **Save changes**; **Cancel** restores the previous language. macOS settings apply immediately.
 
