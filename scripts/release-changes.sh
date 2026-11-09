@@ -30,6 +30,10 @@ owner() {
         THIRD_PARTY_LICENSES.md) echo both; return ;;
         docs/* | assets/site/* | tests/* | *.md | .gitignore | .github/workflows/ci.yml | scripts/build-icons.py)
             echo none; return ;;
+        # Checks of the Windows install command, which lives in docs and is in no archive, and this
+        # script, which decides whether to build and never what is built.
+        .github/workflows/windows-install.yml | scripts/windows/test-bootstrap.ps1 | scripts/release-changes.sh)
+            echo none; return ;;
         src/macos/* | scripts/mac/* | assets/mac/*) echo macos; return ;;
         app.rc | app.manifest | app.dev.manifest | assets/icons/* | scripts/windows/* | tools/windows-update-signing/*)
             echo windows; return ;;
