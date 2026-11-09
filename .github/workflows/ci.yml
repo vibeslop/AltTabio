@@ -54,10 +54,10 @@ jobs:
       - name: Check the install script
         run: |
           sh -n docs/install.sh
+          sh -n scripts/mac/install.sh
           sh -n scripts/mac/test-installer.sh
           sh scripts/mac/test-installer.sh
           python3 scripts/mac/test-update-archive.py
-          sh -n scripts/mac/bootstrap.sh
           sh -n scripts/mac/test-bootstrap.sh
           sh -n scripts/mac/package-installer.sh
           sh scripts/mac/test-bootstrap.sh
@@ -98,6 +98,15 @@ jobs:
 
       - name: Test signing tool
         run: cargo test --manifest-path tools/windows-update-signing/Cargo.toml --locked --quiet
+
+      # The install command runs in whichever PowerShell a visitor opens, so check it in both.
+      - name: Check the install script in Windows PowerShell
+        shell: powershell
+        run: scripts/windows/test-bootstrap.ps1
+
+      - name: Check the install script in PowerShell 7
+        shell: pwsh
+        run: scripts/windows/test-bootstrap.ps1
 
       - name: Verify Rust release artifact
         shell: pwsh

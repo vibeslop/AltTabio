@@ -3,7 +3,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-installer=$root/docs/install.sh
+installer=$root/scripts/mac/install.sh
 expected_certificate=$(tr -d '[:space:]' < "$root/scripts/mac/release-certificate.sha1")
 expected_requirement="=identifier \"com.vibeslop.AltTabio\" and certificate leaf = H\"$expected_certificate\""
 fixture_parent=$(CDPATH= cd -- "${TMPDIR:-/tmp}" && pwd -P)

@@ -1,0 +1,95 @@
+/* Docs: the contents beside one reading column. The page shows one system's instructions at a
+   time; the head script picks it before the first paint, and without script both stay. */
+[data-platform="windows"] [data-only="mac"], [data-platform="mac"] [data-only="windows"]{ display: none; }
+
+.docs{
+  display: grid; grid-template-columns: 13.5rem minmax(0, 1fr); grid-template-areas: "toc head" "toc body";
+  column-gap: clamp(40px, 6vw, 88px); padding-top: clamp(40px, 6vw, 72px);
+}
+.docs-head, .docs-body{ max-width: 44rem; min-width: 0; }
+.docs-head{ grid-area: head; }
+.docs-head h1{ font-size: clamp(2.25rem, 1.7rem + 1.6vw, 3rem); font-weight: 650; line-height: 1.05; letter-spacing: -0.025em; }
+.lede{ margin-top: 12px; font-size: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem); line-height: 1.5; color: var(--text-2); text-wrap: pretty; }
+
+/* The system switch: a segmented control on the page's own neutrals. */
+.platform{
+  display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; margin-top: 28px; padding: 3px;
+  border-radius: 999px; background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line);
+}
+.platform button{
+  min-width: 104px; height: 36px; padding: 0 18px; border: 0; border-radius: 999px; cursor: pointer;
+  font: 500 0.9375rem/1 var(--sans); color: var(--text-2); background: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out, scale 150ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.platform button[aria-pressed="true"]{ color: var(--text); background: var(--surface); box-shadow: 0 0 0 1px var(--line), 0 1px 2px oklch(0 0 0 / 0.06); }
+[data-theme="dark"] .platform button[aria-pressed="true"]{ background: oklch(0.28 0.012 262); box-shadow: none; }
+@media (hover: hover) and (pointer: fine){ .platform button:hover{ color: var(--text); } }
+@media (prefers-reduced-motion: no-preference){ .platform button:active{ scale: 0.96; } }
+/* Without script there is nothing to switch: both systems show. */
+:root:not([data-platform]) .platform{ display: none; }
+
+/* Contents: sticky beside the text, the current topic marked on the rule. */
+.toc{ grid-area: toc; position: sticky; top: 24px; align-self: start; max-height: calc(100svh - 48px); overflow-y: auto; padding-top: 8px; }
+.toc-title{ margin-bottom: 10px; font: 600 0.875rem/1.4 var(--sans); color: var(--text); }
+.toc ul{ list-style: none; margin: 0; padding: 0; display: grid; border-inline-start: 1px solid var(--line); }
+.toc a{
+  display: block; margin-inline-start: -1px; padding: 6px 0 6px 14px; border-inline-start: 1px solid transparent;
+  font-size: 0.9375rem; line-height: 1.35; color: var(--text-2); text-decoration: none; text-wrap: pretty;
+  transition: color 150ms ease-out, border-color 150ms ease-out;
+}
+.toc a[aria-current]{ color: var(--text); border-inline-start-color: var(--accent-text); }
+@media (hover: hover) and (pointer: fine){ .toc a:hover{ color: var(--text); } }
+
+/* Topics: a rule and room between them, and a steady rhythm inside. */
+.docs-body{ grid-area: body; }
+.docs-body section{ margin-top: clamp(48px, 6vw, 64px); }
+.docs-body section + section{ padding-top: clamp(48px, 6vw, 64px); border-top: 1px solid var(--line); }
+.docs-body :is(section, [data-only]) > * + *{ margin-top: 16px; }
+.docs-body h2{ font-size: clamp(1.625rem, 1.4rem + 0.6vw, 1.875rem); font-weight: 650; line-height: 1.15; letter-spacing: -0.02em; }
+.docs-body h2 + *{ margin-top: 14px; }
+.docs-body :is(section, [data-only]) > h3{ margin-top: 40px; }
+.docs-body h3{ font-size: 1.1875rem; font-weight: 650; line-height: 1.3; letter-spacing: -0.01em; }
+.docs-body h3 + *{ margin-top: 10px; }
+.docs-body p, .docs-body .steps{ color: var(--text-2); text-wrap: pretty; }
+.docs-body strong{ color: var(--text); font-weight: 600; }
+.docs-body a:not(.btn){ color: var(--accent-text); }
+.docs-body .steps, .docs-body .table-wrap{ margin-top: 20px; }
+.docs-body .cmd + .steps{ margin-top: 20px; }
+.docs-body .note{ max-width: none; }
+
+.tag{
+  display: inline-block; margin-inline-start: 8px; padding: 3px 9px; border-radius: 999px; vertical-align: 0.2em;
+  font: 500 0.75rem/1.3 var(--sans); letter-spacing: 0; color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.callout{ padding: 14px 18px; border-radius: 12px; background: var(--bg-2); font-size: 0.9375rem; }
+
+/* The facts about one system, as label and value rows. */
+.facts-list{ margin: 24px 0 0; border-top: 1px solid var(--line-2); }
+.facts-list div{ display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.facts-list dt{ color: var(--text-3); }
+.facts-list dd{ margin: 0; color: var(--text); }
+
+.docs-shot{ margin: 24px 0 0; }
+.docs-shot img{ width: 100%; border-radius: 10px; background: #0e1014; box-shadow: 0 0 0 1px var(--line); }
+.docs-shot figcaption{ margin-top: 12px; font-size: 0.875rem; color: var(--text-3); text-wrap: pretty; }
+
+/* Tables: the setting or key names stay legible beside their meaning. */
+.docs-body .table th{ color: var(--text); }
+.docs-body .settings th{ width: 40%; white-space: normal; padding-inline-end: 24px; }
+.docs-body .compare tbody th{ width: 34%; }
+
+main.docs + footer{ margin-top: clamp(80px, 10vw, 128px); }
+
+@media (max-width: 899px){
+  .docs{ grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "toc" "body"; }
+  .toc{ position: static; max-height: none; overflow: visible; margin-top: 28px; padding: 16px 0 12px; border-block: 1px solid var(--line); }
+  .toc ul{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; border: 0; }
+  .toc a{ margin: 0; padding: 7px 0; border: 0; }
+  .toc a[aria-current]{ color: var(--text-2); }
+  .docs-body section:first-child{ margin-top: 40px; }
+}
+@media (max-width: 599px){
+  .docs-body .table th{ white-space: normal; }
+  .facts-list div{ grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

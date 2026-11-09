@@ -3,8 +3,7 @@
 AltTabio is a free, open-source window switcher. On **64-bit Windows 10 and 11** it replaces **Alt+Tab** (and optionally Win+Tab) with a list of open windows, optional number labels, a live preview, and search that starts the moment you type. On **macOS 26 and later** it replaces **Cmd+Tab** and lists every window of the selected app, including minimized windows, windows of hidden apps, and windows on other desktops.
 
 - **Website:** https://vibeslop.github.io/AltTabio/
-- **Windows page:** https://vibeslop.github.io/AltTabio/windows/
-- **Mac page:** https://vibeslop.github.io/AltTabio/mac/
+- **Docs:** https://vibeslop.github.io/AltTabio/docs/
 - **Download:** https://github.com/vibeslop/AltTabio/releases/latest
 - **Source:** https://github.com/vibeslop/AltTabio
 - **License:** MIT
@@ -72,6 +71,16 @@ It is a practical answer for people searching for:
 
 ### Windows
 
+Paste this into PowerShell:
+
+```powershell
+irm https://vibeslop.github.io/AltTabio/install.ps1 | iex
+```
+
+It downloads the newest release and installs it only if its Minisign signature and signed release identity match AltTabio's pinned release key. Windows asks once for permission, for PowerShell. The app is installed in `C:\Program Files\AltTabio`, a folder only administrators can change, and started. Running the command again updates that copy and keeps its settings.
+
+To install by hand instead:
+
 1. Download the Windows archive and matching `.zip.minisig` from the same [GitHub release](https://github.com/vibeslop/AltTabio/releases/latest).
 2. Follow [Windows first-install verification](windows-install.md) with a verifier built from separately trusted source. Stop if verification fails or the signature is missing.
 3. After verification succeeds, extract that archive to a folder only administrators can change, such as `C:\Program Files\AltTabio`.
@@ -85,9 +94,13 @@ To uninstall: turn off start-with-Windows if you enabled it, exit from the tray 
 
 ### macOS
 
-Copy the [verified installer bootstrap block](https://github.com/vibeslop/AltTabio#macos) into Terminal. It verifies the installer image against the pinned release certificate before mounting it or running its script.
+Run this in Terminal:
 
-The script downloads the newest release, checks its signature, puts `AltTabio.app` in `/Applications` (or `~/Applications`), and starts it. After that, AltTabio updates itself: once a day it looks for a newer release on GitHub, installs it, and reopens while the Mac is idle. **Check for Updates…** in the menu bar menu looks right away. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
+```sh
+curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh
+```
+
+It downloads the newest installer and runs it only if it is signed with AltTabio's pinned release certificate. The installer puts `AltTabio.app` in `/Applications` (or `~/Applications`) and starts it. After that, AltTabio updates itself: once a day it looks for a newer release on GitHub, installs it, and reopens while the Mac is idle. **Check for Updates…** in the menu bar menu looks right away. AltTabio asks for **Accessibility**, to take over Cmd+Tab and control windows, and after the first Cmd+Tab for **Screen Recording**, which only window previews use. Every release is signed with the same certificate, so the permissions carry over to updates.
 
 AltTabio is not notarized by Apple, so a copy downloaded in a browser has to be allowed with **Open Anyway** in System Settings, Privacy & Security. The install script avoids that.
 

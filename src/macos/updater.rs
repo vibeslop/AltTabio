@@ -1,7 +1,7 @@
 //! Looking for a newer release and putting it in place of the running copy, the way
-//! `docs/install.sh` does: the GitHub release list, bounded ZIP streams, and `codesign` against the
-//! pinned release certificate. All of it blocks, so each job runs on a thread of its own and
-//! reports back through `post_to_app`.
+//! `scripts/mac/install.sh` does: the GitHub release list, bounded ZIP streams, and `codesign`
+//! against the pinned release certificate. All of it blocks, so each job runs on a thread of its
+//! own and reports back through `post_to_app`.
 
 use super::runtime::post_to_app;
 use alttabio::update::{Asset, Checked, Release, Update, Version, newest_update};
@@ -26,7 +26,7 @@ const MAX_METADATA_STDERR_BYTES: usize = 16 * 1024;
 // scripts/mac/package.sh packages nothing signed with another certificate.
 const RELEASE_CERTIFICATE: &str = include_str!("../../scripts/mac/release-certificate.sha1");
 // Share the standalone installer's download/extraction limits, not just its ZIP metadata checks.
-const INSTALLER: &str = include_str!("../../docs/install.sh");
+const INSTALLER: &str = include_str!("../../scripts/mac/install.sh");
 
 /// The running copy's bundle, which an update replaces.
 pub fn bundle_path() -> PathBuf {
@@ -246,7 +246,7 @@ fn verify(app: &Path) -> Result<(), String> {
     .map(drop)
 }
 
-/// `curl` as `docs/install.sh` uses it, held to HTTPS through every redirect.
+/// `curl` as `scripts/mac/install.sh` uses it, held to HTTPS through every redirect.
 fn curl() -> Command {
     let mut command = Command::new("/usr/bin/curl");
     command.args([

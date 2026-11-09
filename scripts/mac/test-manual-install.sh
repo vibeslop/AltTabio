@@ -5,7 +5,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 expected_certificate=$(tr -d '[:space:]' < "$root/scripts/mac/release-certificate.sha1")
 expected_requirement="=identifier \"com.vibeslop.AltTabio\" and certificate leaf = H\"$expected_certificate\""
-command=$(sed -n 's/.*<code id="manual-verify-cmd">\(.*\)<\/code>.*/\1/p' "$root/docs/mac/index.html" | sed 's/&amp;/\&/g')
+command=$(sed -n 's/.*<code id="manual-verify-cmd">\(.*\)<\/code>.*/\1/p' "$root/docs/docs/index.html" | sed 's/&amp;/\&/g')
 [ -n "$command" ] || { printf '%s\n' 'Missing manual verification command' >&2; exit 1; }
 fixture_parent=$(CDPATH= cd -- "${TMPDIR:-/tmp}" && pwd -P)
 fixture=$(mktemp -d "$fixture_parent/alttabio-manual-test.XXXXXXXX")

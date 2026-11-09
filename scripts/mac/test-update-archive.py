@@ -15,7 +15,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-INSTALLER = ROOT / "docs/install.sh"
+INSTALLER = ROOT / "scripts/mac/install.sh"
 EXECUTABLE = "AltTabio.app/Contents/MacOS/AltTabio"
 SCRIPT = INSTALLER.read_text().split("main() {", 1)[0]
 

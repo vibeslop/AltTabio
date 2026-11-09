@@ -10,7 +10,7 @@ work=$(mktemp -d)
 mounted=false
 trap 'if ! $mounted || hdiutil detach "$work/mount" -quiet; then rm -rf "$work"; fi' EXIT
 mkdir "$work/content" "$work/mount"
-cp docs/install.sh "$work/content/install.sh"
+cp scripts/mac/install.sh "$work/content/install.sh"
 mkdir -p target/mac
 hdiutil create -quiet -fs HFS+ -format UDZO -volname AltTabioInstaller \
     -srcfolder "$work/content" -ov "$image"
@@ -25,5 +25,5 @@ codesign --verify --strict \
     -R "=identifier \"com.vibeslop.AltTabio.installer\" and certificate leaf = H\"$release\"" "$image"
 hdiutil attach "$image" -readonly -nobrowse -mountpoint "$work/mount" -quiet
 mounted=true
-cmp docs/install.sh "$work/mount/install.sh"
+cmp scripts/mac/install.sh "$work/mount/install.sh"
 shasum -a 256 "$image"

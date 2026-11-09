@@ -1,0 +1,79 @@
+name: Windows install command
+
+# Runs the Windows install command for real, on a Windows machine: it downloads the newest
+# release, verifies it, installs it in Program Files and starts it. CI checks the script's logic
+# offline; this checks what only Windows can show. It needs the network, so it runs when the
+# script changes and on request, not on every push.
+on:
+  push:
+    paths:
+      - docs/install.ps1
+      - .github/workflows/windows-install.yml
+  workflow_dispatch:
+    inputs:
+      published:
+        description: Run the command as the site publishes it, not this checkout's script
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install and update
+    runs-on: windows-latest
+    env:
+      PUBLISHED: ${{ inputs.published }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # A first install, in the PowerShell a Windows PC opens by default.
+      - name: Install in Windows PowerShell
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = Join-Path $env:ProgramFiles 'AltTabio\AltTabio.exe'
+          if (Test-Path -LiteralPath $app) { throw 'AltTabio is already installed on this machine.' }
+          if ($env:PUBLISHED -eq 'true') { irm https://vibeslop.github.io/AltTabio/install.ps1 | iex }
+          else { Get-Content -Raw docs/install.ps1 | Invoke-Expression }
+          if (-not (Test-Path -LiteralPath $app)) { throw 'The command did not install AltTabio.' }
+          $version = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
+          if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw "The installed app reports no release version: $version" }
+          foreach ($name in 'LICENSE', 'THIRD_PARTY_LICENSES.md') {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles "AltTabio\$name"))) { throw "$name was not installed." }
+          }
+          $running = $null
+          foreach ($attempt in 1..30) {
+            $running = Get-Process -Name AltTabio -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app }
+            if ($running) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $running) { throw 'AltTabio was installed but is not running.' }
+          "Installed and started AltTabio $version (process $($running.Id))."
+          "ALTTABIO_PROCESS=$($running.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # The same command again, over the running copy, in the other PowerShell.
+      - name: Update in PowerShell 7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = Join-Path $env:ProgramFiles 'AltTabio\AltTabio.exe'
+          if ($env:PUBLISHED -eq 'true') { irm https://vibeslop.github.io/AltTabio/install.ps1 | iex }
+          else { Get-Content -Raw docs/install.ps1 | Invoke-Expression }
+          $running = $null
+          foreach ($attempt in 1..30) {
+            $running = Get-Process -Name AltTabio -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $app }
+            if ($running -and $running.Id -ne $env:ALTTABIO_PROCESS) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $running) { throw 'AltTabio is not running after the update.' }
+          if ("$($running.Id)" -eq $env:ALTTABIO_PROCESS) { throw 'The update left the old copy running.' }
+          if (@(Get-ChildItem -LiteralPath (Split-Path $app) -Filter '*.new').Count) { throw 'The update left a half-written file.' }
+          "Replaced the running copy with process $($running.Id)."
+
+      - name: Stop AltTabio
+        if: always()
+        shell: pwsh
+        run: Get-Process -Name AltTabio -ErrorAction SilentlyContinue | Stop-Process -Force

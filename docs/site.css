@@ -1,40 +1,59 @@
-/* AltTabio's switcher is drawn in pure greys with no accent, and the site follows it: neutral
-   greys tuned in OKLCH, the system font the app draws with, and black and white for the one
-   action on each screen. Every page opens on a dark stage; the rest follows the appearance. */
+/* The site takes its one colour from the app icon: the lit azure Tab keycap. Azure marks what you
+   can act on (the main button, links, focus) and the brand mark; everything else stays in greys
+   tinted faintly toward it, so no surface is flat black or white. Every page opens on a dark
+   stage; the rest follows the appearance. */
 :root{
   color-scheme: light;
-  --bg: oklch(0.985 0 0);
-  --bg-2: oklch(0.955 0 0);
+  --bg: oklch(0.985 0.004 250);
+  --bg-2: oklch(0.955 0.007 250);
   --surface: oklch(1 0 0);
-  --text: oklch(0.17 0 0);
-  --text-2: oklch(0.42 0 0);
-  --text-3: oklch(0.53 0 0);
+  --text: oklch(0.17 0.01 260);
+  --text-2: oklch(0.42 0.012 260);
+  --text-3: oklch(0.53 0.012 260);
+  /* The icon's azure: a fill that holds white text at 5.2:1, and a text shade for each ground. */
+  --accent: oklch(0.54 0.18 256);
+  --accent-hover: oklch(0.5 0.18 257);
+  --accent-text: oklch(0.5 0.17 258);
+  --card: var(--surface);
+  --card-inset: oklch(0.975 0.004 255);
+  --plate: oklch(0.9 0.006 260);
   --line: oklch(0 0 0 / 0.09);
   --line-2: oklch(0 0 0 / 0.16);
-  --stage: oklch(0 0 0);
-  --stage-text: oklch(0.97 0 0);
-  --stage-text-2: oklch(0.74 0 0);
+  --stage: oklch(0.16 0.02 262);
+  --stage-text: oklch(0.97 0.005 250);
+  --stage-text-2: oklch(0.75 0.015 255);
   --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
   --display: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
+  --serif: ui-serif, "New York", "Iowan Old Style", Charter, Georgia, serif;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.09 0 0 0 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --maxw: 1180px;
   --space: clamp(6rem, 13vw, 11rem);
 }
 [data-theme="dark"]{
   color-scheme: dark;
-  --bg: oklch(0.14 0 0);
-  --bg-2: oklch(0.175 0 0);
-  --surface: oklch(0.19 0 0);
-  --text: oklch(0.96 0 0);
-  --text-2: oklch(0.78 0 0);
-  --text-3: oklch(0.66 0 0);
+  --bg: oklch(0.14 0.008 262);
+  --bg-2: oklch(0.175 0.01 262);
+  --surface: oklch(0.19 0.01 262);
+  --text: oklch(0.96 0.005 250);
+  --text-2: oklch(0.78 0.012 255);
+  --text-3: oklch(0.66 0.012 255);
+  --accent-text: oklch(0.78 0.11 254);
+  --card: var(--surface);
+  --card-inset: oklch(0.245 0.012 262);
+  --plate: oklch(0.36 0.01 262);
   /* Solid in the dark: alpha white borders glow instead of receding. */
-  --line: oklch(0.25 0 0);
-  --line-2: oklch(0.32 0 0);
+  --line: oklch(0.25 0.012 262);
+  --line-2: oklch(0.32 0.014 262);
 }
 
 *,*::before,*::after{ box-sizing: border-box; }
-html{ -webkit-text-size-adjust: 100%; scroll-behavior: smooth; scroll-padding-top: 24px; font-synthesis: none; }
+html{ -webkit-text-size-adjust: 100%; scroll-padding-top: 24px; font-synthesis: none; }
+/* Jumps are instant: a smooth scroll crawls the whole page, and on arrival from another page it
+   starts from the top. Where the browser can, the view cross-fades instead, between pages here
+   and within a page from site.js. */
+@view-transition{ navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root){ animation-duration: 200ms; animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
 body{
   margin: 0; background: var(--bg); color: var(--text);
   font: 400 1.0625rem/1.6 var(--sans);
@@ -47,8 +66,8 @@ a{ color: inherit; text-decoration-thickness: from-font; text-underline-offset: 
 p{ margin: 0; }
 h1,h2,h3{ margin: 0; font-family: var(--display); text-wrap: balance; }
 code{ font-family: var(--mono); }
-::selection{ background: oklch(0.5 0 0 / 0.3); }
-:where(a,button,summary,[tabindex]):focus-visible{ outline: 2px solid currentColor; outline-offset: 3px; }
+::selection{ background: oklch(0.6 0.17 252 / 0.3); }
+:where(a,button,summary,[tabindex]):focus-visible{ outline: 2px solid var(--accent-text); outline-offset: 3px; }
 .sr-only{ position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .skip{
   position: absolute; left: 12px; top: 12px; z-index: 50; padding: 10px 14px; border-radius: 10px;
@@ -57,7 +76,8 @@ code{ font-family: var(--mono); }
 .skip:focus-visible{ translate: 0 0; }
 .wrap{ width: min(var(--maxw), calc(100% - 64px)); margin-inline: auto; }
 @media (max-width: 767px){ .wrap{ width: calc(100% - 40px); } }
-[data-os="mac"] .only-win, :root:not([data-os="mac"]) .only-mac{ display: none !important; }
+/* Each system sees its own download first; anything else, a phone, sees both. */
+[data-os="mac"] .only-win, :root:not([data-os="mac"]) .only-mac, [data-os="other"] .only-win, [data-os="other"] :is(.hero, .closing) .cta :is(.btn:not(.only-other), .only-win, .only-mac), :root:not([data-os="other"]) .only-other{ display: none !important; }
 .theme-switching, .theme-switching *{ transition: none !important; }
 
 /* Buttons: one solid action per screen, in the text color; everything else is a quiet link. */
@@ -65,121 +85,532 @@ code{ font-family: var(--mono); }
   display: inline-flex; align-items: center; justify-content: center; gap: 10px;
   height: 48px; padding: 0 22px; border: 0; border-radius: 999px; cursor: pointer; user-select: none;
   font: 600 1rem/1 var(--sans); text-decoration: none; white-space: nowrap;
-  background: var(--text); color: var(--bg);
-  transition-property: background-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out;
+  background: var(--accent); color: white;
+  transition-property: background-color, color, scale; transition-duration: 150ms; transition-timing-function: ease-out;
+  -webkit-tap-highlight-color: transparent;
 }
 .btn svg{ width: 18px; height: 18px; flex: none; }
-.btn:active{ transform: scale(0.97); }
-@media (hover: hover) and (pointer: fine){ .btn:hover{ background: color-mix(in oklch, var(--text) 82%, var(--bg)); } }
+/* Every button gives under the finger. */
+@media (prefers-reduced-motion: no-preference){ :is(.btn, .icon-btn, .seg button, .reopen):not(:disabled):active{ scale: 0.96; } }
+@media (hover: hover) and (pointer: fine){ .btn:hover{ background: var(--accent-hover); } }
 .btn-quiet{ background: transparent; color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }
 @media (hover: hover) and (pointer: fine){ .btn-quiet:hover{ background: var(--bg-2); } }
 .btn-sm{ height: 36px; padding: 0 16px; font-size: 0.9375rem; }
-.link{ display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: inherit; text-decoration: none; }
+.link{ display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--accent-text); text-decoration: none; }
 .link svg{ width: 16px; height: 16px; transition: translate 150ms ease-out; }
 @media (hover: hover) and (pointer: fine){ .link:hover{ text-decoration: underline; } .link:hover svg{ translate: 3px 0; } }
 .icon-btn{
   width: 40px; height: 40px; flex: none; display: grid; place-items: center; padding: 0; border: 0;
   border-radius: 999px; background: transparent; color: inherit; opacity: 0.8; cursor: pointer;
-  transition: opacity 150ms ease-out, background-color 150ms ease-out;
+  transition: opacity 150ms ease-out, background-color 150ms ease-out, scale 150ms ease-out;
+  -webkit-tap-highlight-color: transparent;
 }
 .icon-btn svg{ width: 20px; height: 20px; }
 @media (hover: hover) and (pointer: fine){ .icon-btn:hover{ opacity: 1; background: oklch(0.5 0 0 / 0.14); } }
 
 /* The stage: every page opens on black, the header sits on it and scrolls away with it. */
-.stage{ position: relative; isolation: isolate; background: var(--stage); color: var(--stage-text); }
-.stage .btn{ background: var(--stage-text); color: var(--stage); }
-@media (hover: hover) and (pointer: fine){ .stage .btn:hover{ background: oklch(0.85 0 0); } }
+.stage{ position: relative; isolation: isolate; background: var(--stage); color: var(--stage-text); --accent-text: oklch(0.78 0.11 254); }
 .nav{ position: relative; z-index: 2; display: flex; align-items: center; gap: 8px 28px; min-height: 76px; }
 .brand{ display: flex; align-items: center; gap: 10px; min-height: 44px; margin-inline-end: auto; font: 600 1.0625rem/1 var(--display); letter-spacing: -0.01em; text-decoration: none; }
-.brand .mark{ width: 30px; height: 19.2px; color: var(--stage-text); overflow: visible; }
+.brand .mark{ width: 30px; height: 19.2px; color: var(--accent-text); overflow: visible; }
 .navlinks{ display: flex; gap: 4px; }
 .navlinks a{ display: inline-flex; align-items: center; min-height: 40px; padding: 0 10px; font-size: 0.9375rem; color: var(--stage-text-2); text-decoration: none; transition: color 150ms ease-out; }
 .navlinks a[aria-current="page"]{ color: var(--stage-text); }
 @media (hover: hover) and (pointer: fine){ .navlinks a:hover{ color: var(--stage-text); } }
 .nav-tools{ display: flex; align-items: center; gap: 2px; }
-@media (max-width: 559px){ .nav{ gap: 4px 12px; } .navlinks a{ padding: 0 6px; } .nav-github{ display: none; } }
+.nav-cta{ margin-inline-start: 10px; }
+/* The header and the hero under it are one surface. At fractional display scaling a hairline of
+   the page shows between them, so the header paints one pixel past its own edge. */
+header.stage{ box-shadow: 0 1px 0 var(--stage); }
+.stage .btn-quiet{ color: var(--stage-text); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.22); }
+@media (hover: hover) and (pointer: fine){ .stage .btn-quiet:hover{ background: oklch(1 0 0 / 0.1); } }
+/* The Docs header sits on the page itself, in the reader's theme. */
+.site-head{ border-bottom: 1px solid var(--line); }
+.site-head .navlinks a{ color: var(--text-2); }
+.site-head .navlinks a[aria-current="page"]{ color: var(--text); }
+@media (hover: hover) and (pointer: fine){ .site-head .navlinks a:hover{ color: var(--text); } }
+.stage .btn-sm{ height: 34px; padding: 0 14px; font-size: 0.875rem; }
+@media (max-width: 559px){ .nav{ gap: 4px 12px; } .navlinks a{ padding: 0 6px; } .nav-github, .nav-cta{ display: none !important; } }
+/* At 320px the wordmark leaves no room for the theme button; the mark stays, and the link keeps its "AltTabio home" label. */
+@media (max-width: 359px){ .nav > .brand span{ display: none; } }
 
-/* Home hero: a dark keyboard, its corner lit, with the problem in one sentence beside it. The
-   picture is a render whose corners are pure black, so it melts into the stage at any crop. */
-.hero{ position: relative; min-height: calc(min(100svh, 62vw) - 76px); display: flex; flex-direction: column; }
-.hero-art{ position: absolute; inset: 0; z-index: -1; }
-.hero-art img{ width: 100%; height: 100%; object-fit: cover; object-position: 40% 100%; }
-.hero-copy{ flex: 1; display: flex; flex-direction: column; justify-content: center; padding: clamp(24px, 6vh, 72px) 0 clamp(64px, 12vh, 140px); }
-.hero h1{ max-width: 13ch; font-size: clamp(2.75rem, 1rem + 5.2vw, 5.75rem); font-weight: 650; line-height: 0.98; letter-spacing: -0.04em; }
-.hero .sub{ max-width: 30rem; margin-top: 28px; font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem); line-height: 1.5; color: var(--stage-text-2); text-wrap: pretty; }
+/* Home hero: the promise in one sentence, then the switcher itself to try. */
+.hero{ overflow: clip; padding-bottom: clamp(32px, 5vh, 56px); }
+.hero-copy{ display: flex; flex-direction: column; align-items: center; text-align: center; padding: clamp(16px, 3vh, 32px) 0 clamp(20px, 3vh, 32px); }
+.hero h1{ max-width: 15ch; font-size: clamp(2.4rem, 1rem + 3vw, 3.875rem); font-weight: 650; line-height: 1.02; letter-spacing: -0.02em; }
+.hero .sub{ max-width: 36rem; margin-top: 16px; font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem); line-height: 1.5; color: var(--stage-text-2); text-wrap: pretty; }
 .cta{ display: flex; flex-wrap: wrap; align-items: center; gap: 14px 26px; margin-top: 36px; }
-.stage .note{ margin-top: 16px; font-size: 0.9375rem; color: var(--stage-text-2); }
-/* On a phone the keys get their own crop above the words, so neither covers the other. */
-@media (max-width: 759px){
-  .hero{ min-height: 0; }
-  .hero-art{ position: relative; inset: auto; z-index: 0; order: 2; margin-top: -8px; }
-  .hero-art img{ height: auto; aspect-ratio: 1200 / 728; object-position: 50% 50%; }
-  .hero-copy{ order: 1; padding: 28px 0 8px; }
-  .cta .btn{ flex: 1 1 100%; }
+.hero .cta, .closing .cta{ justify-content: center; }
+/* Each system's install sits in the same cell, and the one not shown keeps its room, so switching
+   the demo's system moves nothing below it. A phone has only the one. */
+.hero-get{ display: grid; width: 100%; margin-top: 28px; }
+.hero-get > *{ grid-area: 1 / 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.hero-get .cta{ margin-top: 0; }
+
+[data-os="mac"] .get-win, [data-os="windows"] .get-mac{ visibility: hidden; }
+[data-os="other"] :is(.get-mac, .get-win), :root:not([data-os="other"]) .get-other{ display: none; }
+/* On short screens the hero copy tightens, so the whole demo, and the edge of the next section, fit. */
+@media (max-height: 880px) and (min-width: 760px){
+  .nav{ min-height: 64px; }
+  .hero-copy{ padding: 4px 0 16px; }
+  .hero h1{ font-size: clamp(2.25rem, 1rem + 2.2vw, 3rem); }
+  .hero .sub{ margin-top: 10px; }
+  .hero-get{ margin-top: 18px; }
+  .hero-meta{ margin-top: 8px; }
+  .hero .desk{ --above-desk: 475px; --u-min: 10px; }
+}
+.hero-meta{ margin-top: 14px; font-size: 0.9375rem; color: var(--stage-text-2); }
+.hero-meta a{ color: var(--accent-text); }
+@media (max-width: 759px){ .cta .btn{ flex: 1 1 100%; } }
+
+/* On load the hero arrives in reading order, 60ms apart; with reduced motion it only fades. */
+:is(.hero-copy, .page-hero .wrap) > *, .hero .demo{ animation: enter-fade 200ms cubic-bezier(0.23, 1, 0.32, 1) backwards; }
+@media (prefers-reduced-motion: no-preference){ :is(.hero-copy, .page-hero .wrap) > *, .hero .demo{ animation-name: enter; } }
+:is(.hero-copy, .page-hero .wrap) > :nth-child(2){ animation-delay: 60ms; }
+:is(.hero-copy, .page-hero .wrap) > :nth-child(3){ animation-delay: 120ms; }
+:is(.hero-copy, .page-hero .wrap) > :nth-child(4), .hero .demo{ animation-delay: 180ms; }
+:is(.hero-copy, .page-hero .wrap) > :nth-child(n+5){ animation-delay: 240ms; }
+@keyframes enter-fade{ from{ opacity: 0; } }
+@keyframes enter{ from{ opacity: 0; translate: 0 12px; filter: blur(4px); } }
+
+/* The demo: a desktop with the switcher on it, drawn from the app's own geometry and tokens.
+   Every panel length is in em at 16px per point, so the panel scales with its container. */
+.demo{ display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.demo-bar{ width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.seg{ position: relative; isolation: isolate; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: 999px; background: oklch(1 0 0 / 0.08); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.08); }
+.seg button{
+  min-width: 92px; height: 34px; padding: 0 16px; border: 0; border-radius: 999px; cursor: pointer;
+  font: 500 0.9375rem/1 var(--sans); color: var(--stage-text-2); background: transparent;
+  transition: background-color 150ms ease-out, color 150ms ease-out, scale 150ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.seg button[aria-pressed="true"]{ background: oklch(1 0 0 / 0.16); color: var(--stage-text); }
+@media (hover: hover) and (pointer: fine){ .seg button:hover{ color: var(--stage-text); } }
+/* The pill slides to the system you pick; with reduced motion the buttons fade their own. */
+@media (prefers-reduced-motion: no-preference){
+  .seg::before{
+    content: ""; position: absolute; z-index: -1; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px);
+    border-radius: 999px; background: oklch(1 0 0 / 0.16); transition: translate 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  .seg:has([data-os-pick="windows"][aria-pressed="true"])::before{ translate: 100% 0; }
+  .seg button[aria-pressed="true"]{ background: transparent; }
+}
+/* Switching systems cross-fades the whole desktop (site.js names these only for the switch). The
+   pill shows live throughout, so it slides instead of fading in two places at once. */
+.demo-swap .desk.live{ view-transition-name: demo-desk; }
+.demo-swap .seg{ view-transition-name: demo-seg; }
+::view-transition-old(demo-desk), ::view-transition-new(demo-desk){ animation-duration: 200ms; animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
+::view-transition-old(demo-seg){ display: none; }
+::view-transition-new(demo-seg){ animation: none; }
+
+/* The desk is a small screen of the system the demo shows: its wallpaper, the menu bar and Dock
+   or the taskbar, the window in front, and the panel centred on it. --u is one point, the
+   panel's own scale, so the system's furniture keeps its real size beside the panel. */
+.desk{
+  position: relative; isolation: isolate; container-type: inline-size; width: 100%;
+  display: grid; grid-template-rows: auto 1fr auto; place-items: center; user-select: none; -webkit-user-select: none;
+  /* The point also shrinks on short screens, so the demo ends above the fold and the next section shows. */
+  --u: min(100cqi / 54, clamp(var(--u-min, 11px), (100svh - var(--above-desk)) / 29.75, 16px));
+  --above-desk: 580px;
+}
+.desk.live{
+  border-radius: 14px; box-shadow: 0 0 0 1px oklch(1 0 0 / 0.1), 0 30px 80px -30px oklch(0 0 0 / 0.8);
+  background: oklch(0.31 0.012 260);
+}
+.desk.live[data-mode="windows"]{ background: oklch(0.3 0.035 252); }
+/* Each system's own typeface, where the visitor has it. */
+.desk[data-mode="mac"]{ --sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif; }
+.desk[data-mode="windows"]{ --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; }
+
+/* The rows around the panel keep one height in both systems, so nothing below the demo moves. */
+.os-top{ width: 100%; height: calc(var(--u) * 1.5); }
+.os-bottom{ width: 100%; height: calc(var(--u) * 3.875); display: flex; align-items: flex-end; justify-content: center; }
+.desk .sw{ margin-block: calc(var(--u) * 0.75); }
+
+/* macOS: a clear menu bar naming the app in front, with AltTabio's mark by the clock. */
+.menubar{
+  height: 100%; display: flex; align-items: center; gap: calc(var(--u) * 1.25); padding: 0 calc(var(--u) * 1);
+  font: 500 calc(var(--u) * 0.8125)/1 var(--sans); color: oklch(1 0 0 / 0.95); text-shadow: 0 0 6px oklch(0 0 0 / 0.25); white-space: nowrap;
+}
+.menubar b{ font-weight: 700; }
+.menubar .status{ margin-inline-start: auto; display: flex; align-items: center; gap: calc(var(--u) * 1); }
+.menubar svg{ width: calc(var(--u) * 1.4); height: calc(var(--u) * 0.9); color: white; }
+.dock{
+  display: flex; gap: calc(var(--u) * 0.25); margin-bottom: calc(var(--u) * 0.375); padding: calc(var(--u) * 0.3125);
+  border-radius: calc(var(--u) * 1.25); background: oklch(1 0 0 / 0.2); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.3), 0 8px 24px oklch(0 0 0 / 0.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+}
+.dock span{ position: relative; display: grid; width: calc(var(--u) * 2.75); height: calc(var(--u) * 2.75); }
+/* Every app here is running, so each has the dot beneath it. */
+.dock span::after{ content: ""; position: absolute; left: 50%; bottom: calc(var(--u) * -0.2); width: 3px; height: 3px; translate: -50% 0; border-radius: 50%; background: oklch(1 0 0 / 0.75); }
+.dock svg, .taskbar .tb-apps svg{ width: 100%; height: 100%; }
+
+/* Windows 11: a taskbar along the bottom, apps centred, the active one marked, the tray and clock right. */
+.taskbar{
+  position: relative; width: 100%; height: calc(var(--u) * 3); display: flex; align-items: center; justify-content: center;
+  border-radius: 0 0 14px 14px; background: oklch(0.2 0.015 255 / 0.82); box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4);
+  font: 400 calc(var(--u) * 0.6875)/1.3 var(--sans); color: oklch(1 0 0 / 0.92);
+}
+.tb-apps{ display: flex; gap: calc(var(--u) * 0.25); }
+.tb-apps > span{ position: relative; display: grid; place-items: center; width: calc(var(--u) * 2.5); height: calc(var(--u) * 2.5); padding: calc(var(--u) * 0.4); border-radius: calc(var(--u) * 0.25); }
+.tb-apps > span::after{ content: ""; position: absolute; left: 50%; bottom: calc(var(--u) * 0.1); width: calc(var(--u) * 0.375); height: 3px; translate: -50% 0; border-radius: 3px; background: oklch(1 0 0 / 0.5); }
+.tb-apps > .on{ background: oklch(1 0 0 / 0.08); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.06); }
+.tb-apps > .on::after{ width: calc(var(--u) * 1); background: oklch(0.78 0.12 235); }
+.tb-apps > .tb-search{ color: oklch(1 0 0 / 0.9); padding: calc(var(--u) * 0.6); }
+.tb-apps > .tb-search::after{ content: none; }
+.tb-tray{ position: absolute; right: calc(var(--u) * 0.75); display: flex; align-items: center; gap: calc(var(--u) * 1); }
+.tb-tray img{ width: calc(var(--u) * 1); height: calc(var(--u) * 1); }
+.tb-clock{ display: flex; flex-direction: column; align-items: flex-end; }
+.desk-fallback{ width: 100%; border-radius: 12px; }
+/* Without script the panel has nothing to draw; the capture stands in for it. */
+.sw:empty{ display: none; }
+
+/* The window in front, behind the panel; it changes when you switch. */
+.desk-front{
+  position: absolute; left: 50%; top: 0; z-index: 0; width: 100%; height: 100%; translate: -50% 0;
+  font-size: calc(var(--u) * 1.15);
+}
+/* The window you switch to comes forward over the one that was in front. It sits below the
+   menu bar and clear of the Dock on a Mac, and above the taskbar on Windows. */
+.desk-front .win{
+  position: absolute; inset: calc(var(--u) * 2.25) 4% calc(var(--u) * 4.5);
+  transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+[data-mode="windows"] .desk-front .win{ inset: calc(var(--u) * 1.25) 4% calc(var(--u) * 4); }
+/* The window in front is the active one: its traffic lights are lit, and every other stays grey. */
+[data-mode="mac"] .desk-front .win-bar i:nth-child(1){ background: #ff5f57; }
+[data-mode="mac"] .desk-front .win-bar i:nth-child(2){ background: #febc2e; }
+[data-mode="mac"] .desk-front .win-bar i:nth-child(3){ background: #28c840; }
+.win-ic{ display: none; }
+[data-mode="windows"] .win-ic{ display: inline-block; width: 1.4em; height: 1.4em; margin-inline-end: 0.7em; vertical-align: -0.4em; }
+[data-mode="windows"] .win-ic svg{ width: 100%; height: 100%; }
+@starting-style{ .desk.switched .desk-front .win{ opacity: 0; } }
+@media (prefers-reduced-motion: no-preference){
+  .desk-front .win{ transition-property: opacity, scale, filter; }
+  @starting-style{ .desk.switched .desk-front .win{ scale: 0.97; filter: blur(4px); } }
 }
 
-/* Page heroes on the Windows and Mac pages: the same stage, words only. */
+/* A drawn window: title bar and real, legible content. */
+.win{ position: relative; display: flex; flex-direction: column; overflow: hidden; border-radius: 0.75em; color: var(--pv-tx); background: var(--pv-bg); box-shadow: 0 0 0 1px oklch(0 0 0 / 0.25), 0 1.5em 3em -1em oklch(0 0 0 / 0.55); }
+.win-bar{ flex: none; display: flex; align-items: center; gap: 0.4em; height: 2em; padding: 0 0.75em; background: var(--pv-bar); }
+.win-bar i{ width: 0.7em; height: 0.7em; border-radius: 50%; background: oklch(0.7 0 0 / 0.6); }
+.win-bar b{ flex: 1; text-align: center; font: 500 0.75em/1 var(--sans); color: var(--pv-tx-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-inline-end: 3.2em; }
+[data-mode="windows"] .win{ border-radius: 0.5em; }
+[data-mode="windows"] .win-bar{ flex-direction: row-reverse; }
+[data-mode="windows"] .win-bar i{ width: 2.6em; height: auto; border-radius: 0; background: none; font: normal 0.8em/1 var(--sans); text-align: center; color: var(--pv-tx-2); }
+[data-mode="windows"] .win-bar i:nth-child(1)::before{ content: "✕"; }
+[data-mode="windows"] .win-bar i:nth-child(2)::before{ content: "□"; }
+[data-mode="windows"] .win-bar i:nth-child(3)::before{ content: "–"; }
+[data-mode="windows"] .win-bar b{ text-align: start; padding: 0 0 0 0.2em; }
+.win-body{ flex: 1; min-height: 0; display: flex; overflow: hidden; font: 400 0.8125em/1.55 var(--sans); text-align: start; }
+.win-body p, .win-body h3, .win-body h4, .win-body ul, .win-body table{ margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.win-body .main{ flex: 1; min-width: 0; padding: 1.4em 1.8em; display: flex; flex-direction: column; gap: 0.5em; }
+.win-body .side{ flex: 0 0 27%; min-width: 0; padding: 1.2em 0.6em; display: flex; flex-direction: column; gap: 0.15em; background: var(--pv-side); box-shadow: 1px 0 0 var(--pv-line); }
+.win-body h3{ font: 650 1.6em/1.2 var(--sans); letter-spacing: -0.02em; color: var(--pv-tx); }
+.win-body h4{ font: 600 1.15em/1.3 var(--sans); }
+.win-body .meta{ color: var(--pv-tx-2); }
+.win-body ul{ padding: 0; list-style: none; display: grid; gap: 0.35em; }
+.win-body ul:not(.check) li::before{ content: ""; display: inline-block; width: 0.35em; height: 0.35em; margin: 0 0.7em 0.15em 0.2em; border-radius: 50%; background: currentColor; opacity: 0.6; }
+.win-body table{ border-collapse: collapse; width: 100%; }
+.win-body td{ padding: 0.45em 0; border-bottom: 1px solid var(--pv-line); }
+.win-body td:last-child{ text-align: end; font-weight: 600; }
+/* Photos and Music are dark apps; the album's pictures fill what the heading leaves. */
+.pv-photos, .pv-music{ --pv-bg: oklch(0.2 0.008 260); --pv-bar: oklch(0.235 0.008 260); --pv-side: oklch(0.22 0.008 260); --pv-tx: oklch(0.88 0.01 260); --pv-tx-2: oklch(0.66 0.01 260); --pv-line: oklch(1 0 0 / 0.06); }
+.tree p{ padding: 0.15em 0.6em; border-radius: 0.3em; color: var(--pv-tx-2); }
+.tree p.on{ background: oklch(1 0 0 / 0.08); color: var(--pv-tx); }
+.shots{ flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 0.5em; margin-top: 0.4em; }
+.shots i{ border-radius: 0.35em; }
+.pv-music .main{ padding-inline: 2.4em; }
+.pv-web, .pv-mail{ --pv-bg: oklch(0.995 0 0); --pv-bar: oklch(0.94 0 0); --pv-side: oklch(0.96 0 0); --pv-tx: oklch(0.24 0 0); --pv-tx-2: oklch(0.5 0 0); --pv-line: oklch(0 0 0 / 0.08); }
+.pv-web .main{ padding-inline: 2.4em; }
+.pv-mail .inbox p{ display: flex; flex-direction: column; padding: 0.5em 0.7em; border-radius: 0.4em; color: var(--pv-tx-2); line-height: 1.35; }
+.pv-mail .inbox b{ color: var(--pv-tx); font-weight: 600; }
+.pv-mail .inbox p.on{ background: oklch(0.62 0.15 245); color: oklch(1 0 0 / 0.85); }
+.pv-mail .inbox p.on b{ color: white; }
+.pv-notes{ --pv-bg: oklch(0.985 0.012 95); --pv-bar: oklch(0.95 0.02 95); --pv-tx: oklch(0.3 0.02 80); --pv-tx-2: oklch(0.5 0.02 80); --pv-line: oklch(0 0 0 / 0.08); }
+.pv-notes .main{ padding-inline: 2.4em; }
+.win-body .check{ list-style: none; padding: 0 !important; }
+.win-body .check li::before{ content: ""; display: inline-block; width: 0.9em; height: 0.9em; margin-inline-end: 0.6em; vertical-align: -0.12em; border-radius: 50%; box-shadow: inset 0 0 0 1.5px oklch(0.75 0.13 85); }
+.win-body .check li.done{ color: var(--pv-tx-2); text-decoration: line-through; }
+.win-body .check li.done::before{ background: oklch(0.8 0.15 85); box-shadow: none; }
+
+/* The macOS panel: glass in the dark switcher tokens, 24pt corners, 12pt padding. */
+.sw{
+  --canvas: oklch(0.21 0 0 / 0.9); --well: oklch(0.27 0 0 / 0.85); --sel: oklch(0.36 0 0 / 0.96);
+  --tx: oklch(0.96 0 0); --tx-2: oklch(0.72 0 0); --ring: oklch(1 0 0 / 0.1);
+  position: relative; z-index: 1; font-size: var(--u); width: 48.5em; padding: 0.75em;
+  border-radius: 1.5em; color: var(--tx); background: var(--canvas);
+  -webkit-backdrop-filter: blur(2em) saturate(1.6); backdrop-filter: blur(2em) saturate(1.6);
+  box-shadow: inset 0 0 0 1px var(--ring), 0 1.5em 4em oklch(0 0 0 / 0.5);
+  transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.sw:focus{ outline: none; }
+.sw:focus-visible{ box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.42), 0 1.5em 4em oklch(0 0 0 / 0.5); }
+/* A switch dismisses the panel quickly; it takes longer to come back. */
+.desk.closed .sw{ opacity: 0; pointer-events: none; transition-duration: 100ms; }
+/* Switching systems dips the panel out and back, in place. */
+.desk.swapping .sw{ opacity: 0; transition-duration: 100ms; }
+@media (prefers-reduced-motion: no-preference){
+  .sw{ transition-property: opacity, translate, filter; }
+  .desk.closed .sw{ translate: 0 -12px; filter: blur(4px); }
+  .desk.swapping .sw{ filter: blur(4px); }
+}
+:where(.sw button){ margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: start; }
+.sw-strip{ display: flex; }
+.sw .tile{ width: 4em; height: 4em; display: grid; place-items: center; border-radius: 0.75em; }
+.sw .tile svg{ width: 3em; height: 3em; }
+.sw .tile[aria-pressed="true"]{ background: var(--sel); }
+.sw-name{ height: 1.375em; padding-inline-start: 0.75em; display: flex; align-items: center; font-size: 1em; }
+.sw-name span{ font-size: 0.8125em; font-weight: 600; }
+.sw-body{ display: flex; gap: 0.75em; margin-top: 0.375em; }
+.sw-list{ flex: 0 0 21.25em; min-height: 15.625em; margin: 0; padding: 0; list-style: none; }
+.sw .row{ display: flex; align-items: center; width: 100%; height: 2.25em; padding: 0 0.75em; border-radius: 0.75em; }
+.sw .row[aria-current="true"]{ background: var(--sel); }
+.sw .row .n{ flex: none; width: 1.25em; font-size: 0.8125em; color: var(--tx-2); font-variant-numeric: tabular-nums; }
+.sw .row .t{ flex: 1; min-width: 0; font-size: 0.8125em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw .row .s{ flex: none; margin-inline-start: 0.75em; font-size: 0.75em; color: var(--tx-2); }
+.sw .row .ic{ display: none; }
+.sw-well{ flex: 1; display: grid; padding: 0.5em; border-radius: 0.75em; background: var(--well); }
+/* The capture sits 8pt inside the well, its corners the well's radius less that inset. */
+.sw-well .win{ align-self: center; aspect-ratio: 16 / 10.4; font-size: 0.7em; border-radius: calc(0.25em / 0.7); box-shadow: none; }
+
+/* One height in both modes and for every app, so nothing below the demo moves. */
+.desk .sw{ height: 22.875em; }
+.desk .sw-body{ height: calc(100% - 5.75em); }
+[data-mode="windows"].desk .sw-body{ height: 100%; }
+
+/* The Windows panel: the app's dark palette, a list beside the preview, no app strip. */
+[data-mode="windows"] .sw{
+  --canvas: rgb(14 16 20); --sel: rgb(46 87 148); --tx: rgb(240 242 247); --tx-2: rgb(153 163 179); --num: rgb(194 209 235);
+  border-radius: 0.5em; padding: 0.75em; -webkit-backdrop-filter: none; backdrop-filter: none;
+  box-shadow: 0 0 0 1px rgb(97 97 100), 0 1.5em 4em oklch(0 0 0 / 0.55);
+}
+[data-mode="windows"] .sw-strip, [data-mode="windows"] .sw-name{ display: none; }
+[data-mode="windows"] .sw-body{ margin: 0; gap: 0; }
+[data-mode="windows"] .sw-list{ flex-basis: 20em; min-height: 0; padding-inline-end: 0.75em; display: flex; flex-direction: column; gap: 0.25em; }
+[data-mode="windows"] .sw .row{ height: 2.75em; border-radius: 0.375em; padding: 0 0.6em; gap: 0.6em; }
+[data-mode="windows"] .sw .row .n{ color: var(--num); }
+[data-mode="windows"] .sw .row .ic{ display: block; flex: none; width: 2em; height: 2em; }
+[data-mode="windows"] .sw .row .t{ font-size: 0.875em; line-height: 1.3; }
+.sw .row small{ display: none; }
+[data-mode="windows"] .sw .row small{ display: block; font-size: 0.86em; color: var(--tx-2); }
+[data-mode="windows"] .sw .row[aria-current="true"] small{ color: rgb(200 212 232); }
+[data-mode="windows"] .sw .row .s{ display: none; }
+[data-mode="windows"] .sw-well .win{ align-self: stretch; aspect-ratio: auto; }
+[data-mode="windows"] .sw-well{ background: none; padding: 0 0 0 0.75em; border-radius: 0; box-shadow: -1px 0 0 rgb(64 71 84); }
+
+/* Narrow, the panel drops its preview, as the app does when the screen is too small for it. */
+@container (max-width: 620px){
+  .sw{ width: 26em; font-size: min(16px, 100cqi / 28); }
+  .desk .sw{ height: 20.75em; }
+  /* A phone has no room for the window behind; the panel stands alone until you switch. */
+  .desk:not(.closed) .desk-front, .desk-front .win:not(:last-child){ visibility: hidden; }
+  .sw-list{ min-height: 13.5em; }
+  .sw-well{ display: none; }
+  .sw-list{ flex: 1; }
+  [data-mode="windows"] .sw{ width: 26em; font-size: min(16px, 100cqi / 28); }
+  [data-mode="windows"] .sw-list{ min-height: 0; padding: 0; }
+  [data-mode="windows"] .sw-list li:nth-child(n+7){ display: none; }
+  .desk-front{ font-size: min(16px, 100cqi / 26); }
+  /* The furniture takes the panel's narrow scale, and the menus and clock that no longer fit go. */
+  .desk > *{ --u: min(16px, 100cqi / 28); }
+  .menubar > span:not(.status):nth-of-type(n+3), .menubar .status > span, .tb-clock{ display: none; }
+}
+.reopen{
+  position: absolute; z-index: 2; left: 50%; top: calc(100% + 14px); translate: -50% 0;
+  display: inline-flex; align-items: center; height: 44px; padding: 0 20px; border: 0; border-radius: 999px; cursor: pointer;
+  font: 500 0.9375rem/1 var(--sans); white-space: nowrap; color: oklch(0.96 0 0); background: oklch(0.2 0 0 / 0.78);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.12);
+  -webkit-tap-highlight-color: transparent;
+  transition-property: opacity, display, scale; transition-duration: 200ms, 200ms, 150ms;
+  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1); transition-behavior: allow-discrete;
+}
+.reopen[hidden]{ display: none; opacity: 0; transition-duration: 100ms; }
+@starting-style{ .reopen:not([hidden]){ opacity: 0; } }
+@media (prefers-reduced-motion: no-preference){
+  .reopen{ transition-property: opacity, display, scale, translate, filter; transition-duration: 200ms, 200ms, 150ms, 200ms, 200ms; }
+  .reopen[hidden]{ translate: -50% -12px; filter: blur(4px); transition-duration: 100ms; }
+  @starting-style{ .reopen:not([hidden]){ translate: -50% 12px; filter: blur(4px); } }
+}
+
+/* The keys under the demo; each lights while it is held. */
+.demo-keys{ display: flex; align-items: center; gap: 4px; margin: 0; font-size: 0.9375rem; font-weight: 500; color: var(--stage-text); }
+.demo-keys kbd:last-of-type{ margin-inline-end: 6px; }
+.stage kbd{ color: oklch(0.96 0 0); background: oklch(0.25 0.015 262); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.14), 0 1px 0 oklch(1 0 0 / 0.06); transition: background-color 90ms ease-out, color 90ms ease-out, box-shadow 90ms ease-out; }
+/* A key you press lights in the icon's azure, as the keycap does. */
+.stage kbd[data-down]{ background: var(--accent); color: white; box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.2), 0 0 12px oklch(0.6 0.17 252 / 0.6); }
+.demo-keys .on-touch{ display: none; }
+@media (hover: none){ .demo-keys .on-keys{ display: none; } .demo-keys .on-touch{ display: inline; color: var(--stage-text-2); } }
+
+/* The 404 page's hero: the same stage, words only. */
+/* A page that is only its hero stays on the stage to the bottom of the window. */
+html:has(.page-hero){ background: var(--stage) var(--grain) 0 0 / 180px; }
 .page-hero{ padding: clamp(56px, 10vh, 120px) 0 clamp(64px, 11vh, 128px); }
-.page-hero .eyebrow{ display: block; margin-bottom: 20px; font-size: 1rem; font-weight: 500; color: var(--stage-text-2); }
+.page-hero .eyebrow{ display: block; margin-bottom: 20px; font-size: 1rem; font-weight: 500; color: var(--accent-text); }
 .page-hero h1{ max-width: 15ch; font-size: clamp(2.5rem, 1rem + 4.4vw, 5rem); font-weight: 650; line-height: 1; letter-spacing: -0.038em; }
 .page-hero .sub{ max-width: 34rem; margin-top: 26px; font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem); line-height: 1.5; color: var(--stage-text-2); text-wrap: pretty; }
-.page-hero .cmd{ max-width: 40rem; margin-top: 36px; }
 
 /* Sections: one idea each, a big heading, and room around it. */
 main > section:not(.stage){ padding-top: var(--space); }
-.head{ max-width: 46rem; margin-bottom: clamp(40px, 6vw, 72px); }
-.head h2{ font-size: clamp(2.25rem, 1.3rem + 2.8vw, 3.75rem); font-weight: 650; line-height: 1.02; letter-spacing: -0.035em; }
+/* On the home page every section after the hero has the same padding above and below, so the gaps
+   between them are even and none is left floating in an empty screen. */
+main > .hero ~ section{ padding-block: clamp(56px, 7vw, 88px); }
+main:has(> .hero) + footer{ margin-top: 0; }
+.head{ max-width: 46rem; margin-bottom: clamp(20px, 2.5vw, 32px); }
+.head h2{ font-size: clamp(2rem, 1.3rem + 2vw, 3rem); font-weight: 650; line-height: 1.05; letter-spacing: -0.018em; }
 .head p{ margin-top: 20px; max-width: 36rem; font-size: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem); line-height: 1.55; color: var(--text-2); text-wrap: pretty; }
-.head p a{ color: var(--text); }
+.head p a{ color: var(--accent-text); }
+/* The hero alone pairs the system sans with a serif italic for the phrase that matters. */
+.hero h1 em{ font-family: var(--serif); font-style: italic; font-weight: 400; letter-spacing: -0.015em; }
 
-/* How it works: the three presses, numbered the way the switcher numbers windows. */
-.presses{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 56px); margin: 0; padding: 0; list-style: none; counter-reset: press; }
-.presses li{ counter-increment: press; padding-top: 22px; border-top: 1px solid var(--line-2); }
-.presses li::before{ content: counter(press); display: block; margin-bottom: 40px; font: 500 0.9375rem/1 var(--sans); color: var(--text-3); font-variant-numeric: tabular-nums; }
-.presses b{ display: block; font: 650 clamp(1.5rem, 1.1rem + 1.1vw, 2.125rem)/1.12 var(--display); letter-spacing: -0.025em; }
-.presses span{ display: block; margin-top: 12px; max-width: 26ch; color: var(--text-2); text-wrap: pretty; }
-@media (max-width: 759px){ .presses{ grid-template-columns: minmax(0, 1fr); gap: 36px; } .presses li::before{ margin-bottom: 18px; } }
+/* Grain, so dark surfaces read as material rather than flat colour. */
+.stage{ background-image: var(--grain); background-size: 180px; }
 
-/* The one product picture, given room: a real capture of the Windows switcher. */
-.shot{ margin: clamp(64px, 9vw, 120px) 0 0; }
-.shot img{ width: 100%; border-radius: 12px; background: #0e1014; box-shadow: 0 0 0 1px var(--line), 0 40px 80px -40px oklch(0 0 0 / 0.45); }
-.shot-first{ margin: 0 0 clamp(56px, 7vw, 96px); }
-.shot figcaption{ margin-top: 18px; font-size: 0.9375rem; color: var(--text-3); text-wrap: pretty; }
-.platforms{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px clamp(32px, 6vw, 88px); margin-top: clamp(48px, 6vw, 80px); }
-.platforms h3{ font-size: 1.25rem; font-weight: 650; letter-spacing: -0.015em; }
-.platforms p{ margin-top: 10px; max-width: 34rem; color: var(--text-2); text-wrap: pretty; }
-.platforms .link{ margin-top: 14px; }
-@media (max-width: 759px){ .platforms{ grid-template-columns: minmax(0, 1fr); } }
-
-/* What AltTabio doesn't ask for, as four plain statements. */
-.promises{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 40px clamp(24px, 3vw, 40px); margin: 0; }
-.promises div{ padding-top: 20px; border-top: 1px solid var(--line-2); }
-.promises dt{ font: 650 1.25rem/1.2 var(--display); letter-spacing: -0.015em; }
-.promises dd{ margin: 10px 0 0; color: var(--text-2); text-wrap: pretty; }
-.promises.three{ grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 48px; }
-@media (max-width: 959px){ .promises{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 519px){ .promises{ grid-template-columns: minmax(0, 1fr); } }
-
-/* Get it: the two systems side by side, divided by a rule rather than boxed. */
-.get{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line-2); }
-.get > div{ display: flex; flex-direction: column; align-items: flex-start; gap: 18px; min-width: 0; padding: clamp(28px, 4vw, 44px) clamp(24px, 4vw, 56px) 0 0; }
-.get > div + div{ padding-left: clamp(24px, 4vw, 56px); padding-right: 0; border-left: 1px solid var(--line); }
-.get .os, .solo .os{ font-size: 0.9375rem; color: var(--text-3); }
-.get h3, .solo h3{ font-size: clamp(1.5rem, 1.25rem + 0.8vw, 2rem); font-weight: 650; letter-spacing: -0.025em; line-height: 1.12; }
-.get .cmd{ align-self: stretch; }
-@media (max-width: 767px){
-  .get{ grid-template-columns: minmax(0, 1fr); }
-  .get > div, .get > div + div{ padding: 28px 0 32px; border-left: 0; }
-  .get > div + div{ border-top: 1px solid var(--line); }
+/* Each section after the hero slides up over the one before with a rounded top edge, and the
+   hero recedes as it goes, where the browser can tie animation to scrolling. */
+.sheet-up{ position: relative; z-index: 1; margin-top: -40px; border-radius: 40px 40px 0 0; background-color: var(--bg); }
+.closing.sheet-up{ margin-top: 0; background-color: var(--stage); }
+@supports (animation-timeline: view()){
+  @media (prefers-reduced-motion: no-preference){
+    .hero > *{ animation: recede linear both; animation-timeline: view(); animation-range: exit 0% exit 90%; }
+    @keyframes recede{ to{ opacity: 0.3; scale: 0.94; } }
+  }
 }
-.solo{ display: flex; flex-direction: column; align-items: flex-start; gap: 18px; max-width: 46rem; margin-top: clamp(40px, 5vw, 64px); padding-top: clamp(28px, 4vw, 44px); border-top: 1px solid var(--line); }
-.solo .cmd{ align-self: stretch; }
+.display{ font: 650 clamp(2.5rem, 1.25rem + 3.8vw, 4.75rem)/1.02 var(--display); letter-spacing: -0.035em; max-width: 18ch; text-wrap: balance; }
+
+/* Everything under the hero keeps the features' three columns: a block's heading takes the first
+   and its content the other two, down to the footer. */
+.thirds{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px clamp(24px, 4vw, 56px); align-items: start; }
+.thirds > :nth-child(2):last-child{ grid-column: 2 / -1; }
+@media (max-width: 899px){ .thirds{ grid-template-columns: minmax(0, 1fr); } .thirds > :nth-child(2):last-child{ grid-column: auto; } }
+
+/* Features: three pieces of the switcher itself, each with a caption. They are drawn with the
+   demo's panel styles, so they change system when the demo does. */
+.feats{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(24px, 4vw, 56px); margin: clamp(40px, 5vw, 72px) 0 0; padding: 0; list-style: none; }
+/* Both systems' versions sit in the same cell, and the one not shown keeps its room, so the
+   section is as tall either way. */
+.feats li{ display: grid; container-type: inline-size; }
+.feats li > *{ grid-area: 1 / 1; min-width: 0; }
+[data-demo="mac"] .for-win, :root:not([data-demo="mac"]) .for-mac{ visibility: hidden; }
+[data-demo="mac"] .say-win, :root:not([data-demo="mac"]) .say-mac{ display: none; }
+.feats h3{ margin-top: 22px; font: 650 1.3125rem/1.2 var(--display); letter-spacing: -0.015em; }
+.feats p{ max-width: 30rem; margin-top: 6px; line-height: 1.5; color: var(--text-2); text-wrap: pretty; }
+
+/* A piece of the panel: its surface, ring and rows at the panel's own scale, the width of its
+   list. Off the desktop it is opaque and casts a short shadow on the page. */
+.sw.fx{
+  --canvas: oklch(0.21 0 0);
+  width: auto; max-width: 26rem; height: 15em; overflow: hidden; font-size: min(100cqi / 22.75, 18px);
+  -webkit-backdrop-filter: none; backdrop-filter: none; transition: none; cursor: default;
+  box-shadow: inset 0 0 0 1px var(--ring), 0 1.25em 2.5em -1.5em oklch(0 0 0 / 0.5);
+  user-select: none; -webkit-user-select: none;
+}
+[data-mode="windows"] .sw.fx{ --canvas: rgb(14 16 20); box-shadow: inset 0 0 0 1px rgb(97 97 100), 0 1.25em 2.5em -1.5em oklch(0 0 0 / 0.5); }
+.fx-rows{ display: grid; align-content: start; }
+[data-mode="windows"] .fx-rows{ gap: 0.25em; }
+/* The list runs on past the edge. */
+.fx-more::after{ content: ""; position: absolute; inset: auto 1px 1px; height: 4em; background: linear-gradient(transparent, var(--canvas) 80%); pointer-events: none; }
+
+/* The rows stop short of the ring, where the fade ends, so no sliver of a line shows under it. */
+.fx-more .fx-rows{ height: calc(100% + 0.75em - 2px); overflow: hidden; }
+/* The selected row stays clear of the fade, wherever it is. */
+.fx-more .row[aria-current="true"]{ position: relative; z-index: 1; }
+
+/* A keycap, as the icon draws it: a face over its skirt. Lit, it is the key being pressed. */
+.fx-key{
+  display: grid; place-items: center; width: 2.5em; height: 2.3em; border-radius: 0.55em;
+  font: 600 1.5em/1 var(--display); color: var(--tx);
+  background: linear-gradient(oklch(0.37 0 0), oklch(0.31 0 0));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.14), 0 0.2em 0 oklch(0.12 0 0);
+}
+[data-mode="windows"] .fx-key{ border-radius: 0.3em; background: linear-gradient(rgb(54 61 74), rgb(41 47 58)); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 0.2em 0 rgb(3 4 6); }
+.fx .fx-key.lit{
+  color: oklch(0.98 0.015 250); background: linear-gradient(oklch(0.68 0.15 250), oklch(0.56 0.18 256));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.35), 0 0.2em 0 oklch(0.4 0.15 260), 0 0.5em 1.6em oklch(0.6 0.17 252 / 0.55);
+}
+@media (hover: hover) and (pointer: fine){
+  .fx .fx-act:hover .fx-key{
+    color: oklch(0.98 0.015 250); background: linear-gradient(oklch(0.68 0.15 250), oklch(0.56 0.18 256));
+    box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.35), 0 0.2em 0 oklch(0.4 0.15 260), 0 0.5em 1.6em oklch(0.6 0.17 252 / 0.55);
+  }
+}
+/* Pick a window: the key that chose the selected row sits over the end of the list. */
+.fx-pick .fx-key{ position: absolute; z-index: 2; right: 0.6em; bottom: 0.7em; font-variant-numeric: tabular-nums; }
+/* Act on it: the selected row, and under it each key with what it does. */
+.fx-acts{ position: absolute; inset: auto 0.75em 1.75em; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.fx-act{ display: grid; justify-items: center; gap: 0.85em; }
+.fx-act small{ font-size: 0.75em; color: var(--tx-2); white-space: nowrap; }
+/* Find it: the Windows panel's search field, under what it found. */
+.fx-find{
+  position: absolute; inset: auto 0.75em 0.75em; display: flex; align-items: center; gap: 0.6em; height: 2.75em; padding: 0 0.8em;
+  border-radius: 0.375em; background: rgb(21 24 30); box-shadow: inset 0 0 0 1px rgb(64 71 84); color: var(--tx-2);
+}
+.fx-find svg{ flex: none; width: 1.1em; height: 1.1em; }
+.fx-find span{ flex: 1; font-size: 0.9375em; color: var(--tx); }
+.fx-find span::after{ content: ""; display: inline-block; width: 1px; height: 1.2em; margin-inline-start: 1px; vertical-align: -0.22em; background: var(--tx); }
+
+/* Privacy closes the features as one plain statement. It sits on a surface of its own so it
+   does not float: the heading in the first column, the sentence across the other two. */
+.pledge{ margin-top: clamp(56px, 7vw, 96px); padding: clamp(28px, 3.6vw, 48px); border-radius: 24px; background: var(--bg-2); align-items: center; }
+.pledge h2{ font: 650 clamp(1.375rem, 1.05rem + 0.9vw, 2rem)/1.12 var(--display); letter-spacing: -0.022em; }
+.pledge p{ max-width: 36rem; font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem); line-height: 1.5; color: var(--text-2); text-wrap: pretty; }
+@media (max-width: 899px){ .thirds.pledge{ row-gap: 12px; } }
+
+
+/* The close: big, left-aligned, on the stage again, with the lit Tab key beside it. On a computer the
+   command is the install; a phone gets a button to each system's instructions. */
+.closing-grid{ display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr); align-items: center; gap: clamp(24px, 5vw, 80px); }
+/* The key is the app's icon, and a button: pressing it sinks the cap into its foot, changes its
+   colour to the next of the app's icon colours, and lets it spring back. Its glow is its own
+   colour, drawn in when it is down and let out again as it rises. */
+.closing-key{
+  --key: #3297e9; --key-skirt-top: #2f6fb8; --key-skirt-bottom: #1f4f8c; --key-face-top: #4aa6f0; --key-face-bottom: #2f84d4; --key-ink: #f0f8ff;
+  justify-self: end; width: 100%; max-width: 400px; aspect-ratio: 1; padding: 0; border: 0; background: none; cursor: pointer;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  filter: drop-shadow(0 24px 70px color-mix(in oklab, var(--key) 48%, transparent));
+  transition: filter 420ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.closing-key svg{ width: 100%; height: 100%; overflow: visible; }
+.closing-key stop, .key-legend{ transition: stop-color 160ms ease-out, stroke 160ms ease-out; }
+.key-legend{ stroke: var(--key-ink); }
+/* It rises past its resting height and settles, as a key does when a finger lets go. */
+.key-cap{ transition: translate 460ms cubic-bezier(0.3, 1.9, 0.45, 1); }
+.closing-key.down{ filter: drop-shadow(0 12px 36px color-mix(in oklab, var(--key) 32%, transparent)); transition-duration: 70ms; }
+.closing-key.down .key-cap{ translate: 0 44px; transition: translate 70ms cubic-bezier(0.3, 0, 0.4, 1); }
+@media (hover: hover) and (pointer: fine){ .closing-key:hover:not(.down){ filter: drop-shadow(0 24px 70px color-mix(in oklab, var(--key) 62%, transparent)); } }
+/* Focus is shown on the key's own outline, not on the square it sits in. */
+.closing-key:focus-visible{ outline: none; }
+.key-ring{ stroke: var(--stage-text); opacity: 0; }
+.closing-key:focus-visible .key-ring{ opacity: 0.9; }
+/* With reduced motion the key stays put and only its colour changes. */
+@media (prefers-reduced-motion: reduce){ .closing-key.down .key-cap{ translate: none; } }
+@media (max-width: 759px){ .closing-grid{ grid-template-columns: minmax(0, 1fr); } .closing-key{ grid-row: 1; justify-self: start; max-width: 140px; } }
+.closing .closing-cmd{ margin-top: 36px; }
+:root:not([data-os="other"]) .closing .cta{ margin-top: 18px; }
+:root:not([data-os="other"]) .closing .cta .btn{ display: none; }
+/* The key's glow stays on the stage. */
+.closing{ text-align: start; overflow: clip; }
+.closing .display{ max-width: 14ch; font-size: clamp(2.75rem, 1.3rem + 4.6vw, 5.75rem); }
+.closing .cta{ justify-content: flex-start; margin-top: 36px; }
+
+@media (max-width: 899px){
+  .feats{ grid-template-columns: minmax(0, 1fr); gap: 48px; }
+}
+/* On a tablet each piece has its caption beside it rather than a blank half-row. */
+@media (min-width: 720px) and (max-width: 899px){
+  .feats li > div{ display: grid; grid-template-columns: 25.6rem minmax(0, 1fr); column-gap: 36px; }
+  .feats .fx{ grid-row: 1 / span 2; }
+  .feats h3{ align-self: end; margin-top: 0; }
+}
+@media (max-width: 639px){
+  .sheet-up{ border-radius: 28px 28px 0 0; }
+}
 .steps{ margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 12px; }
 .steps > li{ counter-increment: step; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; color: var(--text-2); text-wrap: pretty; }
 .steps > li::before{ content: counter(step); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .steps strong{ color: var(--text); font-weight: 600; }
-.steps a, .prose a, .faq a, .get a:not(.btn), .note a, .platforms a{ color: var(--text); }
-.more-link{ font-weight: 500; }
+.steps a, .prose a, .faq a, .note a{ color: var(--accent-text); }
 code.inline{ font-size: 0.85em; padding: 1px 6px; border-radius: 6px; background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); }
 .prose{ display: grid; gap: 12px; color: var(--text-2); text-wrap: pretty; }
 .prose strong{ color: var(--text); font-weight: 600; }
@@ -187,30 +618,57 @@ code.inline{ font-size: 0.85em; padding: 1px 6px; border-radius: 6px; background
 /* Copyable command: always on black, like a terminal. */
 .cmd{
   display: flex; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%;
-  padding: 6px 6px 6px 16px; border-radius: 12px; text-align: start;
+  padding: 6px 6px 6px 18px; border-radius: 12px; text-align: start;
   background: oklch(0.2 0 0); color: oklch(0.95 0 0); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.1);
   font: 400 0.875rem/1.5 var(--mono);
 }
-.stage .cmd{ background: oklch(0.16 0 0); }
-.cmd .p{ color: oklch(0.62 0 0); user-select: none; margin-inline-end: 6px; padding-top: 7px; }
+.stage .cmd{ background: oklch(0.2 0.02 262); }
+/* The line sits a pixel below the middle of its own line box, where its capitals and ascenders
+   make it look centred beside the button. */
+.cmd .p{ color: oklch(0.78 0.12 240); user-select: none; margin-inline-end: 6px; padding-top: 8px; }
 /* Wraps rather than scrolls, so the whole command is visible before anyone pastes it. */
-.cmd code{ flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 7px 0; }
+.cmd code{ flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 8px 0 6px; }
 .cmd .t-prog{ color: oklch(0.98 0 0); }
 .cmd .t-flag, .cmd .t-op{ color: oklch(0.7 0 0); }
 .cmd .t-path{ color: oklch(0.86 0 0); }
-.cmd .icon-btn{ width: 38px; height: 38px; border-radius: 6px; color: oklch(0.85 0 0); }
-.cmd .icon-btn[data-copied] .i-copy, .cmd .icon-btn:not([data-copied]) .i-check{ display: none; }
-
-/* Install sheet on the Mac button */
-.sheet{
-  width: min(560px, calc(100vw - 32px)); padding: 24px; border: 0; border-radius: 20px;
-  background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line), 0 40px 80px -20px oklch(0 0 0 / 0.45);
+.cmd .icon-btn{ position: relative; width: 38px; height: 38px; border-radius: 6px; color: oklch(0.85 0 0); }
+/* The install command hugs its line, with the same room before the prompt as before the button.
+   The prompt, the command and the button's label share one baseline, and the button centres the
+   label on its capitals, so the line is set right in any system's fonts, not only in this one's. */
+.hero-cmd, .closing-cmd{ align-items: baseline; width: fit-content; }
+:is(.hero-cmd, .closing-cmd) .p{ padding-top: 0; }
+:is(.hero-cmd, .closing-cmd) code{ padding: 0 0 7px; }
+/* There the button says what it does. Its icon has air inside its own box, so it takes less
+   padding than the label to look as far from the edge. */
+.cmd .copy-btn{ width: auto; margin-inline-start: 14px; padding: 0 11px 0 33px; opacity: 1; background: oklch(1 0 0 / 0.08); font: 500 0.8125rem/1 var(--sans); }
+/* The icons leave the flow, so the label alone gives the button its baseline. */
+.cmd .icon-btn.copy-btn svg{ grid-area: auto; position: absolute; left: 8px; top: calc(50% - 10px); }
+.cmd .copy-btn span{ padding-bottom: 1px; text-box: trim-both cap alphabetic; }
+/* Copying: the copy icon blurs out as an azure check draws itself in, and "Copied" shows above
+   the button; both go back after a moment. */
+.cmd .icon-btn svg{ grid-area: 1 / 1; transition: opacity 100ms ease-out, scale 140ms cubic-bezier(0.23, 1, 0.32, 1), filter 100ms ease-out; }
+.cmd .icon-btn .i-check{ stroke-dasharray: 20; stroke-dashoffset: 0; transition: opacity 100ms ease-out, stroke-dashoffset 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+.cmd .icon-btn[data-copied] .i-copy, .cmd .icon-btn:not([data-copied]) .i-check{ opacity: 0; }
+.cmd .icon-btn:not([data-copied]) .i-check{ stroke-dashoffset: 20; }
+.cmd .icon-btn .i-check{ color: oklch(0.82 0.12 240); }
+.cmd .icon-btn[data-copied]{ opacity: 1; }
+.cmd .icon-btn::after{
+  content: "Copied"; position: absolute; bottom: calc(100% + 8px); left: 50%; translate: -50% 4px; opacity: 0;
+  padding: 5px 8px; border-radius: 6px; font: 500 0.75rem/1 var(--sans); white-space: nowrap; pointer-events: none;
+  color: oklch(0.2 0.02 262); background: oklch(0.95 0.01 245); box-shadow: 0 4px 12px oklch(0 0 0 / 0.3);
+  transition: opacity 100ms ease-out, translate 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-.sheet::backdrop{ background: oklch(0 0 0 / 0.5); backdrop-filter: blur(4px); }
-.sheet h2{ font-size: 1.375rem; font-weight: 650; letter-spacing: -0.02em; }
-.sheet p{ margin-top: 8px; color: var(--text-2); font-size: 1rem; }
-.sheet .cmd{ margin-top: 18px; }
-.sheet .row{ margin-top: 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 0.9375rem; }
+.cmd .icon-btn[data-copied]::after{ opacity: 1; translate: -50% 0; }
+@media (prefers-reduced-motion: no-preference){ .cmd .icon-btn[data-copied] .i-copy{ scale: 0.5; filter: blur(4px); } }
+@media (prefers-reduced-motion: reduce){ .cmd .icon-btn .i-check{ stroke-dashoffset: 0 !important; } .cmd .icon-btn::after{ translate: -50% 0; } }
+
+/* The install command's border beam, drawn by site.js: two lines of light on the 1px ring, with
+   a blurred copy underneath for the glow. */
+.hero-cmd, .closing-cmd{ position: relative; }
+.beam{ position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.beam rect{ x: 0.5px; y: 0.5px; width: calc(100% - 1px); height: calc(100% - 1px); rx: 11.5px; fill: none; stroke-width: 1px; }
+.beam.glow{ filter: blur(3px); }
+.beam.glow rect{ stroke-width: 2px; }
 
 /* Tables */
 .table-wrap{ border-top: 1px solid var(--line-2); overflow-x: auto; }
@@ -231,24 +689,15 @@ kbd{
   display: inline-grid; place-items: center; min-width: 1.8em; height: 1.8em; padding: 0 0.45em; border-radius: 0.38em; vertical-align: 0.05em;
   font: 500 0.8125em/1 var(--sans); color: var(--text); background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2), 0 1px 0 var(--line-2);
 }
-.chips{ display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.chips li{ padding: 7px 14px; border-radius: 999px; font-size: 0.9375rem; color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line-2); }
-.cards{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 clamp(24px, 5vw, 64px); border-top: 1px solid var(--line-2); }
-.cards > div{ display: grid; gap: 8px; align-content: start; padding: 26px 0; border-bottom: 1px solid var(--line); }
-.cards h3{ font-size: 1.1875rem; font-weight: 650; letter-spacing: -0.01em; }
-.cards p{ color: var(--text-2); text-wrap: pretty; }
-.cards strong{ color: var(--text); font-weight: 600; }
-@media (max-width: 767px){ .cards{ grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 599px){ .compare{ font-size: 0.9375rem; } .compare th, .compare td{ padding: 12px 10px 12px 0; } }
 
-/* Two-column block: heading on the left, content on the right */
-.split{ display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: clamp(28px, 6vw, 96px); align-items: start; }
-.split .head{ margin-bottom: 0; }
-/* The heading stays beside the list it introduces while the list scrolls past. */
-@media (min-width: 900px){ .split > .head{ position: sticky; top: 40px; } }
-@media (max-width: 899px){ .split{ grid-template-columns: minmax(0, 1fr); } }
+/* At the end, a phone or an unknown system gets both systems' buttons; there is no further
+   section to send it to. */
+[data-os="other"] .closing .cta .btn:is(.only-mac, .only-win){ display: inline-flex !important; }
 
 /* FAQ */
+/* The heading stays beside the questions while they scroll past. */
+@media (min-width: 900px){ .thirds > .head{ position: sticky; top: 40px; margin-bottom: 0; } }
 .faq details{ border-bottom: 1px solid var(--line); }
 .faq details:first-child{ border-top: 1px solid var(--line-2); }
 summary{ list-style: none; cursor: pointer; user-select: none; }
@@ -259,23 +708,31 @@ summary::-webkit-details-marker{ display: none; }
 .faq .plus::after{ rotate: 90deg; }
 .faq details[open] .plus{ transform: rotate(45deg); }
 .faq .ans{ padding: 0 40px 22px 0; color: var(--text-2); display: grid; gap: 10px; text-wrap: pretty; }
-details::details-content{ opacity: 0; content-visibility: hidden; transition: opacity 160ms ease-out, content-visibility 160ms allow-discrete; }
-details[open]::details-content{ opacity: 1; content-visibility: visible; transition-duration: 220ms; }
+details::details-content{ opacity: 0; content-visibility: hidden; transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1), content-visibility 150ms allow-discrete; }
+details[open]::details-content{ opacity: 1; content-visibility: visible; transition-duration: 200ms; }
+/* The answer opens and closes its own height, so the questions below glide instead of jumping
+   after the fade. Browsers that cannot animate to auto keep the fade alone. */
+@supports (interpolate-size: allow-keywords){
+  @media (prefers-reduced-motion: no-preference){
+    details{ interpolate-size: allow-keywords; }
+    details::details-content{ height: 0; overflow: clip; transition-property: opacity, content-visibility, height; }
+    details[open]::details-content{ height: auto; }
+  }
+}
 
 /* Footer */
 footer{ margin-top: var(--space); padding: 48px 0 max(48px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
-.foot{ display: grid; grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr)); gap: 40px 32px; }
-.foot .brand .mark{ color: var(--text); }
+.foot{ row-gap: 40px; }
+.foot .brand .mark{ color: var(--accent-text); }
 .colophon{ margin-top: 14px; font-size: 0.875rem; line-height: 1.65; color: var(--text-3); max-width: 42ch; }
 .foot h2{ font: 600 0.9375rem/1.4 var(--sans); margin-bottom: 12px; }
 .foot ul{ list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .foot ul a{ display: inline-flex; align-items: center; min-height: 34px; font-size: 0.9375rem; color: var(--text-2); text-decoration: none; transition: color 150ms ease-out; }
 @media (hover: hover) and (pointer: fine){ .foot ul a:hover{ color: var(--text); } }
-@media (max-width: 859px){ .foot{ grid-template-columns: repeat(3, minmax(0, 1fr)); } .foot > :first-child{ grid-column: 1 / -1; } }
-@media (max-width: 519px){ .foot{ grid-template-columns: repeat(2, minmax(0, 1fr)); } .foot ul a{ min-height: 42px; } }
+@media (max-width: 899px){ .foot{ grid-template-columns: repeat(2, minmax(0, 1fr)); } .foot > :first-child{ grid-column: 1 / -1; } }
+@media (max-width: 519px){ .foot ul a{ min-height: 42px; } }
 
 @media (prefers-reduced-motion: reduce){
-  html{ scroll-behavior: auto; }
-  .btn, .icon-btn, .link svg, .faq .plus, details::details-content, details[open]::details-content{ transition: none; }
-  .btn:active{ transform: none; }
+  /* Movement stops; fades and colour changes stay, so every change still shows. */
+  .link svg, .faq .plus{ transition: none; }
 }
