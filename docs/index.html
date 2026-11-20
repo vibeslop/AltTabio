@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AltTabio: free Alt+Tab replacement for Windows and Mac</title>
+<title>AltTabio: free Alt+Tab and Cmd+Tab replacement</title>
 <meta name="description" content="AltTabio replaces Alt+Tab on Windows and Cmd+Tab on macOS with a window list, number-key shortcuts, and a preview. Free, open source, no telemetry." />
 <meta name="application-name" content="AltTabio" />
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
@@ -21,7 +21,7 @@
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="AltTabio" />
 <meta property="og:locale" content="en_US" />
-<meta property="og:title" content="AltTabio: free Alt+Tab replacement for Windows and Mac" />
+<meta property="og:title" content="AltTabio: free Alt+Tab and Cmd+Tab replacement" />
 <meta property="og:description" content="A window list, number-key shortcuts, and a preview. Replaces Alt+Tab on Windows and Cmd+Tab on macOS. Free and open source." />
 <meta property="og:url" content="https://vibeslop.github.io/AltTabio/" />
 <meta property="og:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
@@ -30,7 +30,7 @@
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" content="AltTabio: Stop tabbing past the window you want. The Mac switcher open over a desktop, with numbered windows." />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="AltTabio: free Alt+Tab replacement for Windows and Mac" />
+<meta name="twitter:title" content="AltTabio: free Alt+Tab and Cmd+Tab replacement" />
 <meta name="twitter:description" content="A window list, number-key shortcuts, and a preview. Replaces Alt+Tab on Windows and Cmd+Tab on macOS." />
 <meta name="twitter:image" content="https://vibeslop.github.io/AltTabio/images/og-share.jpg" />
 <link rel="stylesheet" href="site.css" />
@@ -70,7 +70,7 @@
       "@type": "WebPage",
       "@id": "https://vibeslop.github.io/AltTabio/#webpage",
       "url": "https://vibeslop.github.io/AltTabio/",
-      "name": "AltTabio: free Alt+Tab replacement for Windows and Mac",
+      "name": "AltTabio: free Alt+Tab and Cmd+Tab replacement",
       "isPartOf": {"@id": "https://vibeslop.github.io/AltTabio/#website"},
       "about": {"@id": "https://vibeslop.github.io/AltTabio/#software"},
       "primaryImageOfPage": {"@type": "ImageObject", "url": "https://vibeslop.github.io/AltTabio/images/og-share.jpg"},
@@ -172,7 +172,7 @@
   <section class="stage hero" aria-labelledby="hero-title">
     <div class="wrap hero-copy">
       <h1 id="hero-title">Stop tabbing past <em>the window you want.</em></h1>
-      <p class="sub">AltTabio puts every window in Alt+Tab and Cmd+Tab. Press 1 to 9 to go straight to one. Free and open&nbsp;source.</p>
+      <p class="sub">AltTabio replaces Alt+Tab and Cmd+Tab with a window list, previews, and 1–9 shortcuts. Free and open&nbsp;source.</p>
       <div class="hero-get">
         <div class="get-mac">
           <div class="cmd hero-cmd">
@@ -243,7 +243,7 @@
               </div>
               <span class="fx-key lit">3</span>
             </div>
-            <h3>Press 1 to 9</h3><p>The first nine windows answer to 1 to 9. Press one and you're there, without stepping through the list.</p></div>
+            <h3>Press 1 to 9</h3><p>Keys 1 to 9 jump straight to the first nine windows, without stepping through the list.</p></div>
           <div class="for-mac" data-mode="mac">
             <div class="sw fx fx-more fx-pick" aria-hidden="true">
               <div class="fx-rows">
@@ -255,7 +255,7 @@
                 <div class="row"><span class="n">6</span><span class="t">Weather this week</span></div>              </div>
               <span class="fx-key lit">3</span>
             </div>
-            <h3>Press 1 to 9</h3><p>Each window of the selected app has a number beside it. Press it and you're there.</p></div>
+            <h3>Press 1 to 9</h3><p>The first nine windows of the selected app are numbered 1 to 9. Press a number to jump straight to it.</p></div>
         </li>
         <li>
           <div class="for-win" data-mode="windows">
@@ -289,7 +289,7 @@
               </div>
               <div class="fx-acts"><span class="fx-act"><span class="fx-key">F4</span><small>Close</small></span><span class="fx-act"><span class="fx-key">F5</span><small>Minimize</small></span><span class="fx-act"><span class="fx-key">F6</span><small>Maximize</small></span><span class="fx-act"><span class="fx-key">F8</span><small>Terminate</small></span></div>
             </div>
-            <h3>Act from the list</h3><p>Close, minimize, maximize or end the selected window's program without leaving the switcher.</p></div>
+            <h3>Act from the list</h3><p>Close, minimize, or maximize a window, or terminate its app, without leaving the switcher.</p></div>
           <div class="for-mac" data-mode="mac">
             <div class="sw fx" aria-hidden="true">
               <div class="fx-rows">
@@ -302,8 +302,8 @@
         </li>
       </ul>
       <div id="about" class="pledge thirds">
-        <h2>Nothing to pay. Nothing sent.</h2>
-        <p>AltTabio is free, with no account and no ads. It goes online for one thing, to check for its own updates, and you can switch that off.</p>
+        <h2>Nothing to pay. Nothing collected.</h2>
+        <p>AltTabio is free, with no account and no ads. It goes online for one thing, to check for its own updates, and you can turn that off.</p>
       </div>
     </div>
   </section>
@@ -349,7 +349,7 @@
   <section class="stage closing sheet-up" id="install" aria-labelledby="closing-title">
     <div class="wrap closing-grid">
       <div>
-      <h2 id="closing-title" class="display">Every window, one key away.</h2>
+      <h2 id="closing-title" class="display">Switch to the window you meant.</h2>
       <div class="cmd closing-cmd only-mac">
         <span class="p" aria-hidden="true">$</span>
         <code id="closing-install-cmd">curl -fsSL https://vibeslop.github.io/AltTabio/install.sh | sh</code>
