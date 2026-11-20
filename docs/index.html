@@ -114,14 +114,14 @@
       "@type": "FAQPage",
       "@id": "https://vibeslop.github.io/AltTabio/#faq-schema",
       "mainEntity": [
-        {"@type": "Question", "name": "Is AltTabio really free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. AltTabio is open-source software under the MIT license. There is no trial, no ads, no account, and no paid version."}},
-        {"@type": "Question", "name": "Does AltTabio collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. The app has no analytics. It contacts GitHub only to check for and download its own updates, and those requests carry nothing about your windows, what you type, or your settings. You can turn automatic updates off in Settings and still check by hand. The source code is public, so anyone can check."}},
-        {"@type": "Question", "name": "Will AltTabio slow down my computer?", "acceptedAnswer": {"@type": "Answer", "text": "It is a small native program written in Rust. The switcher waits for the shortcut; update checks and downloads run in the background."}},
+        {"@type": "Question", "name": "Is AltTabio really free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. AltTabio is open-source software under the MIT license. No trial, no ads, no account, and no paid version."}},
+        {"@type": "Question", "name": "Does it collect any data?", "acceptedAnswer": {"@type": "Answer", "text": "No. AltTabio has no tracking. It contacts GitHub only to check for and download its own updates, and those requests send nothing about your windows, what you type, or your settings. You can turn automatic updates off in Settings and still check yourself. The source code is public, so anyone can read it."}},
         {"@type": "Question", "name": "Why does Windows ask for administrator permission?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio needs it to see Alt+Tab before Windows does and to close a frozen program when you ask. Those are the only reasons."}},
-        {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works."}},
-        {"@type": "Question", "name": "Why install AltTabio with a command?", "acceptedAnswer": {"@type": "Answer", "text": "Having Apple or Windows vouch for an app costs its developer a yearly fee, and AltTabio doesn't pay it. So a copy downloaded in a browser is blocked on a Mac and comes with a warning on Windows. The install command checks that the download really is AltTabio's, then installs it. On a Mac every release is signed the same way, so macOS keeps your permissions across updates. It takes a minute. On a Mac, press Cmd+Space, type Terminal and press Return. On Windows, press Start, type PowerShell and press Enter. Then paste the command and press Return or Enter."}},
-        {"@type": "Question", "name": "How do I get the built-in switcher back?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, right-click the AltTabio tray icon and choose Exit. On a Mac, quit AltTabio from its menu bar icon, or turn off Replace Cmd+Tab in its settings. On Windows you can also replace only Alt+Tab or only Win+Tab."}},
-        {"@type": "Question", "name": "How do I uninstall AltTabio?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, turn off Start at sign-in if you enabled it, exit from the tray icon, and delete the folder. On a Mac, turn off Launch at login, quit AltTabio, delete AltTabio.app, and remove its settings folder and permissions."}}
+        {"@type": "Question", "name": "Why does the Mac version ask for Accessibility and Screen Recording?", "acceptedAnswer": {"@type": "Answer", "text": "Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, which are never saved or sent. AltTabio asks for it after your first Cmd+Tab, and the list still works without it."}},
+        {"@type": "Question", "name": "Why install with a command?", "acceptedAnswer": {"@type": "Answer", "text": "Apple and Windows block or warn about browser downloads unless a developer pays a yearly fee, and AltTabio doesn't. The install command downloads the latest release from GitHub over HTTPS, verifies AltTabio's own signature before installing anything, puts the app in Applications or Program Files, and opens it. Every Mac release is signed with the same certificate, so macOS keeps your permissions across updates. It takes a minute. On a Mac, press Cmd+Space, type Terminal, and press Return. On Windows, press Start, type PowerShell, and press Enter. Then paste the command and press Return or Enter. Prefer not to run a command? You can download and verify it by hand on a Mac or on Windows."}},
+        {"@type": "Question", "name": "How does AltTabio update?", "acceptedAnswer": {"@type": "Answer", "text": "AltTabio checks GitHub once a day, installs newer releases automatically, and restarts while your computer is idle. You don't need to run the install command again. You can turn automatic updates off in Settings and check from the tray or menu bar icon instead."}},
+        {"@type": "Question", "name": "How do I get the built-in switcher back?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, right-click the AltTabio tray icon and choose Exit, or turn off Replace Alt+Tab or Replace Win+Tab in Settings. On a Mac, quit AltTabio from its menu bar icon, or turn off replacing Cmd+Tab in Settings."}},
+        {"@type": "Question", "name": "How do I uninstall it?", "acceptedAnswer": {"@type": "Answer", "text": "On Windows, turn off Start at sign-in if you enabled it, exit from the tray icon, and delete its folder (C:\\Program Files\\AltTabio by default). On a Mac, turn off Launch at login, quit AltTabio, delete AltTabio.app, and remove its settings and permissions. The docs have the command for that."}}
       ]
     }
   ]
@@ -185,7 +185,7 @@
             </button>
             <span class="sr-only copy-status" aria-live="polite"></span>
           </div>
-          <p class="hero-meta">Paste it into <a href="#faq-terminal">Terminal</a> · Checks the download is genuine · macOS 26 or later</p>
+          <p class="hero-meta">Paste into Terminal and press Return · macOS 26 or later · <a href="#faq-terminal">Why a command?</a></p>
         </div>
         <div class="get-win">
           <div class="cmd hero-cmd">
@@ -198,7 +198,7 @@
             </button>
             <span class="sr-only copy-status" aria-live="polite"></span>
           </div>
-          <p class="hero-meta">Paste it into <a href="#faq-terminal">PowerShell</a> · Checks the download is genuine · Windows 10 and 11</p>
+          <p class="hero-meta">Paste into PowerShell and press Enter · Windows 10 and 11 · <a href="#faq-terminal">Why a command?</a></p>
         </div>
         <div class="get-other">
           <div class="cta"><a class="btn only-other" href="#install">Install on your Mac or PC</a></div>
@@ -316,11 +316,11 @@
       <div class="faq">
         <details>
           <summary>Is AltTabio really free?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>Yes. AltTabio is open-source software under the MIT license. There is no trial, no ads, no account, and no paid version.</p></div>
+          <div class="ans"><p>Yes. AltTabio is open-source software under the MIT license. No trial, no ads, no account, and no paid version.</p></div>
         </details>
         <details>
           <summary>Does it collect any data?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>No. The app has no analytics. It contacts GitHub only to check for and download its own updates, and those requests carry nothing about your windows, what you type, or your settings. You can turn automatic updates off in Settings and still check by hand. The <a href="https://github.com/vibeslop/AltTabio">source code</a> is public, so anyone can check.</p></div>
+          <div class="ans"><p>No. AltTabio has no tracking. It contacts GitHub only to check for and download its own updates, and those requests send nothing about your windows, what you type, or your settings. You can turn automatic updates off in Settings and still check yourself. The <a href="https://github.com/vibeslop/AltTabio">source code</a> is public, so anyone can read it.</p></div>
         </details>
         <details>
           <summary>Why does Windows ask for administrator permission?<span class="plus" aria-hidden="true"></span></summary>
@@ -328,19 +328,23 @@
         </details>
         <details>
           <summary>Why does the Mac version ask for Accessibility and Screen Recording?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, and AltTabio asks for it after your first Cmd+Tab. Without it the list still works.</p></div>
+          <div class="ans"><p>Accessibility lets AltTabio see Cmd+Tab before macOS does and raise, minimize, or close windows. Screen Recording is only for window previews, which are never saved or sent. AltTabio asks for it after your first Cmd+Tab, and the list still works without it.</p></div>
         </details>
         <details id="faq-terminal">
           <summary>Why install with a command?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>Having Apple or Windows vouch for an app costs its developer a yearly fee, and AltTabio doesn't pay it. So a copy downloaded in a browser is blocked on a Mac and comes with a warning on Windows. The install command checks that the download really is AltTabio's, then installs it. On a Mac every release is signed the same way, so macOS keeps your permissions across updates.</p><p>It takes a minute. On a Mac, press ⌘&nbsp;Space, type Terminal and press Return. On Windows, press Start, type PowerShell and press Enter. Then paste the command and press Return or Enter.</p><p>You can also download it and check it by hand, on a <a href="docs/#manual-mac">Mac</a> or on <a href="docs/#download-windows">Windows</a>.</p></div>
+          <div class="ans"><p>Apple and Windows block or warn about browser downloads unless a developer pays a yearly fee, and AltTabio doesn't. The install command downloads the latest release from GitHub over HTTPS, verifies AltTabio's own signature before installing anything, puts the app in Applications or Program Files, and opens it. Every Mac release is signed with the same certificate, so macOS keeps your permissions across updates.</p><p>It takes a minute. On a Mac, press Cmd+Space, type Terminal, and press Return. On Windows, press Start, type PowerShell, and press Enter. Then paste the command and press Return or Enter.</p><p>Prefer not to run a command? You can download and verify it by hand on a <a href="docs/#manual-mac">Mac</a> or on <a href="docs/#download-windows">Windows</a>.</p></div>
+        </details>
+        <details>
+          <summary>How does AltTabio update?<span class="plus" aria-hidden="true"></span></summary>
+          <div class="ans"><p>AltTabio checks GitHub once a day, installs newer releases automatically, and restarts while your computer is idle. You don't need to run the install command again. You can turn automatic updates off in Settings and check from the tray or menu bar icon instead.</p></div>
         </details>
         <details>
           <summary>How do I get the built-in switcher back?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>On Windows, right-click the AltTabio tray icon and choose Exit. On a Mac, quit AltTabio from its menu bar icon, or turn off Replace ⌘ Tab in its settings.</p><p>On Windows you can also replace only Alt+Tab or only Win+Tab.</p></div>
+          <div class="ans"><p>On Windows, right-click the AltTabio tray icon and choose Exit, or turn off Replace Alt+Tab or Replace Win+Tab in Settings.</p><p>On a Mac, quit AltTabio from its menu bar icon, or turn off replacing Cmd+Tab in Settings.</p></div>
         </details>
         <details>
           <summary>How do I uninstall it?<span class="plus" aria-hidden="true"></span></summary>
-          <div class="ans"><p>On Windows, turn off <strong>Start at sign-in</strong> if you enabled it, exit from the tray icon, and delete the folder.</p><p>On a Mac, turn off Launch at login, quit AltTabio, delete <code class="inline">AltTabio.app</code>, and remove its settings and permissions. The <a href="docs/#uninstall">docs</a> have the commands.</p></div>
+          <div class="ans"><p>On Windows, turn off Start at sign-in if you enabled it, exit from the tray icon, and delete its folder (<code class="inline">C:\Program Files\AltTabio</code> by default).</p><p>On a Mac, turn off Launch at login, quit AltTabio, delete <code class="inline">AltTabio.app</code>, and remove its settings and permissions. The <a href="docs/#uninstall">docs</a> have the command for that.</p></div>
         </details>
       </div>
     </div>
