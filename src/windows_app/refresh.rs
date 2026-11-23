@@ -161,8 +161,6 @@ impl App {
     }
 
     fn refresh_switcher_tasks(&mut self) {
-        // Hidden sessions are rebuilt on the next opening. A late refresh must not
-        // hide again and cancel a fresh gesture between its Alt and Tab events.
         if !self.session.is_visible() {
             self.stop_task_refresh();
             return;

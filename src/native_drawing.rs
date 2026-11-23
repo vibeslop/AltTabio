@@ -110,8 +110,6 @@ pub(crate) fn measure_text(dc: HDC, label: &str, font: HFONT) -> Result<SIZE> {
     }
 }
 
-// These guards borrow the DC and selected resources for a synchronous drawing call.
-// Restoration runs on every exit path before the caller can release its font or DC.
 struct SelectedFont {
     dc: HDC,
     previous: HGDIOBJ,

@@ -448,8 +448,6 @@ fn is_known(entry: &Entry) -> bool {
         ("Appearance", "VisibleBorders"),
         ("Appearance", "Preview"),
         ("Appearance", "FullDesktopPreview"),
-        // Earlier macOS builds wrote these two. Listing them as known makes a save drop them
-        // instead of carrying them along as unknown keys.
         ("Appearance", "ShowHints"),
         ("Appearance", "IconMode"),
         ("Monitor", "Mode"),
@@ -510,7 +508,6 @@ mod tests {
         let mut expected = Settings::default();
         expected.general.replace_win_tab = false;
         assert_eq!(macos, expected);
-        // A stored value still wins over either set of defaults.
         let stored = SettingsDocument::parse("[General]\nReplaceWinTab=true\n")
             .settings_over(&Settings::macos_default());
         assert!(stored.general.replace_win_tab);

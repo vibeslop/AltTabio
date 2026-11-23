@@ -42,8 +42,6 @@ fn post_context_actions(
         outcome,
         |action| post(target, action),
     ) {
-        // Stale and refused actions retain release ownership. Publication may lose its
-        // single atomic attempt to the UI; withholding it must not cancel earlier openings.
         Delivery::Posted | Delivery::Stale | Delivery::OverlayRefused => true,
         Delivery::PostFailed { pending_opening } => {
             if pending_opening {
@@ -51,7 +49,6 @@ fn post_context_actions(
                 let (pending_generation, count) =
                     context.failed_openings.get_or_insert((generation, 0));
                 if *pending_generation != generation {
-                    // An epoch change already discarded the previous epoch's receipts.
                     *pending_generation = generation;
                     *count = 0;
                 }
@@ -93,7 +90,6 @@ mod tests {
             .state
             .process_key(KeyEvent::pressed(Key::Tab, win), context.settings);
         assert_eq!(opening.actions().next(), Some(InputAction::Switch(1)));
-        // Model the bounded publication losing its CAS: no receipt and no UI action.
         let mut queue = Vec::new();
         for event in [
             KeyEvent::released(Key::Tab, win),
@@ -593,7 +589,6 @@ mod tests {
                 ),
                 SwitcherEffect::Activate(_) => {
                     activations += 1;
-                    // Use the same completion/cancellation policy as the activation adapter.
                     if !action.completes_selection() {
                         assert!(hooks.reset_gestures().is_err());
                     }
@@ -625,8 +620,6 @@ mod tests {
         let mut context = test_context();
         context.settings.right_button_wheel_switching = true;
         let flags = Arc::clone(&context.flags);
-        // This fixture owns no OS thread. An invalid ID makes the wake-up post fail,
-        // so invalidating queued input cannot depend on the wake-up being delivered.
         let hooks = HookThread {
             thread_id: u32::MAX,
             join_handle: None,
@@ -726,7 +719,6 @@ mod tests {
         let mut context = test_context();
         context.settings.right_button_wheel_switching = true;
         context.flags.advance_generation();
-        // A fresh callback observes the cancellation before its posted wake-up runs.
         context.sync_interception();
         let _press = context
             .state
@@ -760,7 +752,6 @@ mod tests {
             let mut context = test_context();
             // SAFETY: this scalar query has no preconditions or ownership transfer.
             context.hook_thread_id = unsafe { GetCurrentThreadId() };
-            // An opaque, never-dereferenced target for the mocked PostMessage boundary below.
             context.target = HWND(std::ptr::dangling_mut());
             CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
             let mut forwarded = Vec::new();
@@ -846,7 +837,6 @@ mod tests {
         flags.set_search_state(true, true);
         flags.suspend(false);
         assert_eq!(flags.load() & OVERLAY_FLAGS, OVERLAY_FLAGS);
-        // The entire modal lifetime occurred between callbacks; its generation still cancels Tab.
         assert_eq!(context.sync_interception(), OVERLAY_FLAGS);
         let release = context.state.process_key(
             KeyEvent::released(Key::Alt, Modifiers::default()),

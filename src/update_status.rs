@@ -225,7 +225,6 @@ impl Status {
                     "AltTabio {version} is available, but this folder allows other apps to replace AltTabio.",
                     &[("version", &version.to_string())],
                 );
-                // Permission-query failures must not be misrepresented as a writable folder.
                 if !detail
                     .starts_with("Updates are disabled because non-elevated processes can replace")
                 {

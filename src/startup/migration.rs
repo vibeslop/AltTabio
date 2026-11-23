@@ -41,8 +41,6 @@ fn repair_task(folder: &ITaskFolder, name: &BSTR, executable: &Path) -> Result<b
         definition.Principal()?.UserId(&raw mut user_id)?;
         let user_id = VARIANT::from(user_id);
         let empty = VARIANT::default();
-        // Update only: never recreate a task deleted during the check, run registration triggers,
-        // or change its principal's access-control entries.
         folder.RegisterTaskDefinition(
             name,
             &definition,
@@ -89,7 +87,6 @@ fn repair_definition(definition: &ITaskDefinition, executable: &Path) -> Result<
         let settings = definition.Settings()?;
         let mut limit = BSTR::new();
         settings.ExecutionTimeLimit(&raw mut limit)?;
-        // This is a migration of the old default, not a permanent policy overriding custom limits.
         if limit != "PT72H" {
             return Ok(false);
         }

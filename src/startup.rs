@@ -232,14 +232,11 @@ fn executable_is_replaceable(executable: &Path, token: HANDLE) -> Result<bool, S
     if !executable.is_absolute() || executable.file_name().is_none() {
         return Err("The AltTabio executable path must be an absolute file path".to_owned());
     }
-    // Check the original name before resolving it: canonicalization would otherwise hide a
-    // junction or symbolic link that an unelevated process could redirect later.
     if path_chain_is_replaceable(executable, token)? {
         return Ok(true);
     }
     let resolved = std::fs::canonicalize(executable)
         .map_err(|error| format!("Could not resolve the installation path: {error}"))?;
-    // Drive aliases can resolve to a different directory chain. Both names must be protected.
     path_chain_is_replaceable(&resolved, token)
 }
 
@@ -279,8 +276,6 @@ fn path_component_is_replaceable(path: &Path, token: HANDLE) -> Result<bool, Str
     let Some(parent) = path.parent() else {
         return Ok(false);
     };
-    // A directory can be renamed/replaced without touching the executable's own ACL. Creation
-    // of unrelated siblings alone is safe; replacement also requires deleting this component.
     let add = if directory {
         FILE_ADD_SUBDIRECTORY
     } else {
@@ -456,8 +451,6 @@ impl AutostartTaskFile {
             .duration_since(UNIX_EPOCH)
             .map_err(|error| format!("Could not timestamp the autostart definition: {error}"))?
             .as_nanos();
-        // The caller validates this directory's permissions before enabling elevated autostart.
-        // Keeping the XML beside the executable prevents an unelevated process from replacing it.
         let path = executable.with_file_name(format!(
             "AltTabio-autostart-{}-{timestamp}.xml",
             std::process::id()
@@ -468,7 +461,6 @@ impl AutostartTaskFile {
             .open(&path)
             .map_err(|error| format!("Could not create the autostart definition: {error}"))?;
         let task_file = Self { path };
-        // schtasks reads task definitions as UTF-16, including the byte-order mark.
         let bytes = [0xff, 0xfe]
             .into_iter()
             .chain(xml.encode_utf16().flat_map(u16::to_le_bytes))

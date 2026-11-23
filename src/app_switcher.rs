@@ -59,8 +59,6 @@ impl WindowHistory {
     }
 }
 
-// Activation history kept for ordering the strip; apps activated longer ago than this follow
-// in window order, which is what they would get anyway.
 const RECENT_APPS_KEPT: usize = 64;
 
 /// Process ids in the order their apps were last activated, the frontmost first.
@@ -122,7 +120,6 @@ pub fn group_by_app(
             });
         }
     }
-    // A stable sort keeps that order among the apps `recent_apps` does not name.
     apps.sort_by_key(|app| {
         recent_apps
             .iter()
@@ -198,7 +195,6 @@ pub struct AppSwitcher {
     active: bool,
     /// The process id of the app in front when the session opened.
     frontmost: Option<u32>,
-    // A command menu acts on the entry it opened for, even if the list changes underneath.
     menu_target: Option<Target>,
 }
 
@@ -594,7 +590,6 @@ mod tests {
         let _ = switcher.select(1, None);
         assert!(switcher.select(0, None));
         assert_eq!(switcher.selected_window(), Some(11));
-        // An app in front with one window starts on it; there is nothing else.
         let single = opened(vec![app(1, &[10]), app(2, &[20])], None);
         assert_eq!(single.selected_window(), Some(10));
     }
@@ -610,7 +605,6 @@ mod tests {
         assert_eq!(ranks(&history, [3, 1, 2]), [0, 1, 2]);
         history.note(Some(2), &[3, 1, 2]);
         assert_eq!(ranks(&history, [2, 3, 1]), [0, 1, 2]);
-        // Window 3 closed and window 4 was never seen.
         history.note(Some(2), &[2, 1, 4]);
         assert_eq!(ranks(&history, [2, 1, 3]), [0, 1, usize::MAX]);
         assert_eq!(history.rank(4), usize::MAX);
@@ -707,7 +701,6 @@ mod tests {
         );
         let _ = switcher.handle(Action::StepWindow(1));
 
-        // Hiding app 1 activated app 3 and reordered everything; window 20 closed.
         switcher.refresh(vec![app(3, &[30]), app(2, &[22, 21, 23]), app(4, &[40])]);
 
         let order = switcher

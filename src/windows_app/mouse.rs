@@ -269,8 +269,6 @@ impl App {
             // SAFETY: `client` is writable for the call and the overlay HWND is live.
             GetClientRect(self.hwnd, &raw mut client)
         };
-        // Every mouse message hit tests, so a failure that lasts would log on each move. Logging
-        // the first failure of a run is enough.
         match client_result {
             Ok(()) => self.hit_test_failures.succeed(),
             Err(error) => {

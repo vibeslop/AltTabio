@@ -321,8 +321,6 @@ impl App {
             return;
         }
         if let Some(action) = overlay_key_action(event) {
-            // Focused printable query input arrives through WM_CHAR, including its keyboard
-            // layout and Shift translation. Handling digits here too would insert them twice.
             if self.session.filter_visible()
                 && matches!(action, InputAction::ActivateVisiblePosition(_))
             {

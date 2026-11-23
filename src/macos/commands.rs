@@ -32,8 +32,6 @@ pub fn activate(record: &WindowRecord) -> Result<(), String> {
                 escape(&record.title)
             );
         }
-        // Raising before activation makes the chosen window the app's key window instead of
-        // whichever window the app last used.
         if !ax.perform("AXRaise") {
             eprintln!("Could not raise the window {}", escape(&record.title));
         }
@@ -127,7 +125,6 @@ fn running_application(app: &AppRef<'_>) -> Result<Retained<NSRunningApplication
         .map_err(|_| format!("{} has an invalid process id", app.name))?;
     let running = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
         .ok_or_else(|| format!("{} is no longer running", app.name))?;
-    // A reused pid after the listed app exited must not act on an unrelated process.
     if launch_time(&running) != app.process.started_at {
         return Err(format!(
             "{} was replaced by another process; leaving it alone",

@@ -55,7 +55,7 @@ impl App {
     /// Merges the notice on the posting thread, before any main-queue allocation.
     fn observe(&mut self, name: &NSNotificationName, notice: RefreshNotice) {
         let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
-            let _ = catch_unwind(AssertUnwindSafe(|| post_refresh_notice(notice)));
+            let _panicked = catch_unwind(AssertUnwindSafe(|| post_refresh_notice(notice)));
         });
         let token = unsafe {
             // SAFETY: the notification name and block are live. With no operation queue,
@@ -92,7 +92,6 @@ impl App {
     }
 
     pub(crate) fn observer_ready(&mut self, pid: i32, observer: Option<AppObserver>) {
-        // Another app may have come to the front while this one was registering.
         if frontmost_pid().and_then(|front| i32::try_from(front).ok()) != Some(pid) {
             return;
         }
@@ -154,8 +153,6 @@ impl App {
             .map(|record| record.window_id)
             .collect::<Vec<_>>();
         self.order = merge_order(&self.order, &on_screen, &others);
-        // The front app's topmost window is the one with focus. The list refreshes on every
-        // activation, and the front app's observer notes focus moving between its windows.
         let front = frontmost_pid();
         let focused = records
             .iter()

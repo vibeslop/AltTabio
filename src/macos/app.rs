@@ -55,9 +55,6 @@ pub(super) struct App {
     settings_window: Option<SettingsWindow>,
     event_tap: Option<EventTap>,
     observers: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
-    // Reports focus moving between the front app's windows and the windows it opens, which no
-    // workspace notification does, so the list stays current without asking every app on a
-    // timer.
     front_observer: Option<AppObserver>,
     refresh: RefreshWorker,
     records: Vec<WindowRecord>,
@@ -65,40 +62,24 @@ pub(super) struct App {
     order: Vec<u32>,
     icons: HashMap<i32, Retained<NSImage>>,
     recent_apps: RecentApps,
-    // Windows in the order they last had focus, which orders each app's windows.
     window_history: WindowHistory,
     extent: Extent,
-    // The first tile and row drawn; they move only as far as the selection needs.
     tile_start: usize,
     row_start: usize,
-    // What the last frame drew, for resolving pointer events against it.
     shown: Option<Shown>,
     panel: Panel,
     preview: PreviewSource,
-    // This session's captures by window, the newest last, so returning to a window shows it
-    // without capturing it again.
     previews: Vec<(u32, Preview)>,
-    // The window being captured. One capture runs at a time; when it ends, the next one takes
-    // whatever is selected by then.
     preview_in_flight: Option<u32>,
-    // Counts switcher sessions, so a capture that ends after its session is dropped.
     session: u64,
     tap_retry_timer: Option<Retained<NSTimer>>,
-    // Whether this run asked for Screen Recording. macOS shows its prompt only once anyway;
-    // this keeps every later switch from asking again.
     screen_recording_asked: bool,
     pointer: Pointer,
-    // Selects the app whose tile the pointer rests on, while it waits.
     dwell_timer: Option<Retained<NSTimer>>,
-    // Preview mode shows the overlay as soon as the first window list arrives.
     show_when_listed: bool,
-    // The front app named in the last secure-keyboard-input report, so the log says it once per
-    // app rather than on every activation.
     secure_input_holder: Option<String>,
     updater: Updater,
-    // The next automatic update check, while updates are automatic.
     update_timer: Option<Retained<NSTimer>>,
-    // Looks for the user to step away while an installed update waits for its relaunch.
     away_timer: Option<Retained<NSTimer>>,
 }
 
@@ -204,13 +185,8 @@ impl App {
                  Settings > Privacy & Security > Accessibility; the switcher starts working as \
                  soon as the access is granted."
             );
-            // AltTabio has no Dock icon, so a dismissed prompt would leave nothing on screen
-            // while ⌘ Tab still opens the system switcher. The settings window's Accessibility
-            // row stays up instead, until the grant arrives.
             self.show_settings();
         }
-        // Screen Recording is asked for after the first switch instead, once the preview area
-        // has shown what it is for; see `hide_overlay`.
         if self.settings.appearance.preview && permissions::screen_recording_granted() {
             self.preview.refresh_content();
         }

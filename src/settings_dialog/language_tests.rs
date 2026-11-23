@@ -47,9 +47,12 @@ fn language_preview_preserves_page_visibility_and_scroll_position() -> Result<()
                 visible,
                 "{category:?} changed visible controls"
             );
-            // SAFETY: querying the fixture's own visibility does not affect the desktop.
             assert_eq!(
-                unsafe { GetWindowLongPtrW(dialog.window(), GWL_STYLE) }.cast_unsigned()
+                unsafe {
+                    // SAFETY: querying the fixture's own visibility does not affect the desktop.
+                    GetWindowLongPtrW(dialog.window(), GWL_STYLE)
+                }
+                .cast_unsigned()
                     & WS_VISIBLE.0 as usize,
                 0,
                 "language preview revealed the hidden dialog"

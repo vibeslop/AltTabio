@@ -18,7 +18,6 @@ use windows_numerics::Vector2;
 
 #[derive(Default)]
 pub(super) struct Painter {
-    // One target per dialog, shared by its immutable paint snapshots on the UI thread.
     resources: RefCell<Option<Resources>>,
 }
 
@@ -43,7 +42,6 @@ impl Painter {
             .as_ref()
             .ok_or_else(|| Error::from_hresult(E_FAIL))?
             .paint(dc, bounds, dpi, palette, checked, enabled);
-        // A failed DC bind or draw can invalidate the target. Recreate it on the next paint.
         if result.is_err() {
             *resources = None;
         }
@@ -63,7 +61,6 @@ impl Resources {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 alphaMode: D2D1_ALPHA_MODE_IGNORE,
             },
-            // Geometry uses the native control's already-scaled pixel coordinates.
             dpiX: 96.0,
             dpiY: 96.0,
             ..Default::default()

@@ -40,8 +40,6 @@ pub fn verify(
         .map_err(|error| format!("Invalid embedded update key: {error}"))?;
     let signature = Signature::decode(signature)
         .map_err(|error| format!("Invalid update signature: {error}"))?;
-    // Streaming verification accepts only the current prehashed Minisign format and also
-    // verifies the global signature over the trusted comment. No cryptography lives here.
     let mut verifier = key
         .verify_stream(&signature)
         .map_err(|error| format!("Invalid update signature: {error}"))?;
@@ -130,7 +128,6 @@ mod tests {
         ] {
             assert!(verify(Cursor::new(content), SIGNATURE, version("9.0.0"), KEY).is_err());
         }
-        // A valid test signature is not trusted by the production pin.
         assert!(
             verify(
                 Cursor::new(ARCHIVE),

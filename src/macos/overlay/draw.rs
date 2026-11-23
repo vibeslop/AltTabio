@@ -188,7 +188,6 @@ pub(super) fn draw_frame(model: &FrameModel) {
         draw_row(model, row, layout.row_rect(index), &fonts, &colors);
     }
     if let Some(note) = &model.more_note {
-        // Under numbered rows, the count lines up with their titles.
         draw_note(
             note,
             layout.row_rect(model.rows.len()),
@@ -229,7 +228,6 @@ fn draw_strip(model: &FrameModel, fonts: &Fonts, colors: &Colors) {
             );
         }
         if tile.selected {
-            // The name sits centered under its tile, pushed inward at the panel's edges.
             let width = measure(&tile.name, &fonts.name)
                 .width
                 .ceil()
@@ -292,7 +290,6 @@ fn draw_row(model: &FrameModel, row: &Row, bounds: Rect, fonts: &Fonts, colors: 
             NSTextAlignment::Left,
         );
     }
-    // Rows past the ninth have no number but keep the column, so the titles stay in line.
     let left = left + NUMBER_WIDTH;
     draw_text(
         &row.title,
@@ -329,7 +326,6 @@ fn draw_close_button(state: CloseButtonVisualState, button: Rect, colors: &Color
         CloseButtonVisualState::Pressed => Some(&colors.control_pressed),
     };
     if let Some(background) = background {
-        // The button sits inside the row's plate, so its corners follow the plate's.
         let inset = (ROW_HEIGHT - CLOSE_SIZE) / 2.0;
         fill_rounded(button, PLATE_RADIUS - inset, background);
     }

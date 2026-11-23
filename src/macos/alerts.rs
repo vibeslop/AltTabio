@@ -33,7 +33,6 @@ pub(super) fn show_about(mtm: MainThreadMarker) {
     let _ok = alert.addButtonWithTitle(&NSString::from_str(tr("OK")));
     let _github = alert.addButtonWithTitle(&NSString::from_str("GitHub"));
     bring_alert_forward(mtm);
-    // The second button returns NSAlertSecondButtonReturn (1001).
     if alert.runModal() == 1001
         && let Some(url) = NSURL::URLWithString(&NSString::from_str(GITHUB_URL))
         && !NSWorkspace::sharedWorkspace().openURL(&url)
@@ -56,7 +55,6 @@ pub(super) fn offer_update(mtm: MainThreadMarker, version: Version) -> bool {
     let _install = alert.addButtonWithTitle(&NSString::from_str(tr("Install Update")));
     let _later = alert.addButtonWithTitle(&NSString::from_str(tr("Not Now")));
     bring_alert_forward(mtm);
-    // The first button returns NSAlertFirstButtonReturn (1000).
     alert.runModal() == 1000
 }
 

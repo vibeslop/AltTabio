@@ -34,7 +34,6 @@ pub(super) fn authenticate_and_extract(
         .map_err(storage)?;
     let signature = String::from_utf8(signature)
         .map_err(|error| invalid(format!("The update signature is not UTF-8: {error}")))?;
-    // Keep the same file handle across authentication and extraction in the protected folder.
     let mut archive = File::open(work.join("download.zip")).map_err(storage)?;
     let read_failed = Cell::new(false);
     update_signature::verify(
@@ -86,7 +85,6 @@ fn extract(mut archive: File, exe: &Path) -> Result<(), Failure> {
         failed: &read_failed,
     })
     .map_err(zip_failure)?;
-    // Preserve the existing unique-name, root executable, and size restrictions.
     if zip.len() != entries {
         return Err(invalid("The update archive contains duplicate file names"));
     }
@@ -176,8 +174,6 @@ impl std::io::Write for TrackedWriter<'_> {
 }
 
 fn declared_entries(file: &mut File) -> Result<usize, Failure> {
-    // Release artifacts are bounded, single-disk ZIP32 archives. Reject ZIP64 and ambiguous
-    // footers rather than depending on name deduplication in the ZIP reader.
     let length = file.metadata().map_err(storage)?.len();
     let tail = length.min(65_557);
     let offset = i64::try_from(tail).map_err(|error| invalid(error.to_string()))?;
@@ -203,8 +199,6 @@ fn declared_entries(file: &mut File) -> Result<usize, Failure> {
 
 pub(super) fn validate_version(exe: &Path, version: Version) -> Result<(), Failure> {
     use std::os::windows::fs::OpenOptionsExt;
-    // Version-resource APIs can mask sharing/access failures as missing resources. Establish
-    // read access first and deny replacement while Windows reads the same file by path.
     let _read_guard = std::fs::OpenOptions::new()
         .read(true)
         .share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0)
@@ -375,8 +369,6 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
         std::fs::write(work.path.join("download.zip.minisig"), signature)
             .unwrap_or_else(|error| panic!("{error}"));
-        // A directory at the executable path deterministically fails File::create_new after
-        // authenticating and parsing a real signed ZIP. No filesystem permissions are changed.
         std::fs::create_dir(work.path.join("AltTabio.exe"))
             .unwrap_or_else(|error| panic!("{error}"));
         let failure = authenticate_and_extract(version, &work.path, public)
@@ -396,7 +388,6 @@ mod tests {
                 alttabio::update_status::Command::Install
             ))
         );
-        // A retry must authenticate again, even while the output-path problem is still present.
         let mut tampered = archive.to_vec();
         tampered[40] ^= 1;
         std::fs::write(work.path.join("download.zip"), tampered)
@@ -427,7 +418,6 @@ mod tests {
             assert!(error.detail.to_lowercase().contains("signature"));
             assert!(!work.path.join("AltTabio.exe").exists());
         }
-        // The valid signed text fixture gets past authentication, then fails ZIP parsing.
         let error = authenticate_and_extract(version, &work.path, public)
             .err()
             .unwrap_or_else(|| panic!("not a ZIP"));
@@ -462,7 +452,6 @@ mod tests {
             zip.finish().unwrap_or_else(|error| panic!("{error}"));
             if duplicate {
                 let bytes = std::fs::read(&archive).unwrap_or_else(|error| panic!("{error}"));
-                // Both local and central-directory names become exact duplicates.
                 let bytes = bytes
                     .windows(12)
                     .enumerate()

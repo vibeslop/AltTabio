@@ -56,8 +56,6 @@ impl BusyWindow {
             };
             if let Ok(hwnd) = created {
                 assert!(ready.send(hwnd.0 as isize).is_ok());
-                // Model an application's UI thread occupied by a render/load loop. It does not
-                // dispatch icon queries until the test signals cleanup on this separate channel.
                 assert!(stopped.recv().is_ok());
                 // SAFETY: this thread owns the window and destroys it once before its class.
                 unsafe { DestroyWindow(hwnd) }?;

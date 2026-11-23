@@ -127,11 +127,13 @@ impl Permissions {
         .unwrap_or_else(|error| panic!("{error}"));
         // SAFETY: successful conversion returns terminated UTF-16 text owned until LocalFree.
         let result = unsafe { text.to_string() }.unwrap_or_else(|error| panic!("{error}"));
-        // SAFETY: this is the only release of the conversion's allocation.
         assert!(
-            unsafe { LocalFree(Some(HLOCAL(text.0.cast()))) }
-                .0
-                .is_null()
+            unsafe {
+                // SAFETY: this is the only release of the conversion's allocation.
+                LocalFree(Some(HLOCAL(text.0.cast())))
+            }
+            .0
+            .is_null()
         );
         result
     }

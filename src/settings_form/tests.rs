@@ -132,7 +132,6 @@ fn rmb_option_keeps_its_warning_with_the_opt_in() {
         );
         let toggle = Control::Checkbox(SettingOption::RmbWheelSwitching).rect(&layout);
         let warning = Control::Warning(SettingOption::RmbWheelSwitching).rect(&layout);
-        // Absolute positions round independently at fractional display scales.
         assert!(warning.y >= toggle.bottom() + scale(14, dpi) - 1);
         assert!(warning.bottom() <= layout.viewport.height);
     }

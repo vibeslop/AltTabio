@@ -32,16 +32,12 @@ impl RefreshWorker {
             .spawn(move || {
                 let mut unresponsive = Unresponsive::default();
                 while let Ok((list, watch)) = receiver.recv() {
-                    // AppKit drains no pool on a thread it didn't start, so without this
-                    // every autoreleased runningApplications snapshot lives forever.
                     objc2::rc::autoreleasepool(|_| {
                         let observer = watch
                             .flatten()
                             .map(|pid| (pid, AppObserver::new(pid, AX_TIMEOUT_SECONDS)));
                         let listing =
                             list.map(|options| window_list::enumerate(options, &mut unresponsive));
-                        // No next batch is sent until this completion reaches the app.
-                        // Thus a stalled main thread retains at most one result block.
                         post_refresh_to_app(move |app| app.refresh_finished(listing, observer));
                     });
                 }
@@ -93,7 +89,6 @@ impl RefreshWorker {
 
     pub(super) fn stop(&mut self) {
         self.schedule.stop();
-        // Closing the channel wakes an idle worker; ongoing AX work finishes off-thread.
         self.sender = None;
     }
 }

@@ -57,8 +57,6 @@ fn filter_input(
     if provenance != InputProvenance::Injected {
         return None;
     }
-    // Bypass action publication entirely. Refused/deferred openings and post failures must
-    // never turn a security rejection into delivery to the focused native window procedure.
     Some(if provenance.suppress_native_delivery(owns_input()) {
         LRESULT(1)
     } else {
@@ -68,7 +66,6 @@ fn filter_input(
 
 fn owns_input() -> bool {
     if process_with_context(|context| context.flags.load() & OVERLAY_ACTIVE != 0).unwrap_or(true) {
-        // Includes pending openings, even before the UI has taken focus.
         return true;
     }
     let mut process_id = 0;
@@ -79,7 +76,6 @@ fn owns_input() -> bool {
         if !foreground.is_invalid()
             && GetWindowThreadProcessId(foreground, Some(&raw mut process_id)) == 0
         {
-            // A failed ownership query cannot authorize synthetic delivery.
             return true;
         }
     }
@@ -130,9 +126,11 @@ mod tests {
                             process_keyboard_message(WPARAM(message as usize), param),
                             None
                         );
-                        // SAFETY: the callback receives a live, correctly typed stack record.
                         assert_eq!(
-                            unsafe { keyboard_proc(0, WPARAM(message as usize), param) },
+                            unsafe {
+                                // SAFETY: the callback receives a live, correctly typed stack record.
+                                keyboard_proc(0, WPARAM(message as usize), param)
+                            },
                             LRESULT(1)
                         );
                         commit_keyboard_delivery(WPARAM(message as usize), param);
@@ -188,9 +186,11 @@ mod tests {
                     )),
                     None
                 );
-                // SAFETY: the callback receives a live, correctly typed stack record.
                 assert_eq!(
-                    unsafe { mouse_proc(0, WPARAM(message as usize), param) },
+                    unsafe {
+                        // SAFETY: the callback receives a live, correctly typed stack record.
+                        mouse_proc(0, WPARAM(message as usize), param)
+                    },
                     LRESULT(1)
                 );
             }

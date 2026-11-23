@@ -193,7 +193,6 @@ impl UpdateSession {
             }
             Err(error) => self.fail(None, error.clone()),
         }
-        // A check already requested by the user still offers a release after auto-update is disabled.
         let result = if !self.automatic && !self.check_requested {
             Ok(Checked::UpToDate)
         } else {

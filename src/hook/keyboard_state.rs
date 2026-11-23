@@ -165,7 +165,6 @@ impl KeyboardState {
 
     fn search_state(&self) -> [u8; 256] {
         let mut keys = self.keys;
-        // Alt belongs to the switch gesture, not the user's search text.
         for key in [VK_MENU, VK_LMENU, VK_RMENU] {
             keys[usize::from(key.0)] = 0;
         }

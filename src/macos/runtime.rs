@@ -77,8 +77,6 @@ fn deliver_refresh(work: impl FnOnce(&mut App) + 'static) {
     if let Some(work) = pending
         && let Some(mtm) = MainThreadMarker::new()
     {
-        // Release every borrow before scheduling. One timer retains the existing
-        // delivery; native producers continue merging into their fixed flags.
         let slot = RefCell::new(Some(work));
         let _timer = main_loop_timer(mtm, 0.01, false, move || {
             if let Some(work) = slot.borrow_mut().take() {

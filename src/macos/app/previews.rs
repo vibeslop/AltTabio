@@ -11,7 +11,6 @@ use objc2_app_kit::NSImage;
 use objc2_foundation::NSSize;
 use objc2_screen_capture_kit::SCShareableContent;
 
-// Each kept capture holds about a megabyte and a half.
 const PREVIEWS_KEPT: usize = 8;
 
 pub(super) enum Preview {

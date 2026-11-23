@@ -20,7 +20,6 @@ use windows::Win32::UI::WindowsAndMessaging::{DI_NORMAL, DrawIconEx, HICON};
 use windows::core::{Error, Result};
 
 pub(super) struct Previews {
-    // LoadIconW borrows shared executable resources, so these handles must not be destroyed.
     icons: [HICON; IconColor::ALL.len()],
     logos: Vec<app_icon::OwnedIcon>,
     github: [app_icon::OwnedIcon; 2],
@@ -85,7 +84,6 @@ pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &PaintState) -> Opti
                 state.palette.control_surface
             },
         )?;
-        // Windows uses -1 for an empty combo box. Paint its surface, with no entry.
         if item.itemID != u32::MAX {
             let popup = item.itemState.0 & ODS_COMBOBOXEDIT.0 == 0;
             let mut entry = item.rcItem;
@@ -100,8 +98,6 @@ pub(super) fn paint_list_item(item: &DRAWITEMSTRUCT, state: &PaintState) -> Opti
                 color,
                 state,
             )?;
-            // Native CB_GETCURSEL follows the hot row while the popup is tracking.
-            // Keep the check on the choice captured before tracking began.
             if popup && state.checked_index(selector) == usize::try_from(item.itemID).ok() {
                 let x = item.rcItem.right - scale(16, state.dpi);
                 let y = item.rcItem.top + (item.rcItem.bottom - item.rcItem.top) / 2;

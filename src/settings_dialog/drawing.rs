@@ -104,7 +104,6 @@ pub(super) fn icon(
         }
         Category::Appearance => {
             ring(bounds(4, 4, 20, 20), scale(6, dpi))?;
-            // Horizontal chords fill the right half of the circle without a palette asset.
             for (dy, half) in [
                 (0, 0),
                 (1, 3),

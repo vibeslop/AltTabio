@@ -22,8 +22,6 @@ impl WorkFolder {
             .parent()
             .ok_or_else(|| "Windows has no system root".to_owned())?;
         let work = Self::create_in(&root.join("Temp"))?;
-        // Verify the fixture ACL directly. CI may have no non-elevated Explorer token;
-        // these offline tests need protected files, not an interactive shell.
         if super::native::Permissions::read(&work.path)?.sddl()
             != "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
         {

@@ -55,8 +55,6 @@ fn fixture_window(captured_in_list: bool) -> Result<FixtureWindow> {
     let mut cursor = POINT::default();
     // SAFETY: the output is writable. This test observes but never moves the user's pointer.
     unsafe { GetCursorPos(&raw mut cursor) }?;
-    // Put the hidden window around the current pointer, or far away from it. This models
-    // movement between capture and dispatch without injecting desktop input.
     let (x, y) = if captured_in_list {
         (-32000, -32000)
     } else {
@@ -138,8 +136,6 @@ fn delayed_wheel_case(
         );
     }
     if deferred {
-        // The opening preview is already visible, but shell focus has not yet been released.
-        // Keep a wheel-bearing origin to exercise its epoch when later preview actions retire.
         let (origin, _) = alttabio::hook_flags::encode_action(
             InputAction::MouseWheel(1, (captured.x, captured.y)),
             flags.load(),
@@ -153,8 +149,6 @@ fn delayed_wheel_case(
             input,
         });
     }
-    // No message has reached the UI yet. Deliver the exact posted scalar payloads through
-    // App's message dispatcher, including epoch validation and opening retirement.
     let dispatched = dispatch_wheel_messages(&mut app, window.0);
     assert_eq!(dispatched, if gesture { 2 } else { i32::from(parts) });
     let release = if gesture {
@@ -172,8 +166,6 @@ fn delayed_wheel_case(
             panic!("shell dismissal must still be pending");
         };
         assert!(flags.action_is_current(pending.origin.0));
-        // RightButtonPressed holds the following gesture wheel behind the focus barrier;
-        // ordinary wheel actions have already been previewed through apply_hook_action.
         assert_eq!(pending.input.pending_openings(), usize::from(gesture));
         assert_eq!(
             pending.input.poll(true, Duration::ZERO),
@@ -189,7 +181,6 @@ fn delayed_wheel_case(
         }
     }
     assert_wheel_result(&mut app, captured_in_list);
-    // Exercise the real release resolver, without activating a window on the user's desktop.
     assert_eq!(
         app.session.handle_input(release),
         SwitcherEffect::Activate(if captured_in_list { 2 } else { 3 })

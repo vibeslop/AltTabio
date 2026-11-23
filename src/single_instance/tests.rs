@@ -63,7 +63,6 @@ fn unowned_precreated_mutex_is_a_visible_conflict_and_is_not_taken_over() -> Res
     }?;
     let handle = OwnedProcess(handle);
     collision(names.acquire());
-    // A failed acquisition must not close somebody else's handle or change the object's type.
     let waited = unsafe {
         // SAFETY: the fixture's handle is still owned and the wait cannot block.
         WaitForSingleObject(handle.0, 0)
@@ -155,7 +154,6 @@ fn owned_precreated_mutex_in_another_process_is_a_visible_conflict() -> Result<(
 #[test]
 fn matching_rendezvous_class_from_a_different_executable_is_rejected() -> Result<()> {
     let names = Names::new();
-    // The copy even has identical bytes and a matching window class. Its file identity differs.
     let _fixture = Fixture::spawn(&names, "genuine", true)?;
     collision(names.acquire());
     Ok(())
@@ -248,6 +246,10 @@ impl Fixture {
                 started.elapsed() < Duration::from_secs(15),
                 "Singleton fixture timed out"
             );
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "test polls singleton fixture readiness"
+            )]
             std::thread::sleep(Duration::from_millis(10));
         }
         Ok(fixture)
@@ -292,12 +294,19 @@ fn peer_fixture() -> Result<()> {
         )?;
         if mode == "delayed" || mode == "delayed-denied" {
             std::fs::write(folder.join("ready"), [])?;
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "test fixture delays peer creation to exercise startup race"
+            )]
             std::thread::sleep(Duration::from_millis(150));
             _peer = PeerWindow::create(PCWSTR(class.as_ptr()))?;
         }
     }
     std::fs::write(folder.join("ready"), [])?;
-    // No message loop is needed: peer discovery never sends a message to this thread.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test fixture holds single-instance gate open until killed"
+    )]
     std::thread::sleep(Duration::from_secs(30));
     Ok(())
 }

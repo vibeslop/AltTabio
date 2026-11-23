@@ -111,7 +111,6 @@ mod tests {
                 ),
                 None
             );
-            // Even an unflagged Tab's OS modifier context can reflect a synthetic press.
             let polluted = Modifiers {
                 alt: true,
                 left_windows: true,

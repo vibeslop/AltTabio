@@ -278,7 +278,6 @@ mod tests {
         assert!(app.session.filter_visible());
         app.apply_input_action(InputAction::AppendSearchCharacter('a'));
         assert_eq!(app.session.switcher().filter(), "a");
-        // Preview mode has no hooks: each printable press reaches keydown and then WM_CHAR.
         for (key, character, expected) in
             [(0x31, '1', "a1"), (0x62, '2', "a12"), (0x33, '#', "a12#")]
         {

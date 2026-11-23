@@ -43,8 +43,6 @@ pub fn enumerate_switchable_windows(settings: &Settings) -> Result<EnumeratedTas
             LPARAM((&raw mut collection).cast::<c_void>() as isize),
         )
     };
-    // EnumWindows also reports failure when our callback deliberately stops at the cap.
-    // Only that explicit stop is a successful partial snapshot. Preserve native errors and panics.
     collection.finish(enumerated)?;
     let mut result = EnumeratedTasks {
         tasks: Vec::new(),
@@ -148,8 +146,6 @@ fn create_switch_task(
     icons: &mut TaskIcons,
     budget: &mut SnapshotQuery,
 ) -> Option<SwitchTask> {
-    // Most top-level windows are hidden helpers. Reject them before reading titles,
-    // classes, ownership and DWM attributes for the switcher's synchronous snapshot.
     let is_visible = unsafe {
         // SAFETY: HWND is borrowed from EnumWindows; a vanished window is not visible.
         IsWindowVisible(hwnd).as_bool()
@@ -317,7 +313,6 @@ fn window_cloaking(hwnd: HWND) -> WindowCloaking {
             u32::try_from(size_of::<u32>()).unwrap_or_default(),
         )
     };
-    // A failed query supplies no evidence of cloaking; keep the existing fallback.
     if result.is_err() {
         return WindowCloaking::None;
     }
@@ -403,10 +398,10 @@ mod tests {
         struct TestClass(HINSTANCE);
         impl Drop for TestClass {
             fn drop(&mut self) {
-                // SAFETY: all windows of this test-owned class have been dropped first.
-                if let Err(error) =
-                    unsafe { UnregisterClassW(w!("Windows.UI.Core.CoreWindow"), Some(self.0)) }
-                {
+                if let Err(error) = unsafe {
+                    // SAFETY: all windows of this test-owned class have been dropped first.
+                    UnregisterClassW(w!("Windows.UI.Core.CoreWindow"), Some(self.0))
+                } {
                     eprintln!("Could not unregister the test class: {error}");
                 }
             }

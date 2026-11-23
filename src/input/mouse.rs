@@ -35,7 +35,6 @@ impl MouseGesture {
     }
 
     pub(super) fn cancel(&mut self) {
-        // A cancelled gesture still owns the physical release of its swallowed press.
         if self.owns_button() {
             self.press = MousePress::Cancelled;
         }
@@ -206,8 +205,6 @@ mod tests {
                         .suppress
                 );
             }
-            // Until the UI acknowledges closing, capture ordinary wheel input without
-            // reviving the completed right-button gesture.
             let wheel = state.process_mouse(MouseEvent::Wheel(-120, (0, 0)), ENABLED);
             assert!(wheel.suppress);
             assert_eq!(
@@ -274,8 +271,6 @@ mod tests {
         post(wheel_after_escape, &flags, &mut queue);
         post(release_after_escape, &flags, &mut queue);
 
-        // Drain only after every physical event. Hiding deliberately does not run the
-        // asynchronous hook reset, so the hook must have cancelled the gesture itself.
         let mut session = SwitcherSession::new(SwitcherSessionSettings {
             typed_search: true,
             release_alt_switches: true,
@@ -311,8 +306,6 @@ mod tests {
             "RMB release activated a window after Escape"
         );
         assert!(!session.is_visible());
-        // The still-visible overlay captures the wheel until it closes, but this action
-        // cannot reopen it or start a fresh right-button gesture.
         assert!(wheel_after_escape.suppress);
         assert_eq!(
             wheel_after_escape.actions().next(),
@@ -447,7 +440,6 @@ mod tests {
         assert!(release.suppress);
         post_query_outcome(&flags, release, &mut queue);
 
-        // Every physical event above was posted against A's rendered query before any UI work.
         let activations = apply_queued_query_actions(&flags, &mut session, &tasks, queue);
         if complete {
             assert_eq!(activations, [10, if more_wheel { 20 } else { 10 }]);
@@ -1048,7 +1040,6 @@ mod tests {
                 Some(1),
             );
             let _click = state.process_mouse(MouseEvent::LeftButtonPressed, settings);
-            // Neither unused panel space nor closing one task completes the overlay.
             if close_button {
                 assert!(matches!(
                     session.handle_input(InputAction::WindowCommand(WindowCommand::Close)),

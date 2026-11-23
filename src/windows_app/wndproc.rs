@@ -53,7 +53,6 @@ pub(super) unsafe extern "system" fn window_proc(
             return Some(LRESULT(0));
         }
         if message == WM_NCDESTROY {
-            // Later messages must not reach the host, which `run` frees once the window is gone.
             let detached = unsafe {
                 // SAFETY: zero is always a valid value, and this procedure reads it as no host.
                 set_window_user_data(hwnd, 0)
@@ -122,8 +121,6 @@ fn attach_host(hwnd: HWND, lparam: LPARAM) -> Option<LRESULT> {
         set_window_user_data(hwnd, host as isize)
     };
     if let Err(error) = attached {
-        // Failing creation lets `run` free the host instead of running a window that
-        // can never reach it.
         eprintln!("Could not attach AltTabio to its window: {error}");
         return Some(LRESULT(0));
     }

@@ -64,7 +64,6 @@ struct Events {
 
 pub(crate) struct FilterPopup {
     hwnd: HWND,
-    // The callback only posts bounded events, and reports failures outside the callback.
     events: Option<Box<Events>>,
     painter: Painter,
     frame: Option<Frame>,
@@ -301,7 +300,6 @@ impl Drop for FilterPopup {
             DestroyWindow(self.hwnd)
         };
         if let Err(error) = result {
-            // A live window could still call the procedure. Retain its small state allocation.
             if let Some(events) = self.events.take() {
                 let _retained = Box::leak(events);
             }
@@ -448,8 +446,6 @@ mod tests {
         let mut popup = FilterPopup::new(HWND::default())?;
         let mut editor = QueryText::default();
         editor.insert("filter");
-        // Seed a rendered state on a hidden fixture. A null owner makes any geometry read
-        // fail before painting or showing a window, so this also checks the actual fast path.
         popup.frame = Some(Frame {
             query: editor.text().to_owned(),
             caret: editor.caret(),

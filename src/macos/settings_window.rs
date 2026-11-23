@@ -164,8 +164,6 @@ define_class!(
             };
             let value = button.state() == NSControlStateValueOn;
             if key == SettingKey::Autostart {
-                // The login item lives in the system, not in the INI; the box shows whatever
-                // the system reports once the request is done.
                 (self.ivars().handler)(SettingsEvent::Autostart(value));
                 return;
             }
@@ -218,8 +216,6 @@ define_class!(
 
     // SAFETY: NSWindowDelegate has no safety requirements.
     unsafe impl NSWindowDelegate for SettingsController {
-        // Permissions and the login item change in System Settings, so they are read again
-        // whenever the window comes back to the front rather than on a timer.
         // SAFETY: the signature matches windowDidBecomeKey:.
         #[unsafe(method(windowDidBecomeKey:))]
         fn window_did_become_key(&self, _notification: &NSNotification) {
@@ -397,7 +393,6 @@ impl SettingsWindow {
         controller.load(settings);
         controller.fit_window();
         window.center();
-        // The window holds its delegate weakly; SettingsWindow keeps the controller alive.
         window.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
         Self {
             window,

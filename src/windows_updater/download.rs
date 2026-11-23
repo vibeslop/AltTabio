@@ -281,7 +281,6 @@ mod tests {
                 |url, _, output| {
                     if url.ends_with(".minisig") {
                         if remove_archive {
-                            // This runs after the archive output has closed, before its hash is read.
                             std::fs::remove_file(work.path.join("download.zip"))
                                 .map_err(|error| error.to_string())?;
                         }

@@ -15,8 +15,6 @@ pub(super) struct RedrawBatch {
 
 impl RedrawBatch {
     pub(super) fn begin(parent: HWND, controls: &DialogControls) -> Self {
-        // Snapshot each window's own visibility before disabling its parent. Using
-        // IsWindowVisible here would lose the visible children of a hidden dialog.
         let windows: Vec<_> = std::iter::once(parent)
             .chain(controls.iter().map(|(_, window)| window))
             .filter(|window| {
@@ -37,9 +35,6 @@ impl RedrawBatch {
 
 impl Drop for RedrawBatch {
     fn drop(&mut self) {
-        // Restore children before the parent so the entire tree becomes drawable together.
-        // Only originally visible windows receive TRUE: DefWindowProc adds WS_VISIBLE,
-        // which would otherwise reveal controls from hidden pages or the hidden setup dialog.
         for window in self.windows.iter().rev() {
             // SAFETY: this guard cannot outlive the dialog or any of its controls.
             unsafe { SendMessageW(*window, WM_SETREDRAW, Some(WPARAM(1)), None) };

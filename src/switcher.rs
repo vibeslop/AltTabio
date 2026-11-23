@@ -45,8 +45,6 @@ impl SwitchTask {
 /// Pick the first listed task in a captured foreground-to-owner chain.
 #[must_use]
 pub fn foreground_task(tasks: &[SwitchTask], windows: &[isize]) -> Option<isize> {
-    // Owned application windows can have their own row. Excluded modal popups
-    // fall back to their nearest listed owner, which need not be the root owner.
     windows
         .iter()
         .copied()
@@ -104,7 +102,6 @@ pub struct Switcher {
     all_tasks: Vec<SwitchTask>,
     visible_indices: Vec<usize>,
     selected_visible_index: Option<usize>,
-    // Pointer interaction owns the viewport independently of the selected task.
     pinned_visible_start: Option<usize>,
     filter: crate::text_edit::QueryText,
 }
@@ -226,8 +223,6 @@ impl SwitcherSession {
             self.switcher.restore_selection(foreground_window, None);
             self.switcher.select_next(delta);
             if delta != 0 {
-                // An owner row may activate the foreground popup. Inspect at most one
-                // full list and keep the original step count unless it lands on an alias.
                 for _ in 1..self.switcher.visible_task_count() {
                     if !self
                         .switcher
@@ -355,7 +350,6 @@ impl SwitcherSession {
             self.wheel_remainder = 0;
             self.wheel_behavior = Some(behavior);
         }
-        // A wheel detent is 120 units. Touchpads can deliver it as many small messages.
         let total = self.wheel_remainder.saturating_add(delta);
         let steps = total / 120;
         self.wheel_remainder = total % 120;
@@ -466,7 +460,6 @@ impl SwitcherSession {
             }
             InputAction::ActivateSelected => self.activate_selected(),
             InputAction::RightButtonPressed => {
-                // A press prepares a new gesture; only scrolling resumes release activation.
                 self.mouse_selection = MouseSelection::Inactive;
                 SwitcherEffect::None
             }
@@ -1181,7 +1174,6 @@ mod tests {
                 .map(|task| task.window_handle),
             Some(10)
         );
-        // Even a replacement snapshot must not retarget an already-open command menu.
         session.refresh_tasks([SwitchTask::new(2, 20, "Another", "another")]);
         assert!(!session.open_context_menu());
         assert_eq!(
@@ -1588,7 +1580,6 @@ mod tests {
             None,
         );
 
-        // Neither new task matches the old "z".
         assert_eq!(session.switcher().visible_task_count(), 2);
         assert_eq!(
             session
@@ -2305,7 +2296,6 @@ mod tests {
         };
         assert!(is_switchable_window(&ordinary));
 
-        // Telegram after RDP: visible, titled, unowned, but application-cloaked.
         assert!(is_switchable_window(&WindowEligibility {
             cloaking: WindowCloaking::Application,
             ..ordinary

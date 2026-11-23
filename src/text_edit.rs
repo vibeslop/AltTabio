@@ -62,8 +62,6 @@ impl TextCommand {
 
     #[must_use]
     pub const fn for_key(key: u32, control: bool, shift: bool, right_alt: bool) -> Option<Self> {
-        // Windows represents AltGr as Right Alt plus Ctrl. Its translated text must not first
-        // execute a Ctrl editing command, even while the user holds Alt to keep switching.
         if control && right_alt {
             return None;
         }

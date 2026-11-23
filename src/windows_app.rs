@@ -65,7 +65,6 @@ pub fn run(
         return Ok(());
     };
     let _apartment = ComApartment::initialize()?;
-    // Temporary repair for autostart tasks created with the old 72-hour default.
     if !preview_mode && let Err(error) = startup::repair_legacy_task_timeout() {
         eprintln!("Could not repair the legacy autostart runtime limit: {error}");
     }
@@ -128,7 +127,6 @@ pub fn run(
                 // SAFETY: after DestroyWindow returns no callback retains the unique host allocation.
                 drop(Box::from_raw(host_pointer));
             },
-            // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
             Err(destroy_error) => {
                 eprintln!("Could not destroy AltTabio after its startup failed: {destroy_error}");
             }
@@ -160,7 +158,6 @@ pub fn run(
             DestroyWindow(hwnd)
         };
         if let Err(destroy_error) = destroy_result {
-            // The live HWND still retains host_pointer. Leaking is safer than freeing callback state.
             eprintln!("Could not destroy AltTabio after its message loop ended: {destroy_error}");
             return match loop_result {
                 Ok(()) => Err(destroy_error),
@@ -221,7 +218,6 @@ struct App {
 struct AppHost {
     state: RefCell<App>,
     update_window: RefCell<Option<crate::update_window::UpdateWindow>>,
-    // Borrowed only while the Settings dialog's nested message loop is running.
     settings_window: Cell<Option<HWND>>,
 }
 
@@ -283,7 +279,6 @@ impl App {
             eprintln!("Could not position the hidden overlay: {error}");
         }
         if let Err(error) = self.renderer.prepare(hwnd) {
-            // Drawing retries device creation if the display was temporarily unavailable.
             eprintln!("Could not prepare the overlay renderer: {error}");
         }
         if install_hooks {

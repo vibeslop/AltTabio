@@ -9,7 +9,6 @@ use crate::macos::tracing;
 use alttabio::terminal_text::escape;
 use objc2_app_kit::NSWorkspace;
 
-// How often a start without Accessibility access checks whether the grant has arrived.
 const TAP_RETRY_SECONDS: f64 = 2.0;
 
 impl App {
@@ -95,16 +94,12 @@ impl App {
         if let Some(timer) = self.tap_retry_timer.take() {
             timer.invalidate();
         }
-        // The Accessibility row leaves the settings window as the grant arrives, which tells
-        // the user it worked without bringing the window forward again.
         if let Some(window) = &self.settings_window {
             window.refresh();
         }
     }
 
     fn handle_tap(&mut self, event: TapEvent) -> bool {
-        // The right-click menu tracks the keyboard on its own: the arrows, Return, Escape, and
-        // its ⌘ letters. Keys the switcher swallowed here would never reach it.
         if self.switcher.context_menu_open()
             && matches!(event, TapEvent::KeyDown { .. } | TapEvent::KeyUp)
         {

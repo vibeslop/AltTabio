@@ -17,7 +17,6 @@ pub struct SwitcherViewIvars {
     pub(super) model: RefCell<Option<FrameModel>>,
     pub(super) handler: RefCell<Option<ViewHandler>>,
     tracking_area: RefCell<Option<Retained<NSTrackingArea>>>,
-    // Trackpad scrolling arrives in small precise deltas; they add up to whole steps here.
     scrolled: Cell<f64>,
 }
 

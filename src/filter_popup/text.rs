@@ -77,7 +77,6 @@ impl TextRun {
             let start =
                 u32::try_from(text[..selected.start].encode_utf16().count()).unwrap_or(u32::MAX);
             let length = u32::try_from(text[selected].encode_utf16().count()).unwrap_or(u32::MAX);
-            // A single-line text range has no more regions than its UTF-16 units.
             selection.resize(
                 encoded.len().saturating_add(1),
                 DWRITE_HIT_TEST_METRICS::default(),

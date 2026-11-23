@@ -3,20 +3,23 @@
 ## Architecture
 
 - Switcher behavior stays outside platform code. Windows callbacks and macOS event-tap, view, and completion callbacks translate input into bounded application events — no rendering, enumeration, file I/O, logging, or blocking work inside them.
-- The library crate (`src/alttabio.rs` modules) compiles on both platforms and carries the tests; the bin-only modules declared in `src/main.rs` are the adapters and keep only tests that need Win32 or AppKit.
+- The library crate (`src/alttabio.rs`, `#![forbid(unsafe_code)]`) compiles on both platforms and carries the tests; the bin-only modules declared in `src/main.rs` are the native adapters and keep only tests that need Win32 or AppKit.
 
-## Rust and Win32
+## Verification and lints
 
 - Verify every Rust change with `cargo fmt -- --check`, `cargo clippy --quiet --all-targets -- -D warnings`, and `cargo test --quiet`. Prefer `--quiet` on all cargo invocations; only failures matter, don't echo successful build output.
-- Production paths never panic on external state. Propagate or handle errors explicitly; never silently discard a fallible Win32 or COM result.
-- `unsafe` lives in narrow Windows adapters, and each block states the invariant that makes it sound. A Windows callback must catch and contain panics — never unwind across `extern "system"`.
+- Encode recurring corrections as Clippy rules (`Cargo.toml`, `clippy.toml`) or tests (`tests/`) instead of adding notes here or inline comments in `src/`.
+
+## Win32
+
+- Windows callbacks must catch and contain panics — never unwind across `extern "system"`.
 - Owned handles release exactly once; borrowed `HWND` values are never destroyed. Pair COM/WinRT init and uninit on the same thread through an owning guard.
 - Enable only the `windows` crate features the code actually uses. New dependencies (UI framework, async runtime, allocator, logging stack) need a measured justification.
 
 ## macOS
 
-- `unsafe` lives in narrow `objc2` adapters with the same invariant comments as the Win32 code. Nothing native holds an app-state borrow across a nested run loop (menus, alerts); use `run_later` or `post_to_app`.
-- The overlay draws from `SwitcherTokens` in `src/theme.rs`: one fixed palette per light and dark theme, authored in OKLCH as pure greys with no accent, with every text token a real color rather than an alpha of another. The user's accent color is not read; the theme setting (system, light, dark) is the only switch. Contrast lives in the lightness gap, so a readability fix moves L. Edges are 1pt rings in pure black or white at low alpha, never palette grays, and separation comes from surfaces, not lines. Selection is a plate of the `selection` token behind the app tile and the window row.
+- Nothing native holds an app-state borrow across a nested run loop (menus, alerts); use `run_later` or `post_to_app`.
+- The overlay draws from `SwitcherTokens` in `src/theme.rs`: one fixed palette per light and dark theme, authored in OKLCH as pure greys with no accent, with every text token a real color rather than an alpha of another. The theme setting (system, light, dark) is the only switch. Contrast lives in the lightness gap, so a readability fix moves L. Edges are 1pt rings in pure black or white at low alpha, never palette grays, and separation comes from surfaces, not lines. Selection is a plate of the `selection` token behind the app tile and the window row.
 - The switcher does one job, returning to an app or window, and teaches nothing. Every feature is either visible on the panel or already known from the system ⌘ Tab; one that needs a hint bar, a tour, or a settings description to be found does not ship. The keys follow macOS: Tab, the backtick, and ←/→ step through apps; ↑/↓ through the selected app's windows, and 1-9 pick one by the number beside it; W, M, H, and Q act on the selection; the right-click menu holds the rest. The first Tab lands on the previous app, as in macOS, and the app in front starts on the window after the one in focus. Switching logic lives in `src/app_switcher.rs`, and the panel's pointer handling and geometry in `src/panel_pointer.rs` and `src/panel_layout.rs`.
 - Releases carry the certificate pinned in `scripts/mac/release-certificate.sha1`; macOS ties every user's Accessibility and Screen Recording grants to it. Never replace the pin, create another release certificate, or overwrite the `release` environment's secrets: users would have to grant both permissions again. Its key lives only in those secrets and the encrypted backup in the private `vibeslop/release-signing` repository; releases come from the `release` workflow on a `v*` tag.
 - Verify with the same cargo commands, then `scripts/mac/build-app.sh`. The bundle is `target/mac/AltTabio.app`; `scripts/mac/run.sh` builds and starts it with logs in the terminal.

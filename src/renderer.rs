@@ -39,8 +39,6 @@ pub struct Renderer {
     compact_text: TextFormats,
     theme: ResolvedTheme,
     resources: Option<RenderResources>,
-    // DirectWrite takes UTF-16, so every title, app name and number is re-encoded on each paint;
-    // one buffer reused for all of them keeps painting from allocating.
     utf16: Vec<u16>,
     icons: IconBitmaps,
     icon_draw_failures: FailureRun,
@@ -278,7 +276,6 @@ impl Renderer {
     }
 
     fn record_icon_pass(&mut self, failure: Option<IconPassFailure>) {
-        // Repaints reuse cached failures; report the first failed pass in each run.
         match failure {
             None => {
                 self.icon_draw_failures.succeed();
@@ -314,8 +311,6 @@ impl Renderer {
         };
         let dpi = f32::from(metrics.dpi);
         let render_properties = D2D1_RENDER_TARGET_PROPERTIES {
-            // Icons now share this target with the UI, so acceleration can retain one full frame.
-            // Direct2D falls back to software when hardware rendering is unavailable.
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
             dpiX: dpi,
             dpiY: dpi,
@@ -324,7 +319,6 @@ impl Renderer {
         let hwnd_properties = D2D1_HWND_RENDER_TARGET_PROPERTIES {
             hwnd,
             pixelSize: D2D_SIZE_U { width, height },
-            // Event-driven paints submit the complete frame without waiting for a refresh here.
             presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
         };
         let target = unsafe {

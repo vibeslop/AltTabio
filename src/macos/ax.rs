@@ -19,6 +19,8 @@ pub struct AxElement(CFRetained<AXUIElement>);
 // Accessibility client API as callable from any thread and every call here is a synchronous
 // message to the owning process.
 unsafe impl Send for AxElement {}
+// SAFETY: an AXUIElement is an immutable token whose Accessibility calls synchronize in the
+// remote process, so sharing references across threads cannot introduce data races.
 unsafe impl Sync for AxElement {}
 
 impl std::fmt::Debug for AxElement {
@@ -38,9 +40,6 @@ impl AxElement {
 
     /// Bounds every call through this element so an unresponsive app cannot stall enumeration.
     pub fn set_messaging_timeout(&self, seconds: f32) {
-        // A failure is safe to ignore: the element keeps the global timeout, which is slower but
-        // still bounded. Apple lists a negative timeout, which callers never pass, and an invalid
-        // element, whose next call fails with an error the caller handles.
         let _error = unsafe {
             // SAFETY: the element is live for the duration of the call.
             self.0.set_messaging_timeout(seconds)
@@ -186,7 +185,6 @@ impl WindowChange {
 }
 
 unsafe extern "C-unwind" {
-    // Declared here because the binding panics instead of returning `None`.
     fn AXObserverGetRunLoopSource(observer: &AXObserver) -> Option<NonNull<CFRunLoopSource>>;
 }
 
@@ -260,8 +258,6 @@ impl AppObserver {
 
 impl Drop for AppObserver {
     fn drop(&mut self) {
-        // Unregistering would ask the app, which may not answer; without its source on a run
-        // loop the observer delivers nothing, and the app forgets it once it is released.
         if let Some(run_loop) = CFRunLoop::main() {
             run_loop.remove_source(Some(&self.source), unsafe {
                 // SAFETY: the common-modes constant is a static string owned by CoreFoundation.
@@ -280,8 +276,7 @@ unsafe extern "C-unwind" fn observer_callback(
     let Some(change) = WindowChange::from_refcon(refcon) else {
         return;
     };
-    // Nothing may unwind into Accessibility; a lost change shows up in the next refresh.
-    let _ = catch_unwind(AssertUnwindSafe(|| {
+    let _panicked = catch_unwind(AssertUnwindSafe(|| {
         post_refresh_notice(match change {
             WindowChange::Focused => RefreshNotice::Focus,
             WindowChange::Opened => RefreshNotice::List,

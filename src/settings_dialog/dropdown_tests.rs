@@ -11,7 +11,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
 
-// Exercise capture routing instead of sending the press straight to the target.
 fn captured_click(window: HWND, combo: HWND, target: HWND) -> Result<()> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
@@ -42,9 +41,12 @@ fn captured_click(window: HWND, combo: HWND, target: HWND) -> Result<()> {
         SendMessageW(list, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(packed));
     }
     pump(window);
-    // SAFETY: the original list must have released capture and closed.
     assert_eq!(
-        unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+        unsafe {
+            // SAFETY: the original list must have released capture and closed.
+            SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+        }
+        .0,
         0
     );
     Ok(())
@@ -162,10 +164,12 @@ fn captured_outside_click_activates_cancel() -> Result<()> {
         )
     };
     captured_click(dialog.window(), combo, cancel)?;
-    // SAFETY: Cancel must close the actual native dialog from this one click.
     assert!(
-        !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(dialog.window())) }
-            .as_bool()
+        !unsafe {
+            // SAFETY: Cancel must close the actual native dialog from this one click.
+            windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(dialog.window()))
+        }
+        .as_bool()
     );
     dialog.destroy()?;
     Ok(())
@@ -184,15 +188,21 @@ fn queued_focus_reveal_keeps_the_open_dropdown_open() -> Result<()> {
             SendMessageW(combo, WM_SETFOCUS, None, None);
             SendMessageW(combo, CB_SHOWDROPDOWN, Some(WPARAM(1)), None);
         }
-        // SAFETY: scalar query of this test's live combo.
         assert_ne!(
-            unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: scalar query of this test's live combo.
+                SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0
         );
         pump(dialog.window());
-        // SAFETY: the popup must survive the pending focus/reveal message.
         assert_ne!(
-            unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: the popup must survive the pending focus/reveal message.
+                SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0,
             "{selector:?} dropdown closed itself after opening"
         );
@@ -235,19 +245,29 @@ fn clicking_from_one_dropdown_to_the_other_keeps_the_second_open() -> Result<()>
                 SendMessageW(combo, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
             }
             pump(dialog.window());
-            // SAFETY: the clicked native control must retain its open popup.
             assert_ne!(
-                unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+                unsafe {
+                    // SAFETY: the clicked native control must retain its open popup.
+                    SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+                }
+                .0,
                 0
             );
         }
-        // SAFETY: only the most recently clicked combo may retain its popup.
         assert_eq!(
-            unsafe { SendMessageW(first, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: only the most recently clicked combo may retain its popup.
+                SendMessageW(first, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0
         );
         assert_ne!(
-            unsafe { SendMessageW(second, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: scalar state query on this test's live combo.
+                SendMessageW(second, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0
         );
         // SAFETY: close the remaining test popup with its normal Escape behavior.
@@ -294,13 +314,20 @@ fn clicking_popup_rows_commits_the_theme_and_icon_choices() -> Result<()> {
         }
         pump(list);
         pump(dialog.window());
-        // SAFETY: scalar native state queries on this test's live combo.
         assert_eq!(
-            unsafe { SendMessageW(combo, CB_GETCURSEL, None, None) }.0,
+            unsafe {
+                // SAFETY: scalar native state queries on this test's live combo.
+                SendMessageW(combo, CB_GETCURSEL, None, None)
+            }
+            .0,
             1
         );
         assert_eq!(
-            unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: scalar native state query on this test's live combo.
+                SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0
         );
         let state = host.state_mut()?;
@@ -349,13 +376,20 @@ fn enter_commits_a_keyboard_choice_without_extra_clicks() -> Result<()> {
             );
         }
         pump(dialog.window());
-        // SAFETY: the committed entry and closed popup are queried using scalar messages.
         assert_eq!(
-            unsafe { SendMessageW(combo, CB_GETCURSEL, None, None) }.0,
+            unsafe {
+                // SAFETY: the committed entry and closed popup are queried using scalar messages.
+                SendMessageW(combo, CB_GETCURSEL, None, None)
+            }
+            .0,
             1
         );
         assert_eq!(
-            unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: scalar native state query on this test's live combo.
+                SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0
         );
         let state = host.state_mut()?;
@@ -397,6 +431,7 @@ fn escaping_a_dropdown_restores_its_preview_and_save_state() -> Result<()> {
         let background = host.state_mut()?.palette.background;
         // SAFETY: these scalar queries read only this test's live windows.
         let original = unsafe { SendMessageW(combo, CB_GETCURSEL, None, None) };
+        // SAFETY: this scalar query reads only this test's live dialog window.
         let icon = unsafe { SendMessageW(dialog.window(), WM_GETICON, Some(WPARAM(0)), None) };
         // SAFETY: open the native popup, preview one entry, then cancel using Escape.
         unsafe {
@@ -417,9 +452,11 @@ fn escaping_a_dropdown_restores_its_preview_and_save_state() -> Result<()> {
             );
         }
         pump(dialog.window());
-        // SAFETY: native selection must be restored after cancellation.
         assert_eq!(
-            unsafe { SendMessageW(combo, CB_GETCURSEL, None, None) },
+            unsafe {
+                // SAFETY: native selection must be restored after cancellation.
+                SendMessageW(combo, CB_GETCURSEL, None, None)
+            },
             original
         );
         assert_eq!(
@@ -427,9 +464,11 @@ fn escaping_a_dropdown_restores_its_preview_and_save_state() -> Result<()> {
             background,
             "{selector:?} Escape left a different theme preview applied"
         );
-        // SAFETY: read the test window's borrowed icon handle without taking ownership.
         assert_eq!(
-            unsafe { SendMessageW(dialog.window(), WM_GETICON, Some(WPARAM(0)), None) },
+            unsafe {
+                // SAFETY: read the test window's borrowed icon handle without taking ownership.
+                SendMessageW(dialog.window(), WM_GETICON, Some(WPARAM(0)), None)
+            },
             icon,
             "{selector:?} Escape left a different icon preview applied"
         );
@@ -463,15 +502,21 @@ fn previewing_a_dropdown_choice_keeps_its_popup_open() -> Result<()> {
             SendMessageW(combo, CB_SHOWDROPDOWN, Some(WPARAM(1)), None);
             SendMessageW(combo, WM_KEYDOWN, Some(WPARAM(usize::from(key.0))), None);
         }
-        // SAFETY: scalar native selection/state queries on the live test combo.
         assert_eq!(
-            unsafe { SendMessageW(combo, CB_GETCURSEL, None, None) }.0,
+            unsafe {
+                // SAFETY: scalar native selection/state queries on the live test combo.
+                SendMessageW(combo, CB_GETCURSEL, None, None)
+            }
+            .0,
             expected
         );
         pump(dialog.window());
-        // SAFETY: changing a preview must not close the popup before a commit or Escape.
         assert_ne!(
-            unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, None, None) }.0,
+            unsafe {
+                // SAFETY: changing a preview must not close the popup before a commit or Escape.
+                SendMessageW(combo, CB_GETDROPPEDSTATE, None, None)
+            }
+            .0,
             0,
             "{selector:?} live preview closed its popup"
         );

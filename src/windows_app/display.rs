@@ -15,9 +15,6 @@ impl App {
             (lparam.0 as *const RECT).as_ref()
         };
         if let Some(suggested) = suggested {
-            // The suggested rectangle only picks the monitor. It keeps the window's old logical
-            // size, while AltTabio sizes the overlay from its monitor, so scaling it can make the
-            // overlay fill a high-DPI screen.
             let bounds = match monitor_work_area_from_rect(*suggested) {
                 Ok(work_area) => native_rect(overlay_bounds(work_area)),
                 Err(error) => {

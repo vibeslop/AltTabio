@@ -252,9 +252,6 @@ mod tests {
         assert!(defaults.appearance.compact_list);
         assert!(defaults.general.typed_search);
 
-        // In logical pixels the list spans x 18 to 243.2, its rows y 18 to 62 and 64 to 108,
-        // and the selected row's close button x 211.2 to 235.2 and y 10 to 34 below the row's
-        // top. Each pair of pixels below straddles one of those edges.
         let mut switcher = scrolled_switcher();
         assert_hits_at_fractional_dpi(
             &mut switcher,
@@ -285,7 +282,6 @@ mod tests {
             ],
         );
 
-        // Hovering the seventh task selects it without scrolling the list.
         assert_eq!(
             hit_at_fractional_dpi(&mut switcher, true, (100, 50)),
             Some(Task(7))
@@ -312,9 +308,6 @@ mod tests {
 
     #[test]
     fn normal_list_maps_fractional_dpi_pixels_to_the_row_drawn_there() {
-        // In logical pixels the list spans x 20 to 414.4, its rows y 20 to 78 and 84 to 142,
-        // and the selected row's close button x 376.4 to 406.4 and y 14 to 44 below the row's
-        // top. Each pair of pixels below straddles one of those edges.
         let mut switcher = scrolled_switcher();
         assert_hits_at_fractional_dpi(
             &mut switcher,
@@ -345,7 +338,6 @@ mod tests {
             ],
         );
 
-        // Hovering the seventh task selects it without scrolling the list.
         assert_eq!(
             hit_at_fractional_dpi(&mut switcher, false, (100, 50)),
             Some(Task(7))
@@ -395,8 +387,6 @@ mod tests {
             for dpi in [96, 120, 144, 168, 192, 288] {
                 let scale = layout_scale(dpi);
                 let layout = for_compact_list(compact);
-                // Fit ten complete rows with only two DIP to spare, so reserving the footer
-                // must remove a row at every tested scale, including fractional DPI.
                 let full_height = 2.0 * layout.outer_padding
                     + 10.0 * layout.row_height
                     + 9.0 * layout.row_gap

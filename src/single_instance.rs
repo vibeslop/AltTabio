@@ -25,7 +25,6 @@ const PEER_CLASS: PCWSTR = w!("AltTabio.SingleInstance.Peer.v1");
 const STARTUP_GRACE: Duration = Duration::from_secs(2);
 
 pub struct SingleInstance {
-    // Destroy the rendezvous before releasing the startup gate.
     _peer: PeerWindow,
     _mutex: OwnedMutex,
 }
@@ -68,18 +67,11 @@ impl SingleInstance {
                             _mutex: mutex,
                         }));
                     }
-                    // Never wait on, take ownership of, or release a pre-existing mutex. Close
-                    // our handle before retrying so it cannot keep a departing object alive.
                     close_handle(handle, "duplicate-instance mutex");
                     None
                 }
-                // A lower-integrity duplicate may not open the elevated instance's mutex with
-                // CreateMutexW's ALL_ACCESS request. Authenticate its peer independently.
                 Err(error) => Some(error),
             };
-            // A peer can exit between obtaining its window PID and querying its executable.
-            // Retry authentication failures within the same bounded startup grace period;
-            // never turn an unverifiable peer into an authenticated duplicate.
             let peer_error = match probe(class) {
                 Ok(true) => return Ok(None),
                 Ok(false) => None,
@@ -92,8 +84,10 @@ impl SingleInstance {
                 );
                 return Err(conflict(&detail));
             }
-            // Only startup waits, never a native callback. Allow the winning concurrent launch
-            // to publish its peer, or a shutting-down instance to release its gate.
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "startup gate waits before any native callback or UI loop exists"
+            )]
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -111,7 +105,6 @@ fn conflict(detail: &str) -> Error {
 
 fn authenticated_peer(class: PCWSTR) -> Result<bool> {
     let mut previous = None;
-    // Window names/classes are untrusted. Bound work even if another process floods this class.
     for _ in 0..64 {
         let found = unsafe {
             // SAFETY: the class is terminated and HWND_MESSAGE limits discovery to this desktop's
@@ -119,7 +112,6 @@ fn authenticated_peer(class: PCWSTR) -> Result<bool> {
             FindWindowExW(Some(HWND_MESSAGE), previous, class, None)
         };
         let Ok(window) = found else {
-            // FindWindowExW also reports no match via a null result, with no defined last error.
             return Ok(false);
         };
         if authentic_window(window)
@@ -155,8 +147,6 @@ fn authentic_window(window: HWND) -> Result<bool> {
         // SAFETY: GetCurrentProcess returns a borrowed pseudo-handle, never closed by this code.
         executable_path(GetCurrentProcess())
     }?;
-    // Compare file identity, not just the AltTabio basename or an attacker-supplied window title.
-    // This also accepts alternate path spellings and hard links to this same executable.
     Ok(
         file_identity(&peer)? == file_identity(&current)?
             && window_process_id(window) == process_id,
@@ -170,7 +160,6 @@ fn window_process_id(window: HWND) -> u32 {
         GetWindowThreadProcessId(window, Some(&raw mut process_id))
     };
     if thread_id == 0 {
-        // A disappearing or invalid HWND is never accepted as a genuine peer.
         return 0;
     }
     process_id
@@ -194,7 +183,6 @@ struct PeerWindow {
     window: HWND,
     class_atom: u16,
     instance: HINSTANCE,
-    // HWND destruction and ReleaseMutex must run on the creating thread, even during unwinding.
     _same_thread: PhantomData<Rc<()>>,
 }
 
@@ -248,8 +236,6 @@ unsafe extern "system" fn peer_window_proc(
     _wparam: WPARAM,
     _lparam: LPARAM,
 ) -> LRESULT {
-    // No application state, I/O, or blocking work. Ignore all messages, including WM_CLOSE, so
-    // foreign messages cannot destroy the guard's window. Contain panics at the native boundary.
     std::panic::catch_unwind(|| LRESULT(isize::from(message == WM_NCCREATE))).unwrap_or_default()
 }
 

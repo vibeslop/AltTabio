@@ -94,23 +94,17 @@ unsafe extern "system" fn settings_control_subclass_proc(
         }
         // SAFETY: the installed subclass owns a cache reference until WM_NCDESTROY.
         let cache = unsafe { (cache_pointer as *const PaintCell).as_ref() }?;
-        // Release the cache borrow before any native call. A nested command may replace
-        // the snapshot, while this callback safely retains its own resources.
         let state = cache.try_borrow().ok()?.as_ref()?.clone();
         let root = state.hwnd;
         if hwnd == root {
             return paint_dialog_message(message, wparam, lparam, &state);
         }
-        // Keep the popup's native selection/capture behavior and owner-drawn items.
-        // Only replace its nonclient edge with the same neutral edge as the field.
         let Some(control) = state.controls.find(hwnd) else {
             return popup_message(hwnd, message, wparam, lparam, &state);
         };
         if control == Control::AboutRepository && message == WM_SETCURSOR {
             return link_cursor();
         }
-        // Only the viewport forwards child notifications. Combos must first process
-        // messages from their own listboxes to commit and cancel selections correctly.
         if control == Control::Viewport
             && matches!(
                 message,
@@ -124,7 +118,6 @@ unsafe extern "system" fn settings_control_subclass_proc(
             return Some(unsafe { SendMessageW(root, message, Some(wparam), Some(lparam)) });
         }
         if message == WM_VSCROLL || message == WM_MOUSEWHEEL {
-            // Keep the native popup's wheel handling while it is open.
             let popup_open = matches!(control, Control::Selector(_)) &&
                 // SAFETY: this is a live COMBOBOX and the query has no pointer payload.
                 unsafe { SendMessageW(hwnd, CB_GETDROPPEDSTATE, None, None) }.0 != 0;
@@ -257,8 +250,6 @@ fn paint_dialog_message(
 ) -> Option<LRESULT> {
     match message {
         WM_ERASEBKGND | WM_PRINTCLIENT => {
-            // Scrolling and combo resizing can repaint the parent synchronously while
-            // DialogHost holds mutable state. Use the same snapshot as child painting.
             if let Err(error) =
                 super::paint::paint_window_background(HDC(wparam.0 as *mut c_void), state)
             {

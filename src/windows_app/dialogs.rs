@@ -104,8 +104,6 @@ impl AppHost {
                 &[("error", &error.to_string())],
             )),
         }
-        // Background update events can copy preview-language labels while the modal loop
-        // runs. Restore copied UI text after every exit, including Cancel and save failures.
         if let Some(tray) = &app.tray
             && let Err(error) = tray.refresh_language()
         {

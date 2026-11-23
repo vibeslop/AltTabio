@@ -66,9 +66,6 @@ pub fn fitted_size(area: (usize, usize), content: (f64, f64)) -> (usize, usize) 
 pub struct PreviewSource {
     content: Option<Retained<SCShareableContent>>,
     fetching: bool,
-    // Whether this session asked for the window list already. Fetching it costs the window
-    // server more than a capture, so it is fetched only for a window it lacks, once a session;
-    // a list that failed to load is not asked for again until the next one.
     fetched: bool,
 }
 
@@ -140,7 +137,6 @@ impl PreviewSource {
             if self.fetched {
                 return Capture::NotListed;
             }
-            // The window may have opened since the list was fetched.
             self.refresh_content();
             return Capture::Waiting;
         };

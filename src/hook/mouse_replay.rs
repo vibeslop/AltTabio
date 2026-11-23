@@ -48,8 +48,6 @@ impl ReplayWorker {
 
 impl Drop for ReplayWorker {
     fn drop(&mut self) {
-        // The owner removes its hooks before dropping us, so joining cannot wait on a callback
-        // to the joining thread. Disconnect first so the worker exits after balancing its clicks.
         drop(self.sender.take());
         if let Some(join) = self.join.take()
             && let Err(error) = join.join()
@@ -83,10 +81,7 @@ pub(super) fn replay_right_click_with(mut send: impl FnMut(&[INPUT], i32) -> u32
     };
     match send(&inputs, size) {
         2 => true,
-        1 => {
-            // A partial batch inserted the press. Complete its matching release.
-            send(&inputs[1..], size) == 1
-        }
+        1 => send(&inputs[1..], size) == 1,
         _ => false,
     }
 }
@@ -118,7 +113,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .unwrap_or_else(|error| panic!("replay did not start: {error}"));
         assert_ne!(replay_thread, thread::current().id());
-        // Native injection is still blocked. Hook dispatch must remain nonblocking and bounded.
         for _ in 0..QUEUED_CLICKS {
             assert!(worker.request());
         }
@@ -155,9 +149,12 @@ mod tests {
                 return 1;
             }
             assert_eq!(inputs.len(), 1);
-            // SAFETY: the helper initializes the mouse union member.
             assert_eq!(
-                unsafe { inputs[0].Anonymous.mi }.dwFlags,
+                unsafe {
+                    // SAFETY: the helper initializes the mouse union member.
+                    inputs[0].Anonymous.mi
+                }
+                .dwFlags,
                 MOUSEEVENTF_RIGHTUP
             );
             1

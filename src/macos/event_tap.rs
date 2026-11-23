@@ -115,9 +115,6 @@ impl Drop for EventTap {
                 kCFRunLoopCommonModes
             });
         }
-        // Releasing the port leaves the tap registered with the window server, disabled but
-        // still on the path of every input event. The app reinstalls the tap on every app
-        // switch, so without this the leaked taps slowed all typing and clicking over time.
         self.port.invalidate();
         unsafe {
             // SAFETY: the tap is disabled, its source removed, and its port invalidated, so no
@@ -175,8 +172,6 @@ fn handle_event(context: &mut TapContext, event_type: CGEventType, event: &CGEve
     }
     let tap_event = match event_type {
         CGEventType::KeyDown => {
-            // Only a letter pressed with ⌘ or ⌥ is ever a command, so every other key goes by its
-            // position, and plain typing skips building an NSEvent to ask the layout.
             let typed = CGEvent::flags(Some(event))
                 .intersects(CGEventFlags::MaskCommand | CGEventFlags::MaskAlternate)
                 .then(|| typed_character(event))

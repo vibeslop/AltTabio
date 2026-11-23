@@ -24,8 +24,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Error, PCWSTR, Result};
 
-// Closing is posted rather than done in place, so the handler that asks for it releases its state
-// borrow before WM_DESTROY and WM_NCDESTROY arrive.
 const WM_DESTROY_DIALOG: u32 = WM_APP + 20;
 
 /// Shared dark dialog surfaces.
@@ -131,7 +129,6 @@ impl<S: DialogWindow> ModalDialog<S> {
             state: RefCell::new(state),
             done: Cell::new(false),
         })));
-        // A failed creation drops this owner with no window, which frees the host.
         let mut dialog = Self {
             host: Some(host),
             window: None,
@@ -388,8 +385,6 @@ unsafe extern "system" fn dialog_window_proc<S: DialogWindow>(
     }));
     let handled = match handled {
         Ok(handled) => handled,
-        // A panic while attaching may leave the window without its host. DefWindowProcW would
-        // still accept creation, and the modal loop would never learn that such a window closed.
         Err(_) if message == WM_NCCREATE => Some(LRESULT(0)),
         Err(_) => None,
     };
@@ -517,9 +512,6 @@ pub(crate) fn focus(window: HWND) -> Result<()> {
         SetLastError(WIN32_ERROR(0));
         SetFocus(Some(window))
     };
-    // SetFocus returns the previous focus, which may be null, and the WM_KILLFOCUS and
-    // WM_SETFOCUS handlers it runs may leave a last error behind, so neither tells whether the
-    // focus moved. Where the focus ends up does.
     let focused = unsafe {
         // SAFETY: GetFocus only reads the calling thread's focus.
         GetFocus()

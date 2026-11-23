@@ -7,17 +7,11 @@ use crate::macos::settings_window::SettingsWindow;
 use crate::macos::updater;
 use alttabio::update::{Checked, Step, Update};
 
-// The first automatic update check waits a minute after the start, so a login does not ask
-// GitHub before the network is up. A failed check tries again in an hour, and any other outcome
-// waits a day.
 pub(super) const FIRST_UPDATE_CHECK_SECONDS: f64 = 60.0;
 const UPDATE_RETRY_SECONDS: f64 = 60.0 * 60.0;
 const UPDATE_INTERVAL_SECONDS: f64 = 24.0 * 60.0 * 60.0;
-// An automatic update relaunches once the keyboard and pointer have rested this long, so the
-// switcher is never gone at the moment it is wanted.
 const AWAY_SECONDS: f64 = 5.0 * 60.0;
 const AWAY_POLL_SECONDS: f64 = 60.0;
-// A relaunch never takes the switcher away while it is open; it tries again this much later.
 const RELAUNCH_RETRY_SECONDS: f64 = 1.0;
 
 impl App {
@@ -31,9 +25,6 @@ impl App {
     pub(super) fn update_check_due(&mut self) {
         self.update_timer = None;
         let step = self.updater.check_due();
-        // A check runs only when nothing else is under way. Whatever is keeps automatic updates
-        // going by the next day: a check reschedules when it ends, and an install that fails
-        // leaves this timer behind.
         if step == Step::None && self.settings.general.auto_update {
             self.schedule_update_check(UPDATE_INTERVAL_SECONDS);
         }
@@ -41,8 +32,6 @@ impl App {
     }
 
     pub(super) fn update_requested(&mut self) {
-        // The installed menu action explicitly offers relaunch. During installation the
-        // command still says Check for Updates, so observing it grants no restart consent.
         let step = if self.updater.installed_version().is_some() {
             self.updater.requested()
         } else {
@@ -101,7 +90,6 @@ impl App {
                 let mtm = self.mtm;
                 run_later(mtm, move || show_update_report(mtm, &report));
             }
-            // Timers wait out an open menu or alert, so the app never quits from inside one.
             Step::Relaunch => run_later(self.mtm, || {
                 let _ = with_app(App::relaunch);
             }),

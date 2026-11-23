@@ -20,12 +20,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const RELEASES_URL: &str = "https://api.github.com/repos/vibeslop/AltTabio/releases?per_page=30";
-// A release list includes notes and assets, but must stay bounded before NSData copies it.
 const MAX_RELEASE_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_METADATA_STDERR_BYTES: usize = 16 * 1024;
-// scripts/mac/package.sh packages nothing signed with another certificate.
 const RELEASE_CERTIFICATE: &str = include_str!("../../scripts/mac/release-certificate.sha1");
-// Share the standalone installer's download/extraction limits, not just its ZIP metadata checks.
 const INSTALLER: &str = include_str!("../../scripts/mac/install.sh");
 
 /// The running copy's bundle, which an update replaces.
@@ -35,7 +32,6 @@ pub fn bundle_path() -> PathBuf {
 
 /// Seconds since the last key press, click, or pointer movement in this login session.
 pub fn seconds_since_input() -> f64 {
-    // kCGAnyInputEventType, which covers every kind of input event.
     let any_input = CGEventType(u32::MAX);
     CGEventSource::seconds_since_last_event_type(
         CGEventSourceStateID::CombinedSessionState,
@@ -75,8 +71,6 @@ pub fn install(update: Update, bundle: PathBuf) {
 /// own permissions rather than a child of the shell. The shell's own process group keeps it
 /// alive when the app's group ends with the app.
 pub fn relaunch_after_exit(bundle: &Path, open_settings: bool) -> Result<(), String> {
-    // A copy still running after ten seconds did not quit, and opening the bundle would only
-    // bring it forward, so the shell gives up and the update waits for the next start.
     const SCRIPT: &str = r#"tries=0
 while /bin/kill -0 "$1" 2>/dev/null; do
     tries=$((tries + 1))
@@ -106,7 +100,6 @@ exec /usr/bin/open "$@""#;
 fn spawn(work: impl FnOnce() + Send + 'static) -> Result<(), String> {
     std::thread::Builder::new()
         .name("alttabio-update".to_owned())
-        // AppKit drains no pool on a thread it didn't start.
         .spawn(move || autoreleasepool(|_| work()))
         .map(drop)
         .map_err(|error| format!("Could not start the update thread: {error}"))
@@ -136,8 +129,6 @@ fn check_now(current: Version, bundle: &Path) -> Result<Checked, String> {
 
 /// Why the copy at `bundle` cannot replace itself, if it cannot.
 fn obstacle(bundle: &Path) -> Option<String> {
-    // macOS keeps the permissions only for a copy signed with the same certificate. A copy
-    // built from source carries another one, and an update would cost it both permissions.
     if verify(bundle).is_err() {
         return Some(
             "This copy is not signed with the release certificate, so a release would lose its \
@@ -196,7 +187,6 @@ fn install_now(update: &Update, bundle: &Path) -> Result<(), String> {
         ));
     }
 
-    // The new copy goes next to the old one first, so the swap is two renames on one volume.
     let staged = folder.join(".AltTabio.app.new");
     let previous = folder.join(".AltTabio.app.old");
     remove(&staged)?;
@@ -226,8 +216,6 @@ fn install_now(update: &Update, bundle: &Path) -> Result<(), String> {
             "Could not put AltTabio {version} in place: {error}"
         ));
     }
-    // This process still runs from the old copy, which keeps its files open; what it might load
-    // later comes from the new copy at the same path.
     discard(&previous);
     Ok(())
 }
@@ -363,7 +351,6 @@ struct WorkFolder {
 impl WorkFolder {
     fn create() -> Result<Self, String> {
         let path = std::env::temp_dir().join(format!("AltTabio-update-{}", std::process::id()));
-        // A process that had the same id before this one may have ended mid-install.
         remove(&path)?;
         std::fs::create_dir(&path)
             .map_err(|error| format!("Could not create {}: {error}", path.display()))?;
@@ -432,7 +419,6 @@ mod tests {
     fn release_metadata_has_a_byte_limit_before_json_parsing() {
         let mut json = vec![b' '; MAX_RELEASE_METADATA_BYTES + 1];
         json[..2].copy_from_slice(b"[]");
-        // Valid JSON with trailing whitespace must still be rejected when oversized.
         assert!(read_releases(&json).is_err_and(|error| error.contains("too large")));
         assert_eq!(
             read_releases(&json[..MAX_RELEASE_METADATA_BYTES]),

@@ -49,8 +49,6 @@ fn test_token() -> Result<OwnedHandle, String> {
 }
 
 fn restricted_test_token(primary: HANDLE) -> Result<OwnedHandle, String> {
-    // Remove administrative access even when the suite runs elevated. Unlike a linked UAC token,
-    // this also works on CI accounts without an interactive shell or a split-token logon.
     let mut administrators = [0_u32; 17];
     let mut sid_bytes =
         u32::try_from(size_of_val(&administrators)).map_err(|error| error.to_string())?;
@@ -121,7 +119,6 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // Restore access through handles opened before protecting the objects, even on panic.
         self.protected.clear();
         if let Err(error) = std::fs::remove_dir_all(&self.root) {
             eprintln!("Could not remove path-security fixture: {error}");
@@ -131,7 +128,6 @@ impl Drop for Fixture {
 
 struct RestoreDacl {
     handle: OwnedHandle,
-    // Owns the allocation containing dacl until restoration has finished.
     _original: OwnedSecurityDescriptor,
     dacl: *mut ACL,
 }
@@ -253,11 +249,8 @@ fn protected_executable_beneath_replaceable_ancestor_is_rejected() -> Result<(),
     fixture.protect(&executable)?;
     fixture.protect(&installation)?;
     let root = fixture.root.clone();
-    // Grant ACL control at the higher ancestor, but no current rights to replace its children.
-    // This forces the validator to visit that ancestor rather than reject the immediate parent.
     fixture.protect_with(&root, w!("D:P(A;;FRFX;;;WD)(A;;0x40000;;;WD)(A;;RC;;;OW)"))?;
     let token = test_token()?;
-    // Prove that the leaf and immediate parent are protected, while the ancestor is mutable.
     for path in [&executable, &installation] {
         for access in [FILE_WRITE_DATA.0, WRITE_DAC.0, WRITE_OWNER.0] {
             assert!(!token_has_access(path, token.0, access)?);
@@ -284,7 +277,6 @@ fn parent_delete_and_add_subdirectory_rights_allow_directory_replacement() -> Re
     std::fs::create_dir(&installation).map_err(|error| error.to_string())?;
     fixture.protect(&installation)?;
     let root = fixture.root.clone();
-    // 0x44 is FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD; no ACL control or FILE_ADD_FILE.
     fixture.protect_with(&root, w!("D:P(A;;FRFX;;;WD)(A;;0x44;;;WD)(A;;RC;;;OW)"))?;
     let token = test_token()?;
     assert!(!token_has_access(&installation, token.0, DELETE.0)?);
@@ -333,8 +325,6 @@ fn junctions_are_rejected_without_following_their_target_permissions() -> Result
     let target = fixture.root.join("target");
     let junction = fixture.root.join("junction");
     std::fs::create_dir(&target).map_err(|error| error.to_string())?;
-    // Junction creation needs no symlink privilege. Pass paths as environment values so shell
-    // metacharacters in TEMP are never interpreted as PowerShell source.
     let created = Command::new(system_directory()?.join("WindowsPowerShell/v1.0/powershell.exe"))
         .args([
             "-NoLogo",
@@ -380,8 +370,6 @@ fn protected_file_and_parent_components_are_accepted() -> Result<(), String> {
     let root = fixture.root.clone();
     fixture.protect(&root)?;
     let token = test_token()?;
-    // Test ordinary files we own instead of system binaries, which can be WOF reparse files.
-    // The temporary directory's higher ancestors remain outside this controlled fixture.
     assert!(!path_component_is_replaceable(&executable, token.0)?);
     assert!(!path_component_is_replaceable(&installation, token.0)?);
     Ok(())

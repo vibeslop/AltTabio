@@ -216,7 +216,6 @@ fn template_icon() -> Retained<NSImage> {
         key.setLineWidth(STROKE);
         key.stroke();
 
-        // The app icon's legend: an arrow running into a stop bar, centred on the key.
         let legend = NSBezierPath::bezierPath();
         legend.moveToPoint(NSPoint::new(6.5, 8.0));
         legend.lineToPoint(NSPoint::new(15.5, 8.0));

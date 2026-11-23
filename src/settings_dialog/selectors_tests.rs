@@ -147,7 +147,6 @@ fn native_selectors_render_every_choice_and_keep_labels_at_each_dpi() -> Result<
                         return Err(Error::from_hresult(E_FAIL));
                     };
                     let text = measure_text(image.dc, label, fonts.body.0)?;
-                    // 32px sample, 8px padding on both sides and between sample/text, 28px arrow.
                     assert!(
                         text.cx <= width - scale(84, dpi),
                         "{label} clips at {dpi} DPI"

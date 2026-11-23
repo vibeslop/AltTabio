@@ -98,8 +98,6 @@ fn clean_folder(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.to_string()),
     }
-    // Only exact child names in the protected installation are eligible. Reparse points,
-    // recent work, live app owners, and live helpers were excluded before recursive cleanup.
     fs::remove_dir_all(path).map_err(|error| error.to_string())?;
     Ok(false)
 }

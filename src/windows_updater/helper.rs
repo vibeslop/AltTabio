@@ -22,7 +22,6 @@ pub(super) fn spawn(work: &Path, target: &Path, hash: &str) -> Result<Child, Str
             "Could not clear the previous update helper: {error}"
         ));
     }
-    // Do not reuse a leftover helper. It must be this exact trusted executable.
     let mut source =
         std::fs::File::open(std::env::current_exe().map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
@@ -46,7 +45,6 @@ pub fn run(arguments: &[OsString]) -> bool {
     {
         return false;
     }
-    // No fatal-error dialog, app state, or console is created in this internal mode.
     let result = run_arguments(arguments);
     if let Err(error) = result {
         eprintln!("{error}");
@@ -164,7 +162,6 @@ fn apply(
             if replaced {
                 native::replace(target, &previous, &work.join("failed.exe"))?;
             } else if !target.exists() && previous.exists() {
-                // ReplaceFile may move the original aside before a partial failure.
                 std::fs::rename(&previous, target).map_err(|error| error.to_string())?;
             }
             if let Some(permissions) = &permissions {
@@ -183,8 +180,6 @@ fn apply(
         }
         return Err(message);
     }
-    // Windows locks this helper's image until exit. Leave its protected directory for the
-    // existing maintenance pass after retention, rather than launching a shell to delete it.
     for name in [
         "previous.exe",
         "download.zip",
@@ -212,7 +207,6 @@ mod tests {
             let target = folder.path.join("user's [copy] $test.exe");
             std::fs::write(&target, b"old executable").unwrap_or_else(|error| panic!("{error}"));
             let permissions = Permissions::read(&target).unwrap_or_else(|error| panic!("{error}"));
-            // A different protected staging ACL exercises the ReplaceFile inheritance issue.
             let work = WorkFolder::create(&target).unwrap_or_else(|error| panic!("{error}"));
             std::fs::write(work.path.join("AltTabio.exe"), b"new executable")
                 .unwrap_or_else(|error| panic!("{error}"));
@@ -220,7 +214,6 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{error}"));
             let hash = native::sha256(&work.path.join("AltTabio.exe"))
                 .unwrap_or_else(|error| panic!("{error}"));
-            // Ordinary exits must neither replace nor relaunch.
             assert_eq!(
                 apply(&work.path, &target, &hash, |_| panic!("unapproved launch")),
                 Ok(())
@@ -250,8 +243,6 @@ mod tests {
                 b"keep settings"
             );
             let restored = Permissions::read(&target).unwrap_or_else(|error| panic!("{error}"));
-            // SetNamedSecurityInfo converts legacy ACL bookkeeping to auto-inheritance.
-            // The ACEs, their order and flags, and DACL protection must stay identical.
             assert_eq!(
                 permissions.sddl().replace("AI", ""),
                 restored.sddl().replace("AI", "")

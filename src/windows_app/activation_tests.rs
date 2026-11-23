@@ -39,7 +39,10 @@ fn native_activation_of_hung_window_does_not_block() {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) if Instant::now() < deadline => {
+                #[allow(clippy::disallowed_methods, reason = "test polls child fixture exit")]
+                std::thread::sleep(Duration::from_millis(10));
+            }
             Ok(None) => break None,
             Err(error) => panic!("could not inspect fixture: {error}"),
         }
@@ -116,8 +119,6 @@ fn native_activation_fixture() {
         started.elapsed() < Duration::from_secs(1),
         "activation blocked the caller"
     );
-    // Deliberately end the fixture, including the unresponsive target thread. Windows
-    // releases its desktop/window handles. No user process or desktop was modified.
     std::process::exit(0);
 }
 

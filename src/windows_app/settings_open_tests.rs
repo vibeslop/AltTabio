@@ -68,9 +68,12 @@ fn assert_startup_painted(window: HWND) {
         paint.pending_children, 0,
         "Settings appeared with unpainted child controls before entering its message loop"
     );
-    // SAFETY: the dialog remains live and querying its update region does not paint it.
     assert!(
-        !unsafe { GetUpdateRect(window, None, false) }.as_bool(),
+        !unsafe {
+            // SAFETY: the dialog remains live and querying its update region does not paint it.
+            GetUpdateRect(window, None, false)
+        }
+        .as_bool(),
         "Settings appeared with an unpainted background"
     );
 }
@@ -172,9 +175,11 @@ fn run_fixture(desktop_name: &mut [u16], show_state: SHOW_WINDOW_CMD, fixture: &
             // SAFETY: only this test-created fixture is terminated if it fails to finish.
             TerminateProcess(process_handle.0, 101)?;
         }
-        // SAFETY: termination is asynchronous, so wait before releasing its private desktop.
         assert_eq!(
-            unsafe { WaitForSingleObject(process_handle.0, 2_000) },
+            unsafe {
+                // SAFETY: termination is asynchronous, so wait before releasing its private desktop.
+                WaitForSingleObject(process_handle.0, 2_000)
+            },
             WAIT_OBJECT_0,
             "the Settings fixture did not terminate"
         );
@@ -216,9 +221,12 @@ fn assert_selected_page(window: HWND, category: Category) -> Result<()> {
         // SAFETY: the live dialog owns navigation buttons with these bounded control IDs.
         let navigation =
             unsafe { GetDlgItem(Some(window), i32::try_from(id).unwrap_or_default()) }?;
-        // SAFETY: this is the live native radio button, queried without pointer payloads.
         assert_eq!(
-            unsafe { SendMessageW(navigation, BM_GETCHECK, None, None) }.0 != 0,
+            unsafe {
+                // SAFETY: this is the live native radio button, queried without pointer payloads.
+                SendMessageW(navigation, BM_GETCHECK, None, None)
+            }
+            .0 != 0,
             candidate == category
         );
     }
@@ -293,7 +301,6 @@ fn check_first_settings_open(theme: Theme, category: Category) -> Result<()> {
             unsafe {
                 let _previous = ShowWindow(window, show_state);
             }
-            // Use the same overlay message as the tray's About command.
             // SAFETY: the overlay and host belong to this fixture; no state borrow spans dispatch.
             unsafe {
                 SendMessageW(owner, crate::app_messages::WM_SHOW_ABOUT, None, None);
