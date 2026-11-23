@@ -200,6 +200,7 @@ pub struct HookState {
     win_switch_gesture_active: bool,
     interception: InterceptionState,
     mouse: mouse::MouseGesture,
+    injected: provenance::InjectedShortcutState,
 }
 
 #[derive(Debug, Default)]
@@ -268,6 +269,7 @@ impl HookState {
         self.overlay_active = false;
         self.alt_switch_gesture_active = false;
         self.win_switch_gesture_active = false;
+        self.injected.reset_gestures();
     }
 
     #[must_use]

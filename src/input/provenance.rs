@@ -1,6 +1,11 @@
 //! Provenance policy for the Windows low-level input boundary.
 
-use super::{HookOutcome, HookSettings, HookState, KeyEvent, MouseEvent};
+use super::{
+    HookOutcome, HookSettings, HookState, InputAction, Key, KeyEvent, KeyTransition, MouseEvent,
+    ReplayedKeyEvent, alt_key_mask, windows_key_mask,
+};
+
+const MENU_MASK_KEY: Key = Key::Other(0xE8);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputProvenance {
@@ -31,9 +36,41 @@ impl InputProvenance {
     }
 }
 
+/// Isolated modifier and switch-gesture tracking for injected keyboard macros (`Win+Tab` and
+/// `Alt+Tab`), kept strictly separate from physical modifier state and privileged overlay commands.
+#[derive(Debug, Default)]
+pub(super) struct InjectedShortcutState {
+    win_keys: u8,
+    alt_keys: u8,
+    shift_keys: u8,
+    suppressed_win_keys: u8,
+    suppressed_alt_keys: u8,
+    suppressed_shift_keys: u8,
+    win_gesture_active: bool,
+    alt_gesture_active: bool,
+    suppressed_tab_release: bool,
+}
+
+impl InjectedShortcutState {
+    pub(super) const fn reset_gestures(&mut self) {
+        self.win_gesture_active = false;
+        self.alt_gesture_active = false;
+    }
+}
+
+const fn injected_shift_mask(key: Key) -> Option<u8> {
+    match key {
+        Key::LeftShift => Some(1),
+        Key::RightShift => Some(2),
+        Key::Other(0x10) => Some(4),
+        _ => None,
+    }
+}
+
 impl HookState {
-    /// Only physical observations may authorize switching or consume gesture release debt.
-    /// Windows' Alt context and async modifier state can include rejected injected presses.
+    /// Physical observations retain full hook authority. Injected input is isolated to
+    /// `Win+Tab`/`Alt+Tab` switcher triggers and never mutates physical state or triggers
+    /// privileged window commands.
     #[must_use]
     pub fn process_key_from(
         &mut self,
@@ -41,13 +78,16 @@ impl HookState {
         mut event: KeyEvent,
         settings: HookSettings,
     ) -> Option<HookOutcome> {
-        if provenance != InputProvenance::Physical {
-            return None;
+        match provenance {
+            InputProvenance::Physical => {
+                event.modifiers.alt = self.any_alt_key_down();
+                event.modifiers.left_windows = self.owned_key_is_down(Key::LeftWindows);
+                event.modifiers.right_windows = self.owned_key_is_down(Key::RightWindows);
+                Some(self.process_key(event, settings))
+            }
+            InputProvenance::Injected => self.process_injected_key(event, settings),
+            InputProvenance::InternalReplay => None,
         }
-        event.modifiers.alt = self.any_alt_key_down();
-        event.modifiers.left_windows = self.owned_key_is_down(super::Key::LeftWindows);
-        event.modifiers.right_windows = self.owned_key_is_down(super::Key::RightWindows);
-        Some(self.process_key(event, settings))
     }
 
     #[must_use]
@@ -61,6 +101,178 @@ impl HookState {
             return None;
         }
         Some(self.process_mouse(event, settings))
+    }
+
+    fn physical_switch_busy(&self) -> bool {
+        self.switch_gesture_active()
+            || self.mouse.is_active()
+            || self.pending_alt_keys != 0
+            || self.pending_windows_keys != 0
+            || self.any_alt_key_down()
+            || self.owned_key_is_down(Key::LeftWindows)
+            || self.owned_key_is_down(Key::RightWindows)
+    }
+
+    fn replay_masked_modifier_release(&mut self, key: Key) {
+        self.replayed_key_events = [
+            Some(ReplayedKeyEvent::pressed(MENU_MASK_KEY)),
+            Some(ReplayedKeyEvent::released(MENU_MASK_KEY)),
+            Some(ReplayedKeyEvent::released(key)),
+        ];
+    }
+
+    fn process_injected_key(
+        &mut self,
+        event: KeyEvent,
+        settings: HookSettings,
+    ) -> Option<HookOutcome> {
+        let pressed = event.transition == KeyTransition::Pressed;
+        if !pressed && event.key == Key::Tab && self.injected.suppressed_tab_release {
+            self.injected.suppressed_tab_release = false;
+            return Some(HookOutcome::suppressed());
+        }
+        if let Some(mask) = injected_shift_mask(event.key) {
+            return self.process_injected_shift(mask, pressed);
+        }
+        if let Some(mask) = windows_key_mask(event.key) {
+            return self.process_injected_windows(event.key, mask, pressed, settings);
+        }
+        if let Some(mask) = alt_key_mask(event.key) {
+            return self.process_injected_alt(event.key, mask, pressed, settings);
+        }
+        if pressed && event.key == Key::Tab {
+            return self.process_injected_tab(settings);
+        }
+        None
+    }
+
+    fn process_injected_shift(&mut self, mask: u8, pressed: bool) -> Option<HookOutcome> {
+        if pressed {
+            if self.interception.suspended || self.physical_switch_busy() {
+                return None;
+            }
+            self.injected.shift_keys |= mask;
+            if self.overlay_active {
+                self.injected.suppressed_shift_keys |= mask;
+                return Some(HookOutcome::suppressed());
+            }
+            return Some(HookOutcome::default());
+        }
+        let was_down = self.injected.shift_keys & mask != 0;
+        self.injected.shift_keys &= !mask;
+        if self.injected.suppressed_shift_keys & mask != 0 {
+            self.injected.suppressed_shift_keys &= !mask;
+            return Some(HookOutcome::suppressed());
+        }
+        was_down.then(HookOutcome::default)
+    }
+
+    fn process_injected_windows(
+        &mut self,
+        key: Key,
+        mask: u8,
+        pressed: bool,
+        settings: HookSettings,
+    ) -> Option<HookOutcome> {
+        if pressed {
+            if !settings.replace_win_tab
+                || self.interception.suspended
+                || self.physical_switch_busy()
+            {
+                return None;
+            }
+            self.injected.win_keys |= mask;
+            if self.overlay_active {
+                self.injected.suppressed_win_keys |= mask;
+                return Some(HookOutcome::suppressed());
+            }
+            return Some(HookOutcome::default());
+        }
+        let was_down = self.injected.win_keys & mask != 0;
+        self.injected.win_keys &= !mask;
+        let suppressed_down = self.injected.suppressed_win_keys & mask != 0;
+        self.injected.suppressed_win_keys &= !mask;
+        let had_gesture = self.injected.win_gesture_active;
+        if self.injected.win_keys == 0 {
+            self.injected.win_gesture_active = false;
+        }
+        if suppressed_down {
+            return Some(HookOutcome::suppressed());
+        }
+        if had_gesture && was_down {
+            self.replay_masked_modifier_release(key);
+            return Some(HookOutcome::suppressed());
+        }
+        was_down.then(HookOutcome::default)
+    }
+
+    fn process_injected_alt(
+        &mut self,
+        key: Key,
+        mask: u8,
+        pressed: bool,
+        settings: HookSettings,
+    ) -> Option<HookOutcome> {
+        if pressed {
+            if !settings.replace_alt_tab
+                || self.interception.suspended
+                || self.physical_switch_busy()
+            {
+                return None;
+            }
+            self.injected.alt_keys |= mask;
+            if self.overlay_active {
+                self.injected.suppressed_alt_keys |= mask;
+                return Some(HookOutcome::suppressed());
+            }
+            return Some(HookOutcome::default());
+        }
+        let was_down = self.injected.alt_keys & mask != 0;
+        self.injected.alt_keys &= !mask;
+        let suppressed_down = self.injected.suppressed_alt_keys & mask != 0;
+        self.injected.suppressed_alt_keys &= !mask;
+        let had_gesture = self.injected.alt_gesture_active;
+        let completed = had_gesture && self.injected.alt_keys == 0;
+        if completed {
+            self.injected.alt_gesture_active = false;
+        }
+        let finish = |suppress: bool| {
+            if completed {
+                HookOutcome::one(suppress, InputAction::AltReleased)
+            } else {
+                HookOutcome {
+                    suppress,
+                    ..HookOutcome::default()
+                }
+            }
+        };
+        if suppressed_down {
+            return Some(finish(true));
+        }
+        if had_gesture && was_down {
+            self.replay_masked_modifier_release(key);
+            return Some(finish(true));
+        }
+        was_down.then(HookOutcome::default)
+    }
+
+    fn process_injected_tab(&mut self, settings: HookSettings) -> Option<HookOutcome> {
+        if self.interception.suspended || self.physical_switch_busy() {
+            return None;
+        }
+        let win_tab = settings.replace_win_tab && self.injected.win_keys != 0;
+        let alt_tab = settings.replace_alt_tab && self.injected.alt_keys != 0 && !win_tab;
+        if !win_tab && !alt_tab {
+            return None;
+        }
+        if win_tab {
+            self.injected.win_gesture_active = true;
+        } else {
+            self.injected.alt_gesture_active = true;
+        }
+        self.injected.suppressed_tab_release = true;
+        let delta = if self.injected.shift_keys != 0 { -1 } else { 1 };
+        Some(HookOutcome::one(true, InputAction::Switch(delta)))
     }
 }
 
@@ -109,7 +321,7 @@ mod tests {
                     INJECTED,
                     KeyEvent::pressed(modifier, Modifiers::default())
                 ),
-                None
+                Some(HookOutcome::default())
             );
             let polluted = Modifiers {
                 alt: true,
@@ -172,6 +384,235 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn injected_win_tab_macro_opens_and_cycles_without_replaying_arbitrary_keys() {
+        let mut state = HookState::default();
+        let plain = Modifiers::default();
+
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::default())
+        );
+        let tab = key(&mut state, INJECTED, KeyEvent::pressed(Key::Tab, plain));
+        assert!(tab.is_some_and(|o| o.suppress));
+        assert_eq!(
+            tab.map(|o| o.actions().collect::<Vec<_>>()),
+            Some(vec![InputAction::Switch(1)])
+        );
+        state.set_overlay_active(true);
+
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::released(Key::Tab, plain)),
+            Some(HookOutcome::suppressed())
+        );
+        let win_up = key(
+            &mut state,
+            INJECTED,
+            KeyEvent::released(Key::LeftWindows, plain),
+        );
+        assert_eq!(win_up, Some(HookOutcome::suppressed()));
+        assert_eq!(
+            state.take_replayed_key_events(),
+            [
+                Some(ReplayedKeyEvent::pressed(MENU_MASK_KEY)),
+                Some(ReplayedKeyEvent::released(MENU_MASK_KEY)),
+                Some(ReplayedKeyEvent::released(Key::LeftWindows)),
+            ]
+        );
+
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::Function(8), plain)
+            ),
+            None
+        );
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::pressed(Key::F4, plain)),
+            None
+        );
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::pressed(Key::Enter, plain)),
+            None
+        );
+
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::suppressed())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::LeftShift, plain)
+            ),
+            Some(HookOutcome::suppressed())
+        );
+        let reverse = key(&mut state, INJECTED, KeyEvent::pressed(Key::Tab, plain));
+        assert_eq!(
+            reverse.map(|o| o.actions().collect::<Vec<_>>()),
+            Some(vec![InputAction::Switch(-1)])
+        );
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::released(Key::Tab, plain)),
+            Some(HookOutcome::suppressed())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::released(Key::LeftShift, plain)
+            ),
+            Some(HookOutcome::suppressed())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::released(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::suppressed())
+        );
+        assert_eq!(state.take_replayed_key_events(), [None; 3]);
+    }
+
+    #[test]
+    fn injected_alt_tab_macro_opens_masks_release_and_commits_on_alt_up() {
+        let mut state = HookState::default();
+        let plain = Modifiers::default();
+
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::pressed(Key::LeftAlt, plain)),
+            Some(HookOutcome::default())
+        );
+        let tab = key(&mut state, INJECTED, KeyEvent::pressed(Key::Tab, plain));
+        assert_eq!(
+            tab.map(|o| o.actions().collect::<Vec<_>>()),
+            Some(vec![InputAction::Switch(1)])
+        );
+        state.set_overlay_active(true);
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::released(Key::Tab, plain)),
+            Some(HookOutcome::suppressed())
+        );
+        let alt_up = key(
+            &mut state,
+            INJECTED,
+            KeyEvent::released(Key::LeftAlt, plain),
+        );
+        assert!(alt_up.is_some_and(|o| o.suppress));
+        assert_eq!(
+            alt_up.map(|o| o.actions().collect::<Vec<_>>()),
+            Some(vec![InputAction::AltReleased])
+        );
+        assert_eq!(
+            state.take_replayed_key_events(),
+            [
+                Some(ReplayedKeyEvent::pressed(MENU_MASK_KEY)),
+                Some(ReplayedKeyEvent::released(MENU_MASK_KEY)),
+                Some(ReplayedKeyEvent::released(Key::LeftAlt)),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_switcher_injected_win_macros_pass_through_without_replay() {
+        let mut state = HookState::default();
+        let plain = Modifiers::default();
+
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::default())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::Other(u16::from(b'R')), plain)
+            ),
+            None
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::released(Key::Other(u16::from(b'R')), plain)
+            ),
+            None
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::released(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::default())
+        );
+        assert_eq!(state.take_replayed_key_events(), [None; 3]);
+    }
+
+    #[test]
+    fn injected_win_shift_tab_forwards_its_forwarded_shift_release_after_overlay_opens() {
+        let mut state = HookState::default();
+        let plain = Modifiers::default();
+
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::default())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::pressed(Key::LeftShift, plain)
+            ),
+            Some(HookOutcome::default())
+        );
+        let tab = key(&mut state, INJECTED, KeyEvent::pressed(Key::Tab, plain));
+        assert_eq!(
+            tab.map(|o| o.actions().collect::<Vec<_>>()),
+            Some(vec![InputAction::Switch(-1)])
+        );
+        state.set_overlay_active(true);
+        assert_eq!(
+            key(&mut state, INJECTED, KeyEvent::released(Key::Tab, plain)),
+            Some(HookOutcome::suppressed())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::released(Key::LeftShift, plain)
+            ),
+            Some(HookOutcome::default())
+        );
+        assert_eq!(
+            key(
+                &mut state,
+                INJECTED,
+                KeyEvent::released(Key::LeftWindows, plain)
+            ),
+            Some(HookOutcome::suppressed())
+        );
     }
 
     #[test]

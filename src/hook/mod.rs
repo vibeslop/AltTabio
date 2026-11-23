@@ -24,7 +24,8 @@ use alttabio::passthrough::PassthroughPolicy;
 use delivery::post_actions;
 use keyboard_state::{KeyboardState, translate_search_character};
 use provenance::{
-    filter_keyboard_input, filter_mouse_input, keyboard_provenance, mouse_provenance,
+    filter_keyboard_input, filter_keyboard_input_for_native_window, filter_mouse_input,
+    keyboard_provenance, mouse_provenance,
 };
 use recovery::{KeyboardRecoveryWatcher, publish_recovery_flags, recover_keyboard_state};
 use replay::replay_key_events;
@@ -380,17 +381,19 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     }
 
     std::panic::catch_unwind(|| {
-        if let Some(result) =
-            filter_keyboard_input(lparam, || forward_keyboard(code, wparam, lparam))
+        if let Some(result) = filter_keyboard_input_for_native_window(lparam) {
+            return result;
+        }
+        let outcome = process_keyboard_message(wparam, lparam);
+        if outcome.is_none()
+            && let Some(result) =
+                filter_keyboard_input(lparam, || forward_keyboard(code, wparam, lparam))
         {
             return result;
         }
-        finish_callback_with(
-            process_keyboard_message(wparam, lparam),
-            post_actions,
-            reset_context,
-            || forward_keyboard(code, wparam, lparam),
-        )
+        finish_callback_with(outcome, post_actions, reset_context, || {
+            forward_keyboard(code, wparam, lparam)
+        })
     })
     .unwrap_or_else(|_| forward_keyboard(code, wparam, lparam))
 }
@@ -461,19 +464,11 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
     }?;
     let provenance = keyboard_provenance(data);
-    if provenance != InputProvenance::Physical {
+    if provenance == InputProvenance::InternalReplay {
         return None;
     }
     let key = decode_virtual_key(data.vkCode);
     let (mut outcome, replayed_key_events) = process_with_context(|context| {
-        context
-            .keyboard_state
-            .observe_at(data.vkCode, transition, data.time);
-        let modifiers = Modifiers {
-            control: context.keyboard_state.pressed(VK_CONTROL),
-            shift: context.keyboard_state.pressed(VK_SHIFT),
-            ..Modifiers::default()
-        };
         let flags = context.sync_interception();
         let search_active = flags & SEARCH_ACTIVE != 0;
         context
@@ -485,10 +480,23 @@ fn process_keyboard_message(wparam: WPARAM, lparam: LPARAM) -> Option<HookOutcom
         .apply(context.settings);
         settings.search_active = search_active;
         settings.filter_visible = flags & FILTER_VISIBLE != 0;
-        let text = if search_active && transition == KeyTransition::Pressed {
-            translate_search_character(data, context.target_thread_id, &context.keyboard_state)
+        let (modifiers, text) = if provenance == InputProvenance::Physical {
+            context
+                .keyboard_state
+                .observe_at(data.vkCode, transition, data.time);
+            let modifiers = Modifiers {
+                control: context.keyboard_state.pressed(VK_CONTROL),
+                shift: context.keyboard_state.pressed(VK_SHIFT),
+                ..Modifiers::default()
+            };
+            let text = if search_active && transition == KeyTransition::Pressed {
+                translate_search_character(data, context.target_thread_id, &context.keyboard_state)
+            } else {
+                None
+            };
+            (modifiers, text)
         } else {
-            None
+            (Modifiers::default(), None)
         };
         let outcome = context.state.process_key_from(
             provenance,
