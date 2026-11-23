@@ -46,8 +46,6 @@ type Completion = Result<(u32, u32), u32>;
 
 struct Callback {
     sender: SyncSender<Completion>,
-    // WinHTTP writes only during an outstanding read. The worker reads only after its
-    // completion crosses the channel. Cancellation retains this allocation until HANDLE_CLOSING.
     buffer: UnsafeCell<[u8; BUFFER_SIZE]>,
 }
 
@@ -58,8 +56,6 @@ unsafe extern "system" fn completed(
     information: *mut c_void,
     length: u32,
 ) {
-    // No panic may cross the native callback boundary. A failed callback leaves the worker's
-    // absolute deadline in force; callbacks never wait, perform I/O, or drive the next request.
     let _contained = std::panic::catch_unwind(|| {
         let state = context as *mut Callback;
         if state.is_null() {
@@ -290,8 +286,6 @@ pub(super) fn get(
         unsafe { WinHttpSetOption(Some(handle.0), option, Some(&value.to_ne_bytes())) }
             .map_err(|error| error.to_string())?;
     }
-    // On deadline or error this async request closes first, cancelling pending work. The
-    // callback-owned buffer survives until WinHTTP finishes closing it, without another wait.
     let request = Request::new(handle)?;
     request.read(deadline, limit, output)
 }
@@ -386,6 +380,10 @@ mod tests {
                     let mut stream = match listener.accept() {
                         Ok((stream, _)) => stream,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            #[allow(
+                                clippy::disallowed_methods,
+                                reason = "test HTTP server polls non-blocking socket"
+                            )]
                             std::thread::sleep(Duration::from_millis(5));
                             continue;
                         }
@@ -418,7 +416,6 @@ mod tests {
                 client
                     .request
                     .read(started + Duration::from_millis(250), 100, &mut Vec::new());
-            // Closing an async request must return without waiting for the stalled server.
             drop(client);
             let elapsed = started.elapsed();
             let reached = at_stall.recv_timeout(Duration::from_secs(1));
@@ -453,6 +450,10 @@ mod tests {
                             if error.kind() == std::io::ErrorKind::WouldBlock
                                 && Instant::now() < until =>
                         {
+                            #[allow(
+                                clippy::disallowed_methods,
+                                reason = "test HTTP server polls non-blocking socket"
+                            )]
                             std::thread::sleep(Duration::from_millis(5));
                         }
                         Err(error) => panic!("{error}"),

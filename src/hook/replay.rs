@@ -74,7 +74,6 @@ fn send_activation_alt_with(
     mut is_down: impl FnMut(VIRTUAL_KEY) -> bool,
     mut sender: impl FnMut(&[INPUT], i32) -> u32,
 ) -> Result<(), String> {
-    // The switcher owns the suppressed Alt gesture. Leave forwarded Alt/Ctrl/Win alone.
     if [VK_MENU, VK_CONTROL, VK_LWIN, VK_RWIN]
         .into_iter()
         .any(&mut is_down)
@@ -83,8 +82,6 @@ fn send_activation_alt_with(
     }
     let left_shift = is_down(VK_LSHIFT);
     let right_shift = is_down(VK_RSHIFT);
-    // SendInput serializes this entire batch. Restore both Shift keys after the Alt tap so
-    // reverse switching cannot synthesize the system's Alt+Shift keyboard-layout shortcut.
     let events = [
         left_shift.then_some(ReplayedKeyEvent::released(Key::LeftShift)),
         right_shift.then_some(ReplayedKeyEvent::released(Key::RightShift)),
@@ -119,7 +116,6 @@ fn send_shell_escape_with(
     mut is_down: impl FnMut(VIRTUAL_KEY) -> bool,
     sender: impl FnMut(&[INPUT], i32) -> u32,
 ) -> Result<(), String> {
-    // Do not release a modifier forwarded to another application or send its Escape shortcut.
     if [VK_MENU, VK_CONTROL, VK_LWIN, VK_RWIN]
         .into_iter()
         .any(&mut is_down)
@@ -127,9 +123,6 @@ fn send_shell_escape_with(
         return Err("Cannot dismiss Start while a system modifier is forwarded".to_owned());
     }
     let events = [
-        // Suppressing Alt can leave LLKHF_ALTDOWN set even while async state reports up.
-        // Clear that context on both sides before Escape. Our tagged releases bypass physical
-        // gesture tracking, so held-Alt cycling and the eventual real release remain intact.
         Some(ReplayedKeyEvent::released(Key::LeftAlt)),
         Some(ReplayedKeyEvent::released(Key::RightAlt)),
         Some(ReplayedKeyEvent::pressed(Key::Escape)),
@@ -284,8 +277,6 @@ mod tests {
     #[test]
     fn shell_escape_clears_suppressed_alt_context_before_escape() {
         for held_alt in [VK_LMENU, VK_RMENU] {
-            // Captured failure: GetAsyncKeyState permitted dismissal, but both injected Escape
-            // events carried LLKHF_ALTDOWN and Start retained focus until the 500 ms timeout.
             let mut alt_context = true;
             let mut escapes = Vec::new();
             assert!(
@@ -372,7 +363,6 @@ mod tests {
                         } else {
                             WM_KEYDOWN
                         };
-                        // Pass every injected release and Escape through the real adapter.
                         assert_eq!(
                             process_keyboard_message(
                                 WPARAM(message as usize),

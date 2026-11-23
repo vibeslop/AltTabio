@@ -96,7 +96,6 @@ impl Layout {
         let apps = apps.max(1);
         let bounds = (bounds.0.max(0.0).floor(), bounds.1.max(0.0).floor());
         let maximum = (bounds.0 - PADDING * 2.0).max(0.0);
-        // Keep useful list and preview widths; the list takes the full panel below this limit.
         let preview = preview && maximum >= LIST_WIDTH_BESIDE_PREVIEW + PREVIEW_GAP + PREVIEW_WIDTH;
         let minimum = if preview {
             LIST_WIDTH_BESIDE_PREVIEW + PREVIEW_GAP + PREVIEW_WIDTH
@@ -105,7 +104,6 @@ impl Layout {
         }
         .min(maximum);
         let content = (apps as f64 * TILE_MAX).clamp(minimum, maximum);
-        // Leave space for one row even when the display is shorter than the normal minimum.
         let tile_max = TILE_MAX
             .min(content)
             .min((bounds.1 - PADDING * 2.0 - NAME_HEIGHT - LIST_GAP - ROW_HEIGHT).max(0.0));
@@ -314,7 +312,6 @@ impl ListRows {
     /// takes to show `selected`.
     #[must_use]
     pub fn new(start: usize, selected: Option<usize>, total: usize, slots: usize) -> Self {
-        // A list longer than the panel gives its last slot to the count of the rest.
         let fits = if total > slots {
             slots.saturating_sub(1).max(1)
         } else {
@@ -590,7 +587,6 @@ mod tests {
             layout.hit(3, 4, Some(1), close.left + 2.0, close.top + 2.0),
             Some(Hit::Row(2))
         );
-        // Slots past the drawn tiles and rows, and the name line, are not targets.
         let fourth_tile = layout.tile_rect(3);
         assert_eq!(
             layout.hit(3, 4, None, fourth_tile.left + 1.0, fourth_tile.top + 1.0),
@@ -624,7 +620,6 @@ mod tests {
 
         let fits = ListRows::new(0, Some(2), 5, 5);
         assert_eq!((fits.start, fits.count, fits.more_note), (0, 5, None));
-        // A single slot shows a window rather than only the count.
         let single = ListRows::new(0, Some(1), 3, 1);
         assert_eq!((single.start, single.count, single.more_note), (1, 1, None));
     }

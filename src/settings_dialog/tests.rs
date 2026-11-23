@@ -291,9 +291,9 @@ fn assert_about_preserves_edits(
     // without opening a browser, closing Settings, or committing any edited values.
     unsafe { SendMessageW(repository, BM_CLICK, None, None) };
     let mut action = MSG::default();
-    // SAFETY: inspect and remove only this test window's deferred browser action.
     assert!(
         unsafe {
+            // SAFETY: inspect and remove only this test window's deferred browser action.
             PeekMessageW(
                 &raw mut action,
                 Some(window),
@@ -411,9 +411,13 @@ fn about_header_leaves_the_logo_unobscured() -> Result<()> {
     );
     drop(state);
     host.state_mut()?.select_category(Category::General)?;
-    // SAFETY: the dialog still owns the intro label, which General needs to show again.
     assert_ne!(
-        unsafe { GetWindowLongPtrW(intro, GWL_STYLE) }.cast_unsigned() & WS_VISIBLE.0 as usize,
+        unsafe {
+            // SAFETY: the dialog still owns the intro label, which General needs to show again.
+            GetWindowLongPtrW(intro, GWL_STYLE)
+        }
+        .cast_unsigned()
+            & WS_VISIBLE.0 as usize,
         0
     );
     dialog.destroy()?;
@@ -462,10 +466,10 @@ fn github_tooltip_exposes_the_full_url_and_closes_with_settings() -> Result<()> 
         lpszText: windows::core::PWSTR(text.as_mut_ptr()),
         ..Default::default()
     };
-    // SAFETY: the live tooltip writes the sized tool structure and copies its URL into the
-    // supplied buffer, which exceeds the native TOOLINFO query's 260-character requirement.
     assert_ne!(
         unsafe {
+            // SAFETY: the live tooltip writes the sized tool structure and copies its URL into the
+            // supplied buffer, which exceeds the native TOOLINFO query's 260-character requirement.
             SendMessageW(
                 tooltip,
                 TTM_GETTOOLINFOW,
@@ -476,9 +480,11 @@ fn github_tooltip_exposes_the_full_url_and_closes_with_settings() -> Result<()> 
         .0,
         0
     );
-    // SAFETY: the successful query returned the terminated URL in the supplied live buffer.
     assert_eq!(
-        unsafe { windows::core::PCWSTR(tool.lpszText.0).to_string() }?,
+        unsafe {
+            // SAFETY: the successful query returned the terminated URL in the supplied live buffer.
+            windows::core::PCWSTR(tool.lpszText.0).to_string()
+        }?,
         REPOSITORY_URL
     );
     dialog.destroy()?;

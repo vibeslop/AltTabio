@@ -161,7 +161,6 @@ fn native_states_keep_geometry_and_expose_their_actions() -> Result<()> {
             }
             assert!(detail_rect.bottom < action_rect.top);
         }
-        // Simulated commands record events only; closing never records install consent.
         // SAFETY: scalar WM_COMMAND is delivered to this test-owned dialog.
         unsafe {
             SendMessageW(

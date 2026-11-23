@@ -121,8 +121,6 @@ impl Overlay {
             panel.setReleasedWhenClosed(false);
         }
         panel.setLevel(NSPopUpMenuWindowLevel);
-        // FullScreenAuxiliary alone left the switcher invisible over another app's fullscreen
-        // space; joining that space takes CanJoinAllApplications.
         panel.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
                 | NSWindowCollectionBehavior::CanJoinAllApplications
@@ -138,7 +136,6 @@ impl Overlay {
         panel.setMovable(false);
         panel.setAcceptsMouseMovedEvents(true);
         panel.setIgnoresMouseEvents(false);
-        // The system switcher appears at once; a window animation would only delay it.
         panel.setAnimationBehavior(NSWindowAnimationBehavior::None);
 
         let view = SwitcherView::new(mtm, frame);
@@ -148,7 +145,6 @@ impl Overlay {
                 | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable,
         );
 
-        // Liquid Glass exists from macOS 26; older systems fall back to the classic blur.
         let glass = if AnyClass::get(c"NSGlassEffectView").is_some() {
             let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), frame);
             glass.setCornerRadius(CORNER_RADIUS);
@@ -186,8 +182,6 @@ impl Overlay {
         self.panel
             .setAppearance(NSAppearance::appearanceNamed(name).as_deref());
         if let Some(glass) = &self.glass {
-            // A translucent tint keeps AltTabio's own dark or light surface while the glass
-            // still refracts whatever sits behind the switcher.
             glass.setTintColor(Some(&rgba(tokens.canvas)));
         }
     }
@@ -252,8 +246,6 @@ impl Overlay {
 
     pub fn hide(&self) {
         self.panel.orderOut(None);
-        // The last frame holds the preview capture and the app icons; the next session draws its
-        // own, so nothing needs them while the panel is hidden.
         *self.view.ivars().model.borrow_mut() = None;
     }
 
@@ -286,8 +278,6 @@ impl Overlay {
 
     pub fn present(&self, model: FrameModel) {
         let mut shown = self.view.ivars().model.borrow_mut();
-        // A refresh that changes nothing on screen, such as the list arriving while the panel
-        // shows, redraws nothing.
         if shown.as_ref() == Some(&model) {
             return;
         }

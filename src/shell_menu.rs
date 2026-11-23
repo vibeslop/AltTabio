@@ -23,8 +23,6 @@ fn foreground_menu_with(
     is_presented: impl FnOnce(HWND) -> bool,
     is_menu: impl FnOnce(HWND) -> bool,
 ) -> Option<HWND> {
-    // Start can cloak itself without changing GetForegroundWindow. Reusing its identity must
-    // never bypass the visibility check, or every new Tab waits for an already-closed menu.
     (window != HWND::default() && (window == known_menu || is_menu(window)) && is_presented(window))
         .then_some(window)
 }
@@ -35,10 +33,10 @@ fn is_presented(window: HWND) -> bool {
         return false;
     }
     let mut cloaked = 0_u32;
-    // SAFETY: window is borrowed and cloaked is writable for the exact size supplied.
-    if let Err(error) =
-        unsafe { DwmGetWindowAttribute(window, DWMWA_CLOAKED, (&raw mut cloaked).cast(), 4) }
-    {
+    if let Err(error) = unsafe {
+        // SAFETY: window is borrowed and cloaked is writable for the exact size supplied.
+        DwmGetWindowAttribute(window, DWMWA_CLOAKED, (&raw mut cloaked).cast(), 4)
+    } {
         eprintln!("Could not query Start/Search visibility: {error}");
         return true;
     }

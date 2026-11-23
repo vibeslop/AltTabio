@@ -187,7 +187,6 @@ mod tests {
                 pending_opening: true
             }
         );
-        // Callback delivery keeps the receipt until the hook message loop withdraws it.
         assert_ne!(flags.load() & OVERLAY_FLAGS, 0);
         flags.withdraw_openings(generation, 1);
         assert_eq!(flags.load() & OVERLAY_FLAGS, 0);

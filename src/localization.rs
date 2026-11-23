@@ -131,7 +131,6 @@ pub fn current_language() -> Language {
 /// A modal Settings preview is local to its UI thread and is restored on every exit path.
 pub struct PreviewLanguage {
     previous: Option<Language>,
-    // A thread-local override must be restored on the thread that created it.
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 

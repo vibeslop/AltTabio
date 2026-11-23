@@ -2,8 +2,6 @@
 
 use crate::dialog_layout::BASE_DPI;
 
-// The overlay already occupies a fixed fraction of its monitor. Capping presentation density keeps
-// its list proportions stable on denser monitors without undoing monitor-local window sizing.
 const MAX_LAYOUT_DPI: u16 = 168;
 
 #[must_use]

@@ -12,8 +12,6 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSEvent};
 use objc2_foundation::{NSArray, NSTimer};
 
-// The panel waits this long after ⌘ Tab. A quick press and release switches before it passes,
-// so flipping between two windows never flashes the panel, as with the system switcher.
 const REVEAL_SECONDS: f64 = 0.12;
 
 /// Whether the panel is on screen. After ⌘ Tab the session is open while the panel waits for its
@@ -43,7 +41,6 @@ impl App {
         self.preview.start_session();
         self.hotkey.set_overlay_active(true);
         self.request_refresh();
-        // Only the keyboard gesture waits; a list opened from the menu bar shows at once.
         if step.is_some() {
             self.panel = Panel::Waiting(schedule(self.mtm, REVEAL_SECONDS, App::reveal));
         } else {
@@ -98,8 +95,6 @@ impl App {
             && !self.screen_recording_asked
             && !permissions::screen_recording_granted()
         {
-            // The system prompt takes focus, so it waits until the panel is gone and the
-            // switch is done.
             self.screen_recording_asked = true;
             run_later(self.mtm, || {
                 let _ = with_app(App::ask_for_screen_recording);
@@ -177,7 +172,6 @@ impl App {
             selected_row: list.selected_row,
         };
         self.shown = Some(shown);
-        // Hit-test this frame, not the last one, before close_state draws its button.
         let selected_window = self.switcher.selected_window();
         let hit = overlay.mouse_point().and_then(|(x, y)| shown.hit(x, y));
         self.pointer.relocated(hit, selected_window);

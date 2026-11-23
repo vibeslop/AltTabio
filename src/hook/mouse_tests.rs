@@ -24,8 +24,6 @@ fn ordinary_click_is_queued_until_the_physical_callback_has_returned() {
         );
         assert!(outcome.is_some_and(|outcome| outcome.suppress));
     }
-    // The real callback only posts a request. Sending from it would block Windows input and leave
-    // no queued replay for the message loop to execute after the physical release returns.
     // SAFETY: message is writable; PeekMessageW reads only this thread's replay requests.
     assert!(unsafe {
         PeekMessageW(
@@ -199,7 +197,10 @@ fn native_mouse_release_does_not_generate_the_original_context_menu() {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) if Instant::now() < deadline => {
+                #[allow(clippy::disallowed_methods, reason = "test polls child fixture exit")]
+                std::thread::sleep(Duration::from_millis(10));
+            }
             Ok(None) => break None,
             Err(error) => panic!("fixture status: {error}"),
         }
@@ -380,9 +381,11 @@ fn native_mouse_release_fixture() {
                 expected_menu,
                 "enabled={enabled}, wheel={wheel}"
             );
-            // SAFETY: GetActiveWindow reads the current fixture thread's own input queue.
             assert_eq!(
-                unsafe { GetActiveWindow() },
+                unsafe {
+                    // SAFETY: GetActiveWindow reads the current fixture thread's own input queue.
+                    GetActiveWindow()
+                },
                 if wheel { selected } else { original }
             );
             CONTEXT.with(|slot| *slot.borrow_mut() = None);
@@ -391,7 +394,6 @@ fn native_mouse_release_fixture() {
     println!(
         "native mouse recipients: no context menu/focus return after switching; ordinary clicks preserved"
     );
-    // The disposable child owns the windows and desktop. Process exit releases them together.
     std::process::exit(0);
 }
 

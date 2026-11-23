@@ -173,7 +173,7 @@ unsafe extern "system" fn win_event_proc(
     _thread: u32,
     _time: u32,
 ) {
-    let _ = catch_unwind(|| {
+    let _panicked = catch_unwind(|| {
         if should_request_listed_window_refresh(event, hwnd, object, child) {
             request_listed_window_refresh(hwnd);
             return;

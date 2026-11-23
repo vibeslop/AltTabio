@@ -115,8 +115,6 @@ impl TrayIcon {
             szTip: tip,
             ..NOTIFYICONDATAW::default()
         };
-        // A logon task can run before Explorer's notification area is ready. Keep the
-        // owned resources alive for TaskbarCreated and the outer loop's registration retry.
         let registered = match register_icon(&data) {
             Ok(()) => true,
             Err(error) => {
@@ -245,7 +243,6 @@ impl TrayIcon {
             Shell_NotifyIconW(NIM_MODIFY, &raw const self.data).as_bool()
         };
         if updated {
-            // The shell holds its own copy now, so replacing the guard releases the previous icon.
             self.icon = loaded;
             Ok(())
         } else {

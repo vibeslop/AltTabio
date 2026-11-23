@@ -5,17 +5,13 @@
 
 use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 
-// Posted by the hook thread.
 pub(crate) const WM_HOOK_ACTION: u32 = WM_APP + 1;
 
-// Sent by the Shell on behalf of the tray icon.
 pub(crate) const WM_TRAY_CALLBACK: u32 = WM_APP + 2;
 
-// Posted by the window-event callbacks.
 pub(crate) const WM_FOREGROUND_CHECK: u32 = WM_APP + 6;
 pub(crate) const WM_LISTED_WINDOW_REFRESH: u32 = WM_APP + 7;
 
-// Posted by the app to itself.
 pub(crate) const WM_SHOW_SETTINGS: u32 = WM_APP + 3;
 pub(crate) const WM_DESTROY_APP: u32 = WM_APP + 4;
 pub(crate) const WM_SHOW_ABOUT: u32 = WM_APP + 5;

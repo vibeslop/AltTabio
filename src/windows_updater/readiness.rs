@@ -38,7 +38,6 @@ fn receive_reader(stdout: impl Read + Send + 'static, timeout: Duration) -> Resu
                         Err("The update helper did not acknowledge readiness".to_owned())
                     }
                 });
-            // A deadline may have expired and closed the receiver while this read was unwinding.
             if sender.send(reply).is_err() {
                 eprintln!("The update helper reported after its readiness wait ended");
             }
@@ -62,8 +61,6 @@ fn stop(child: &mut Child) {
         Ok(None) => {}
         Err(error) => eprintln!("Could not inspect the failed update helper: {error}"),
     }
-    // This process is the helper we just created, never the running AltTabio app. Terminating
-    // it closes its output pipe so a timed-out reader can finish without blocking the worker.
     match child.kill() {
         Ok(()) => {
             if let Err(error) = child.wait() {

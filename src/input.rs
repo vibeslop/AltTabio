@@ -205,7 +205,6 @@ pub struct HookState {
 #[derive(Debug, Default)]
 struct InterceptionState {
     suspended: bool,
-    // Keys held across a modal boundary stay with their original recipient until release.
     passthrough_keys: KeySet,
 }
 
@@ -226,13 +225,9 @@ impl HookState {
 
     pub fn set_overlay_active(&mut self, active: bool) {
         if !active {
-            // Completion or a refused opening ends sticky keyboard capture. Pending openings
-            // keep interception armed, so this cannot retire a later queued gesture.
             self.alt_switch_gesture_active = false;
             self.win_switch_gesture_active = false;
             if self.mouse.is_active() {
-                // Keep the swallowed button's release debt, pending clicks and sub-notch
-                // accumulation. Only a selection without a visible/pending opening ends.
                 self.mouse.cancel();
             }
         }
@@ -258,7 +253,6 @@ impl HookState {
         self.update_shift_state(event);
         self.update_owned_key_state(event);
         if pressed {
-            // An async down means Windows has a press to balance, so its release must pass.
             self.take_suppressed_owned_key_release(key);
             if let Some(mask) = shift_mask(key) {
                 self.suppressed_shift_keys &= !mask;
@@ -349,8 +343,6 @@ impl HookState {
             return outcome;
         }
         let pending_alt_keys = self.pending_alt_keys;
-        // Suppressed Alt presses never set Windows' LLKHF_ALTDOWN flag. Keep using
-        // the observed physical press after the first Tab consumes pending_alt_keys.
         let alt_down = event.modifiers.alt || self.any_alt_key_down();
         let alt_tab = switching_allowed
             && settings.replace_alt_tab
@@ -363,8 +355,6 @@ impl HookState {
         if let Some(outcome) = self.process_windows_key_transition(event, settings) {
             return outcome;
         }
-        // A suppressed Windows-key press never reaches the system async state, so the hook's
-        // observed pending press is authoritative when the following Tab callback arrives.
         let pending_windows_keys = self.pending_windows_keys;
         let windows_tab = switching_allowed
             && settings.replace_win_tab
@@ -446,8 +436,6 @@ impl HookState {
         self.update_shift_state(event);
         let key_was_down = self.owned_key_is_down(event.key);
         if event.transition == KeyTransition::Pressed && !key_was_down {
-            // Reconciliation may retain an old release debt after clearing a stale down bit.
-            // A fresh press begins a new pair; an old release alone is still suppressed.
             self.take_suppressed_owned_key_release(event.key);
             if let Some(mask) = shift_mask(event.key) {
                 self.suppressed_shift_keys &= !mask;
@@ -471,8 +459,6 @@ impl HookState {
             && (self.owned_key_release_pending(event.key)
                 || shift_mask(event.key).is_some_and(|mask| self.suppressed_shift_keys & mask != 0))
         {
-            // Until a release or rebase establishes a fresh press, keep the whole old pair
-            // suppressed, including repeats after search or a gesture has ended.
             return Some(HookOutcome::suppressed());
         }
         None
@@ -550,8 +536,6 @@ impl HookState {
         {
             self.mouse.cancel();
             self.alt_switch_gesture_active = false;
-            // An unavailable position leaves the panel open. Keep sticky Win+Tab number
-            // routing until the UI acknowledges completion through set_overlay_active.
             self.suppress_owned_key_release(event.key);
             return Some(HookOutcome::one(true, action));
         }
@@ -565,8 +549,6 @@ impl HookState {
     ) -> Option<HookOutcome> {
         let mask = windows_key_mask(event.key)?;
         if event.transition == KeyTransition::Pressed && self.alt_switch_gesture_active {
-            // Start owns the Windows key, including repeats and release. Cancel the
-            // switch while retaining the swallowed Alt/Tab releases until they arrive.
             self.cancel_held_gestures();
             return Some(HookOutcome::one(false, InputAction::DismissOverlay));
         }
@@ -724,7 +706,6 @@ impl HookState {
         for slot in &mut self.replayed_key_events {
             *slot = presses.next();
         }
-        // Behind three held Alt keys the key no longer fits, so it passes through unreplayed.
         HookOutcome {
             suppress: presses.next().is_none(),
             ..HookOutcome::default()
@@ -864,8 +845,6 @@ impl HookState {
             event.modifiers.shift,
             self.owned_key_is_down(Key::RightAlt),
         )?;
-        // Rendered query presence can belong to an older queued session. Let the UI decide
-        // navigation versus query editing, including whether release activation stays owned.
         if self.overlay_controls_active()
             && matches!(
                 event.key,
@@ -881,8 +860,6 @@ impl HookState {
                 },
             ));
         }
-        // Plain navigation also moves through windows when the query is empty. Preserve the
-        // held switch gesture, as for Home/End; typing and modified edits still pin the panel.
         if !matches!(
             command,
             TextCommand::Left | TextCommand::Right | TextCommand::Start | TextCommand::End
@@ -902,7 +879,6 @@ impl HookState {
         Some(HookOutcome::one(true, action))
     }
     fn process_search_key(&mut self, event: KeyEvent, search_active: bool) -> Option<HookOutcome> {
-        // Typing a key whose release cannot be owned would leak that release to the foreground.
         if !KeySet::can_hold(event.key) || event.transition == KeyTransition::Released {
             return None;
         }
@@ -1123,7 +1099,7 @@ mod tests {
             );
             for delta in [1, 1, -1, 1] {
                 if delta == -1 {
-                    let _ =
+                    let _shift =
                         state.process_key(KeyEvent::pressed(Key::LeftShift, modifiers), settings);
                 }
                 assert_eq!(
@@ -1136,7 +1112,7 @@ mod tests {
                         .suppress
                 );
                 if delta == -1 {
-                    let _ =
+                    let _shift =
                         state.process_key(KeyEvent::released(Key::LeftShift, modifiers), settings);
                 }
             }
@@ -1153,8 +1129,8 @@ mod tests {
             let mut state = HookState::default();
             let settings = HookSettings::default();
             let modifiers = Modifiers::default();
-            let _ = state.process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings);
-            let _ = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
+            let _alt = state.process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings);
+            let _tab = state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings);
             assert_eq!(
                 state.process_key(KeyEvent::pressed(windows, modifiers), settings),
                 HookOutcome::one(false, InputAction::DismissOverlay)
@@ -1180,7 +1156,7 @@ mod tests {
                     ..HookOutcome::default()
                 }
             );
-            let _ = state.process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings);
+            let _alt = state.process_key(KeyEvent::pressed(Key::LeftAlt, modifiers), settings);
             assert_eq!(
                 state.process_key(KeyEvent::pressed(Key::Tab, modifiers), settings),
                 HookOutcome::one(true, InputAction::Switch(1))

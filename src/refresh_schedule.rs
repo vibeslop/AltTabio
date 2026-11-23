@@ -132,7 +132,6 @@ mod tests {
     fn native_storm_owns_one_wakeup_until_app_is_available() {
         let signal = RefreshSignal::new();
         assert!(signal.record(RefreshNotice::List));
-        // Not taking the flags models a busy app, including a nested run loop.
         for _ in 0..100_000 {
             assert!(!signal.record(RefreshNotice::List));
             assert!(!signal.record(RefreshNotice::Focus));
@@ -198,7 +197,6 @@ mod tests {
     fn stalled_worker_or_main_completion_keeps_only_latest_list_and_watch() {
         let mut schedule = RefreshSchedule::default();
         assert_eq!(schedule.request_list(0), Some((Some(0), None)));
-        // No completion while AX enumeration, or its main-thread delivery, is blocked.
         for latest in 1..=100_000 {
             assert_eq!(schedule.request_list(latest), None);
             assert_eq!(schedule.request_watch(Some(latest)), None);
@@ -250,7 +248,6 @@ mod tests {
         for _ in 0..100_000 {
             assert!(schedule.request_list(Payload::new(&live)).is_none());
             assert!(schedule.request_watch(Payload::new(&live)).is_none());
-            // The outstanding list and the latest pending value of each kind.
             assert_eq!(live.load(Ordering::Relaxed), 3);
         }
         schedule.stop();

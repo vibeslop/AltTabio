@@ -334,7 +334,6 @@ impl UpdateWindow {
         }
         self.fonts = vec![heading, body, small];
         let extra = if self.details_open { 120 } else { 0 };
-        // Russian action labels name both installation and restart. Keep their full wording.
         let (wider, primary_extra, close_extra) = if alttabio::localization::current_language()
             == alttabio::localization::Language::Russian
         {
@@ -494,8 +493,6 @@ fn create_controls(
     }
     .ok()?;
     let mut controls = [HWND::default(); 10];
-    // A native STATIC paints the client background using WM_CTLCOLORSTATIC's cached brush.
-    // It is created before its siblings, so no custom drawing runs in our window callback.
     // SAFETY: this child belongs to parent; static class and instance live for creation.
     controls[9] = unsafe {
         CreateWindowExW(

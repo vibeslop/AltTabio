@@ -50,7 +50,6 @@ mod tests {
             vec!["AltTabio"],
             vec!["AltTabio", "--preview"],
             vec!["AltTabio", "--settings"],
-            // An executable name is not normally a flag, but is included in argv.
             vec!["/Applications/AltTabio.app/Contents/MacOS/AltTabio"],
         ] {
             assert_eq!(command(&arguments), None);

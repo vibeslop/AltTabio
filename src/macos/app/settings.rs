@@ -60,7 +60,6 @@ impl App {
             .set_automatic_updates(self.settings.general.auto_update);
         alttabio::localization::set_language(self.settings.general.language);
         if language_changed {
-            // Let native popups finish tracking before replacing their item titles.
             run_later(self.mtm, || {
                 let _ = with_app(|app| {
                     if let Some(window) = &app.settings_window {

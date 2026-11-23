@@ -68,7 +68,6 @@ const fn key_for_code(code: u16) -> MacKey {
         26 | 89 => MacKey::Digit(7),
         28 | 91 => MacKey::Digit(8),
         25 | 92 => MacKey::Digit(9),
-        // The US positions of W, M, H, and Q, for layouts without Latin letters.
         13 => MacKey::Command(WindowCommand::Close),
         46 => MacKey::Command(WindowCommand::Minimize),
         4 => MacKey::Command(WindowCommand::Hide),
@@ -91,7 +90,6 @@ mod tests {
         assert_eq!(key_for(18, Some('1')), MacKey::Digit(1));
         assert_eq!(key_for(92, Some('9')), MacKey::Digit(9));
         assert_eq!(key_for(29, Some('0')), MacKey::Other);
-        // French AZERTY types & and é on the number row; the digits stay where they are.
         assert_eq!(key_for(18, Some('&')), MacKey::Digit(1));
         assert_eq!(key_for(19, Some('é')), MacKey::Digit(2));
     }
@@ -103,10 +101,8 @@ mod tests {
             MacKey::Command(WindowCommand::Close)
         );
         assert_eq!(key_for(12, Some('Q')), MacKey::Command(WindowCommand::Quit));
-        // AZERTY: Q sits where US has A, and A where US has Q.
         assert_eq!(key_for(0, Some('q')), MacKey::Command(WindowCommand::Quit));
         assert_eq!(key_for(12, Some('a')), MacKey::Other);
-        // Dvorak types M on the US M key but H on the US J key.
         assert_eq!(
             key_for(46, Some('m')),
             MacKey::Command(WindowCommand::Minimize)

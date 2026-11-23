@@ -21,7 +21,6 @@ use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, GetCursorPos, SetWi
 use windows::core::{Error, Result};
 
 pub(crate) fn system_directory() -> std::result::Result<PathBuf, String> {
-    // Reserve the maximum Windows path length, including the terminating null.
     let mut buffer = vec![0_u16; 32768];
     let length = unsafe {
         // SAFETY: buffer is writable for its full length and the API retains no pointers.
@@ -152,8 +151,6 @@ pub(crate) unsafe fn set_window_user_data(window: HWND, value: isize) -> Result<
         // caller's contract is what makes the procedure that reads value back expect it.
         SetWindowLongPtrW(window, GWLP_USERDATA, value)
     };
-    // Zero is also what a successful call returns when the previous value was zero, so only a
-    // last error separates failure from success.
     if previous == 0 {
         let error = Error::from_thread();
         if error.code().is_err() {
@@ -169,7 +166,6 @@ pub(crate) fn wide(value: &str) -> Vec<u16> {
 
 /// The calling thread's membership in a single-threaded COM apartment, left on drop.
 pub(crate) struct ComApartment {
-    // COM must be uninitialized on the thread that initialized it, so the guard is not `Send`.
     _thread: PhantomData<*const ()>,
 }
 

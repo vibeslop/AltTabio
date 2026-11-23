@@ -80,11 +80,7 @@ struct AxWindow {
     element: AxElement,
 }
 
-// Accessibility calls block until the target app answers; a frozen app must not stall the list.
 pub const AX_TIMEOUT_SECONDS: f32 = 0.25;
-// How long an app that let a request time out is left out of the Accessibility pass. The apps
-// are asked one after another, so one that never answers, such as a headless Blender, added the
-// whole timeout to every listing.
 const UNRESPONSIVE_SKIP: Duration = Duration::from_mins(5);
 
 /// Apps that let an Accessibility request time out, and until when they are not asked again.
@@ -118,7 +114,6 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
         .0
         .retain(|pid, _| apps.iter().any(|app| app.pid == *pid));
     for app in &apps {
-        // An app left out keeps its on-screen windows, as one that answers nothing does.
         if unresponsive.skips(app, now) {
             continue;
         }
@@ -141,11 +136,6 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
             .iter()
             .position(|(_, window)| window.id == cg_window.id)
             .map(|index| ax_windows.swap_remove(index).1);
-        // Chromium browsers keep unnamed layer-0 helper windows (download bubbles, info bars,
-        // tab hover cards) that come and go; Accessibility never lists them as windows. When
-        // the app answers Accessibility at all, its window list is the authority, so a
-        // helper without a standard-window counterpart is not a row. Apps that answered
-        // nothing (frozen, or not yet accessible) keep their on-screen windows as before.
         if ax.is_none() && app_answers_accessibility(&ax_windows, &records, app.pid) {
             continue;
         }
@@ -174,8 +164,6 @@ pub fn enumerate(options: EnumerationOptions, unresponsive: &mut Unresponsive) -
             continue;
         };
         if window.title.is_empty() {
-            // Off-screen windows without a title are usually helper panels; the user cannot
-            // recognise them in the list.
             continue;
         }
         records.push(WindowRecord {

@@ -14,10 +14,8 @@ pub const SEARCH_ACTIVE: usize = 2;
 pub const OVERLAY_ACTIVE: usize = 4;
 pub const FILTER_VISIBLE: usize = 8;
 pub const OVERLAY_FLAGS: usize = SEARCH_ACTIVE | OVERLAY_ACTIVE | FILTER_VISIBLE;
-// Generations are multiples of 16, so the flags share their word.
 const FLAG_BITS: usize = INTERCEPTION_SUSPENDED | OVERLAY_FLAGS;
 const GENERATION_SHIFT: usize = 4;
-// UI visibility is distinct from capture armed for an opening that has not reached the UI.
 const OVERLAY_VISIBLE: u64 = 1 << 4;
 const OPENING_STEP: u64 = 1 << 5;
 const OPENING_MASK: u64 = (1 << 32) - OPENING_STEP;
@@ -44,10 +42,7 @@ const ACTION_OVERLAY_WHEEL: usize = 19;
 const ACTION_CYCLE_SELECTION: usize = 20;
 const ACTION_SEARCH_NAVIGATION: usize = 21;
 const ACTION_CODE_MASK: usize = 0xFF;
-// Keep the epoch within 32 bits so an epoch and opening count fit one atomic word.
 const ACTION_EPOCH_MASK: usize = (usize::MAX >> 8) & u32::MAX as usize;
-// Supported Windows and macOS builds are 64-bit. A wheel message uses 8 code bits,
-// 32 epoch bits and 16 signed wheel bits in WPARAM, and two full i32 coordinates in LPARAM.
 const _: () = assert!(usize::BITS == 64, "hook messages require 64-bit parameters");
 const WHEEL_DELTA_SHIFT: u32 = 40;
 static NEXT_HOOK_EPOCH: AtomicUsize = AtomicUsize::new(1);
@@ -194,8 +189,6 @@ const fn action_epoch(wparam: usize) -> usize {
     (wparam >> 8) & ACTION_EPOCH_MASK
 }
 
-// Four bits hold positions 1-9; the remaining 21 bits hold a Unicode scalar plus one, with zero
-// meaning no translated text. The complete payload fits a signed 32-bit message parameter.
 fn encode_number_key(position: usize, text: Option<char>) -> isize {
     let Ok(position @ 1..=9) = u32::try_from(position) else {
         return -1;
@@ -408,8 +401,6 @@ impl HookFlags {
         let _previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                // UI visibility still changes during recovery. Derive from the latest word,
-                // retaining its epoch and any subsequently accepted opening receipts.
                 Some(completed_state(value))
             });
     }
@@ -438,7 +429,6 @@ impl HookFlags {
     }
 
     pub fn suspend(&self, suspended: bool) {
-        // Each modal boundary advances the generation, even if no callback ran in between.
         let _previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
@@ -464,8 +454,6 @@ impl HookFlags {
     }
 
     fn replace_modal_flags(&self, flags: u64) -> u64 {
-        // The closure always supplies a value, so fetch_update retries until it swaps the
-        // complete snapshot. Entry and exit advance the generation even when already suspended.
         let previous = self
             .value
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |_value| {
@@ -495,7 +483,6 @@ impl HookFlags {
         } else {
             0
         };
-        // A single attempt keeps the hook callback bounded. A concurrent UI update wins.
         self.value
             .compare_exchange(
                 value,
@@ -673,7 +660,6 @@ mod tests {
         let _press = hook.process_mouse(MouseEvent::RightButtonPressed, settings);
         let _wheel = hook.process_mouse(MouseEvent::Wheel(-120, (0, 0)), settings);
         assert!(flags.begin_opening(generation, true));
-        // The searched session completes before the queued fresh session reaches the UI.
         flags.complete_overlay();
         let capture = flags.load();
         assert_eq!(capture & FILTER_VISIBLE, 0);
@@ -735,7 +721,6 @@ mod tests {
                 deliver(&flags, generation, typed_search, opening, |_| true),
                 Delivery::Posted
             );
-            // Settings closes before the accepted opening reaches the UI.
             flags.sync_overlay(false, typed_search, false);
             let expected = OVERLAY_ACTIVE | if typed_search { SEARCH_ACTIVE } else { 0 };
             assert_eq!(flags.load() & OVERLAY_FLAGS, expected);
@@ -797,7 +782,6 @@ mod tests {
                 SwitcherEffect::Open { selection_delta } => {
                     opened += 1;
                     if opened == 1 {
-                        // The first enumeration failed, cancelling the originating batch.
                         session.hide();
                         flags.cancel_overlay();
                     } else {
@@ -833,7 +817,6 @@ mod tests {
         ) else {
             panic!("opening must be current");
         };
-        // B is enumerating windows and has not published visibility yet.
         flags.withdraw_openings(generation, 1);
         assert_ne!(flags.load() & OVERLAY_ACTIVE, 0);
         let mut hook = crate::input::HookState::default();
@@ -875,8 +858,6 @@ mod tests {
                     .next(),
                 Some(InputAction::MouseWheel(1, (0, 0)))
             );
-            // Run the same publication policy and CAS, with completion precisely between
-            // the opening read and publication. No opening is posted after refusal.
             assert!(!flags.update_once(|value| {
                 let opening = flags.opening_state(value, generation, true);
                 flags.complete_overlay();
@@ -930,7 +911,6 @@ mod tests {
         let mut attempts = 0;
         assert!(!flags.update_once(|value| {
             attempts += 1;
-            // The UI changes the same word after the callback read and before its CAS.
             flags.set_search_state(true, true);
             Some(value + OPENING_STEP)
         }));
@@ -1006,7 +986,6 @@ mod tests {
         let completion_read = flags.load() & !OVERLAY_FLAGS;
         let observed = flags.value.load(Ordering::Acquire);
         let completed = completed_state(observed);
-        // A's completion observed zero pending input. B is published before A can clear.
         let mut hook = HookState::default();
         let settings = HookSettings {
             right_button_wheel_switching: true,
@@ -1027,7 +1006,6 @@ mod tests {
             "an opening published after the completion read must defeat its stale clear"
         );
         let _cleared = flags.update_overlay(completion_read, false, false);
-        // Escape runs at the formerly vulnerable point, before any repair/rearming.
         hook.set_overlay_active(flags.load() & OVERLAY_ACTIVE != 0);
         let escape = hook.process_key(
             KeyEvent::pressed(Key::Escape, Modifiers::default()),
@@ -1310,7 +1288,6 @@ mod tests {
 
     #[test]
     fn advancing_the_generation_keeps_only_visible_ui_flags_and_retires_queued_actions() {
-        // The last epoch before the counter wraps, so no generation handed out in tests repeats it.
         let generation = ACTION_EPOCH_MASK << GENERATION_SHIFT;
         for saved_flags in 0..=FLAG_BITS {
             let flags = HookFlags::with_value(generation | saved_flags);

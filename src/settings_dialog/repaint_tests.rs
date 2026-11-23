@@ -60,9 +60,12 @@ unsafe extern "system" fn language_paint_probe(
 
 impl Drop for LanguagePaintProbe {
     fn drop(&mut self) {
-        // SAFETY: the test removes its probe before destroying the dialog.
         assert!(
-            unsafe { RemoveWindowSubclass(self.window, Some(language_paint_probe), 3) }.as_bool()
+            unsafe {
+                // SAFETY: the test removes its probe before destroying the dialog.
+                RemoveWindowSubclass(self.window, Some(language_paint_probe), 3)
+            }
+            .as_bool()
         );
     }
 }
@@ -186,7 +189,6 @@ impl RepaintProbe {
             capture_window,
             paint_message,
         });
-        // Seed the capture with the previous surface, or a sentinel for background probes.
         crate::native_drawing::fill_color(
             probe.image.dc,
             rect,
@@ -211,9 +213,12 @@ impl RepaintProbe {
 
 impl Drop for RepaintProbe {
     fn drop(&mut self) {
-        // SAFETY: the test removes this exact subclass while its control is still live.
         assert!(
-            unsafe { RemoveWindowSubclass(self.hwnd, Some(repaint_probe), PROBE_ID) }.as_bool()
+            unsafe {
+                // SAFETY: the test removes this exact subclass while its control is still live.
+                RemoveWindowSubclass(self.hwnd, Some(repaint_probe), PROBE_ID)
+            }
+            .as_bool()
         );
     }
 }

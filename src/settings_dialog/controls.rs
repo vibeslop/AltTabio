@@ -28,7 +28,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{Error, PCWSTR, PWSTR, Result, w};
-// SS_OWNERDRAW is otherwise exposed only by the broad SystemServices bindings.
 const OWNER_DRAW_STATIC: WINDOW_STYLE = WINDOW_STYLE(0x000d);
 
 pub(super) fn remove_maximize_command(window: HWND) -> Result<()> {
@@ -302,9 +301,6 @@ fn create_child(
             };
             (w!("BUTTON"), WINDOW_STYLE(button_style.cast_unsigned()))
         }
-        // These labels are fully painted by our subclass. SS_OWNERDRAW prevents
-        // STATIC's synchronous text redraw from falling back to system colors while
-        // the category command still owns the dialog state.
         _ => (w!("STATIC"), OWNER_DRAW_STATIC),
     };
     let mut style = WS_CHILD | WS_VISIBLE | kind_style;
@@ -349,7 +345,6 @@ fn size_selector_items(hwnd: HWND, dpi: u32) -> Result<()> {
         .ok()
         .filter(|height| *height >= 0)
         .ok_or_else(|| Error::new(E_FAIL, "could not read settings preview height"))?;
-    // The native frame does not scale with the owner-drawn content at every DPI.
     let frame_height = (bounds.bottom - bounds.top - current_height).max(0);
     let field_height = (scale(32, dpi) - frame_height).max(1);
     for (index, height) in [

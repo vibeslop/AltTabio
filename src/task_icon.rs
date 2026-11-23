@@ -57,8 +57,6 @@ impl TaskIcons {
             self.window_icons.push(icon);
             return handle;
         }
-        // Cached fallbacks remain usable when the snapshot deadline has passed, but do not
-        // start more file or Shell work. A single native call can itself overrun the deadline.
         if !self.icons.contains_key(executable) && can_query_snapshot(self.started.elapsed()) {
             self.icons
                 .insert(executable.to_owned(), extract_icon(executable));
@@ -78,8 +76,6 @@ impl TaskIcons {
             if !can_query_snapshot(self.started.elapsed()) {
                 return 0;
             }
-            // Record identities only for this snapshot's borrowed windows. Reuse requires
-            // no new COM/Shell query after the deadline; owned icons stay in app_icons.
             let Ok(app_id) = window_app_id(hwnd) else {
                 return 0;
             };
@@ -117,8 +113,6 @@ impl OwnedIcon {
         // validates it and creates an independent owned icon without taking the source's ownership.
         match unsafe { CopyIcon(HICON(icon as *mut _)) } {
             Ok(copy) => Some(Self(copy)),
-            // The application can replace and destroy its icon between query and copy.
-            // Try the remaining window/class icons, then the executable and Shell fallbacks.
             Err(_) => None,
         }
     }
@@ -205,8 +199,6 @@ fn shell_app_icon(app_id: &str) -> Result<Option<OwnedIcon>> {
 }
 
 fn window_icon(hwnd: HWND, budget: &mut IconQueryBudget, started: Instant) -> Option<OwnedIcon> {
-    // All windows and sizes share one message-count/time budget. Keep the 1 ms per-send limit
-    // and stop this window's sends on failure, then use non-messaging class/executable fallbacks.
     for size in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
         if !can_query_snapshot(started.elapsed()) {
             break;
@@ -230,7 +222,6 @@ fn window_icon(hwnd: HWND, budget: &mut IconQueryBudget, started: Instant) -> Op
         };
         budget.record_elapsed(sent_at.elapsed());
         if sent.0 == 0 {
-            // A timeout or vanished/inaccessible window cannot answer another size reliably.
             break;
         }
         if let Some(copy) = OwnedIcon::copy_borrowed(icon) {
@@ -338,8 +329,6 @@ mod tests {
         assert_ne!(icon, 0);
         assert!(icons.window_icons.is_empty());
         assert_eq!(icons.icons.len(), 1);
-        // Simulate the snapshot deadline passing without sleeping. Already owned fallbacks
-        // remain usable, while a new executable must not start file or Shell work.
         let Some(expired) =
             Instant::now().checked_sub(alttabio::task_query_budget::SNAPSHOT_TIME_LIMIT)
         else {
@@ -399,7 +388,10 @@ mod tests {
         let window = TestWindow::new()?;
         // SAFETY: the stock icon is shared; CopyIcon returns a separate, test-owned icon.
         let stock = unsafe { LoadIconW(None, IDI_APPLICATION) }?;
-        let source = OwnedIcon(unsafe { CopyIcon(stock) }?);
+        let source = OwnedIcon(unsafe {
+            // SAFETY: stock is a valid shared icon handle for this CopyIcon call.
+            CopyIcon(stock)
+        }?);
         // SAFETY: this thread owns the hidden window and keeps source alive until replacement.
         unsafe {
             SendMessageW(
@@ -416,7 +408,6 @@ mod tests {
         assert_ne!(dc.0, HDC::default());
         // SAFETY: the DC and the window's source icon are live for this first paint.
         unsafe { DrawIconEx(dc.0, 0, 0, snapshot, 32, 32, 0, None, DI_NORMAL) }?;
-        // Simulate an application updating its unread badge while the switcher stays open.
         // SAFETY: the hidden window is live and stock remains valid after source is destroyed.
         unsafe {
             SendMessageW(
@@ -427,9 +418,12 @@ mod tests {
             );
         }
         drop(source);
-        // SAFETY: DrawIconEx validates this scalar handle; no icon allocation has reused source.
         assert!(
-            unsafe { DrawIconEx(dc.0, 0, 0, snapshot, 32, 32, 0, None, DI_NORMAL) }.is_ok(),
+            unsafe {
+                // SAFETY: DrawIconEx validates this scalar handle; no icon allocation has reused source.
+                DrawIconEx(dc.0, 0, 0, snapshot, 32, 32, 0, None, DI_NORMAL)
+            }
+            .is_ok(),
             "the next Tab repaint must still draw the snapshot after the app destroys its icon"
         );
         Ok(())
@@ -488,9 +482,12 @@ mod tests {
         let copy = unsafe { CopyIcon(HICON(icon as *mut _)) }?;
         drop(OwnedIcon(copy));
         drop(icons);
-        // SAFETY: CopyIcon validates this stale scalar handle; nothing has reused it in between.
         assert!(
-            unsafe { CopyIcon(HICON(icon as *mut _)) }.is_err(),
+            unsafe {
+                // SAFETY: CopyIcon validates this stale scalar handle; nothing has reused it in between.
+                CopyIcon(HICON(icon as *mut _))
+            }
+            .is_err(),
             "the replaced list must release its icons"
         );
         Ok(())
@@ -548,7 +545,6 @@ mod tests {
                 Some(LPARAM(source.0.0 as isize)),
             );
         }
-        // Model an application destroying the icon before publishing its replacement.
         drop(source);
         let mut icons = TaskIcons::default();
         let resolved = HICON(icons.resolve(window.0, &executable.to_string_lossy()) as *mut _);
@@ -630,9 +626,12 @@ mod tests {
         // SAFETY: the snapshot owns this live Shell icon; CopyIcon returns a new owned handle.
         drop(OwnedIcon(unsafe { CopyIcon(HICON(icon as *mut _)) }?));
         drop(icons);
-        // SAFETY: CopyIcon validates the stale scalar handle, with no intervening icon allocation.
         assert!(
-            unsafe { CopyIcon(HICON(icon as *mut _)) }.is_err(),
+            unsafe {
+                // SAFETY: CopyIcon validates the stale scalar handle, with no intervening icon allocation.
+                CopyIcon(HICON(icon as *mut _))
+            }
+            .is_err(),
             "replacing the snapshot must release Shell icons"
         );
         Ok(())

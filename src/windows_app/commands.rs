@@ -127,7 +127,6 @@ pub(super) fn execute(
         ),
         WindowCommand::Terminate => terminate_window_process(window, process_identity),
         WindowCommand::Run => run_window_process(window, process_identity),
-        // Only the macOS chords produce these; the Windows hook never encodes them.
         WindowCommand::Quit | WindowCommand::Hide => false,
     }
 }
@@ -138,7 +137,6 @@ fn with_selected_window<P>(
     validate: impl FnOnce(HWND, ProcessIdentity) -> Option<P>,
     action: impl FnOnce(HWND) -> bool,
 ) -> bool {
-    // Keep the validated process handle alive through dispatch, just as process commands do.
     let Some(_process) = validate(window, identity) else {
         return false;
     };
@@ -279,9 +277,6 @@ pub(super) fn open_releases() -> Result<(), String> {
 fn open_web_page(url: &str) -> Result<(), String> {
     let _apartment = crate::win32::ComApartment::initialize()
         .map_err(|error| format!("Could not initialize Windows shell access: {error}"))?;
-    // Ask the existing desktop shell to open the URL for its user. Creating a process with
-    // Explorer's token can be denied even when the token can be opened successfully. The
-    // desktop automation object also keeps the browser out of the app's elevated context.
     let result = unsafe {
         // SAFETY: COM is initialized on this thread. Every interface is owned and used only
         // here; all variants, strings, and output pointers remain live for their synchronous

@@ -21,6 +21,12 @@ fn embed_windows_resources() {
     };
     let compilation = embed_resource::compile_for("app.rc", ["AltTabio"], parameters);
     if let Err(error) = compilation.manifest_required() {
-        panic!("AltTabio Windows resources are required: {error}");
+        #[allow(
+            clippy::panic,
+            reason = "build script aborts compilation when Windows resources fail to compile"
+        )]
+        {
+            panic!("AltTabio Windows resources are required: {error}");
+        }
     }
 }

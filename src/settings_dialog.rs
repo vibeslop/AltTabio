@@ -75,7 +75,6 @@ const FRAME: DialogFrame = DialogFrame {
             | WS_MINIMIZEBOX.0
             | WS_CLIPCHILDREN.0,
     ),
-    // Buffer the entire native control tree so its separate paint messages cannot flash.
     ex_style: WINDOW_EX_STYLE(
         WS_EX_DLGMODALFRAME.0 | WS_EX_CONTROLPARENT.0 | WS_EX_APPWINDOW.0 | WS_EX_COMPOSITED.0,
     ),
@@ -111,13 +110,11 @@ pub fn show(
         instance,
         window_origin,
         window_size,
-        // Native ownership would put Settings in the overlay's topmost Z-order band.
         None,
         DialogState::new(settings.clone(), dpi, instance, dark_mode_api),
     )?;
     let window = dialog.window();
     let host = dialog.host()?;
-    // Mutating callbacks remain guarded during setup; painting reads its own snapshot.
     host.state_mut()?.create_controls(window, instance)?;
     host.state_mut()?.select_category(category)?;
     dialog.show_in_front();
@@ -128,8 +125,6 @@ pub fn show(
     if let Err(error) = dialog_host::focus(ok_button) {
         eprintln!("Could not focus the settings category: {error}");
     }
-    // Finish the buffered first frame, including focus and every descendant, before
-    // entering the message loop. No state borrow may span this synchronous repaint.
     unsafe {
         // SAFETY: the dialog owns this live window and all of its child controls.
         RedrawWindow(
@@ -148,7 +143,6 @@ pub fn show(
         if message.hwnd != window || message.message != WM_SETTINGS_OPEN_REPOSITORY {
             return false;
         }
-        // Launch outside native callbacks and dialog-state borrows.
         if let Err(error) = crate::windows_app::open_repository() {
             crate::windows_app::show_error_for_window(window, &error);
         }
@@ -428,7 +422,6 @@ impl DialogState {
         }
         self.sync_save_enabled();
         self.redraw();
-        // Keep the bit set through native theme updates to coalesce their notifications.
         self.pending_previews &= !selector_preview_bit(selector);
     }
 }
@@ -626,7 +619,6 @@ fn handle_command(hwnd: HWND, state: &mut DialogState, wparam: WPARAM) -> Option
                 state.dropdown_selection[selector as usize] = None;
                 state.queue_selector_preview(selector);
             }
-            // Highlighting an open list must not re-theme or relayout its native windows.
             return Some(LRESULT(0));
         }
         Control::Checkbox(_) if notification == BN_CLICKED => {}

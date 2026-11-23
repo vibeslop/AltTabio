@@ -47,7 +47,6 @@ impl WindowCommand {
 mod tests {
     use super::*;
 
-    // The hook thread posts a command as its F-key number, so the two tables must agree.
     #[test]
     fn every_function_key_maps_back_to_its_command() {
         for command in [

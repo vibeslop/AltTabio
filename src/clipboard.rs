@@ -13,7 +13,6 @@ use windows::core::{BOOL, Error, Result};
 
 const MAX_TEXT_BYTES: usize = 128 * 1024;
 
-// These two APIs use zero for a successful release, unlike the generated Result wrappers.
 #[link(name = "kernel32")]
 unsafe extern "system" {
     #[link_name = "GlobalFree"]

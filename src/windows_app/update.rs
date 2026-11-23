@@ -28,7 +28,6 @@ enum Completion {
 pub(super) struct Updates {
     session: UpdateSession,
     worker: Option<Receiver<Completion>>,
-    // One coalesced progress value bounds memory while nested native loops are busy.
     progress: Arc<Mutex<Option<Progress>>>,
     staged: Option<StagedUpdate>,
 }

@@ -49,8 +49,6 @@ use windows::core::Error;
 
 pub use replay::{send_activation_alt, send_shell_escape};
 
-// Thread messages for the hook thread's own queue, kept together so a test can check that they
-// are distinct. The app window never receives them, so they may reuse numbers from `app_messages`.
 const WM_RESET_GESTURES: u32 = WM_APP + 2;
 const WM_REPORT_HOOK_ERRORS: u32 = WM_APP + 3;
 const WM_REPLAY_RIGHT_CLICK: u32 = WM_APP + 4;
@@ -232,8 +230,6 @@ impl HookThread {
     }
 
     pub fn reset_gestures(&self) -> Result<(), String> {
-        // Retire already-posted input before the UI can drain another gesture action.
-        // The next callback also observes this boundary if posting the wake-up fails.
         self.flags.cancel_overlay();
         unsafe {
             // SAFETY: `thread_id` identifies the live hook thread whose queue is created before
@@ -535,8 +531,6 @@ fn handle_mouse_replay_with(message: u32, replay_click: impl FnOnce() -> bool) -
     if message != WM_REPLAY_RIGHT_CLICK {
         return false;
     }
-    // The message loop only schedules the worker. SendInput must leave the hook thread free to
-    // service callbacks, including when another hook forwards our injected events back to us.
     if !replay_click() {
         record_callback_error(HOOK_ERROR_REPLAY_MOUSE);
     }
@@ -614,7 +608,6 @@ fn process_mouse_message_with(
             && context.right_button_release.swap(false, Ordering::AcqRel)
             && !owned
         {
-            // A hook restart cancelled the gesture but still owes its swallowed press a release.
             outcome.suppress = true;
         }
         Some((outcome, context.state.take_replayed_right_click()))
@@ -663,9 +656,6 @@ fn finish_mouse_callback_with(
     let Some(outcome) = outcome else {
         return call_next();
     };
-    // Posting reports failures and schedules receipt cleanup outside the callback. Retain
-    // the gesture: an earlier accepted opening may still need its physical release. If no
-    // opening survives cleanup, the next input synchronization retires capture instead.
     let _posted = post(outcome);
     if outcome.suppress {
         LRESULT(1)
@@ -675,8 +665,6 @@ fn finish_mouse_callback_with(
 }
 
 fn handle_gesture_reset() {
-    // A callback may have already observed the boundary and started a fresh gesture.
-    // Synchronizing again is harmless; unconditionally resetting would cancel that gesture.
     let _flags = process_with_context(HookContext::sync_interception);
 }
 
@@ -881,7 +869,6 @@ mod tests {
                         original_pressed.set(true);
                     }
                     if message == WM_RBUTTONUP && original_pressed.replace(false) {
-                        // A capture-owning recipient opens its menu and restores focus after UP.
                         original_menus.set(original_menus.get() + 1);
                         selected_is_foreground.set(false);
                     }
@@ -970,7 +957,6 @@ mod tests {
             };
             assert_eq!(outcome.actions().next(), expected);
             assert_eq!(outcome.suppress, suppress);
-            // The next native callback observes the receipt armed by actual delivery.
             assert_eq!(
                 alttabio::hook_delivery::deliver(
                     &flags,
@@ -1014,8 +1000,6 @@ mod tests {
         let opening = context
             .state
             .process_key(KeyEvent::pressed(Key::Tab, Modifiers::default()), settings);
-        // Match actual delivery: a sticky gesture owns later keys only after its opening
-        // armed capture. An unpublished opening must not leave sticky capture behind.
         assert_eq!(
             alttabio::hook_delivery::deliver(
                 &context.flags,
@@ -1050,7 +1034,6 @@ mod tests {
                 Some(0)
             );
         }
-        // Tagged SendInput replay bypasses interception, but only commits when lower hooks agree.
         let data = KBDLLHOOKSTRUCT {
             vkCode: u32::from(VK_CAPITAL.0),
             dwExtraInfo: REPLAYED_INPUT_MARKER,
@@ -1136,7 +1119,6 @@ mod tests {
                 LPARAM((&raw const data) as isize),
             );
         }
-        // Search capture on resume belongs to the visible panel published by the UI.
         flags.sync_overlay(true, true, false);
         flags.suspend(false);
         let context = CONTEXT.with(|slot| slot.borrow_mut().take());

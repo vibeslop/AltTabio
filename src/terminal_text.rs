@@ -23,8 +23,6 @@ pub fn escape_truncated(value: &str, max_chars: usize) -> String {
                     | '\u{2066}'..='\u{206f}'
             )
         {
-            // C0/C1 controls include ESC, OSC/CSI/ST, BEL, CR, LF, TAB and DEL.
-            // Bidi controls are escaped without suppressing ordinary RTL names.
             let escaped = character.escape_default();
             if escaped.len() > remaining {
                 break;

@@ -6,7 +6,6 @@ use objc2_foundation::NSBundle;
 #[must_use]
 pub fn another_instance_running() -> bool {
     let Some(identifier) = NSBundle::mainBundle().bundleIdentifier() else {
-        // Unbundled development binaries have no identifier to compare.
         return false;
     };
     let current = std::process::id();

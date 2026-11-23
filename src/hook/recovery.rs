@@ -19,7 +19,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, Error};
 
 thread_local! {
-    // Independent publication lets reentrant desktop callbacks gate delivery during state borrows.
     static RECOVERY_FLAGS: RefCell<Option<Arc<HookFlags>>> = const { RefCell::new(None) };
     static DESKTOP_BOUNDARY: Cell<Option<u32>> = const { Cell::new(None) };
     static RECOVERY_QUEUED: Cell<bool> = const { Cell::new(false) };
@@ -143,7 +142,6 @@ unsafe extern "system" fn desktop_switch_proc(
                 )
             };
             if result.is_err() {
-                // The periodic owning-thread check retries recovery if this wake-up was dropped.
                 RECOVERY_QUEUED.set(false);
             }
         }
@@ -179,8 +177,6 @@ fn recover_keyboard_state_with(
     mut desktop_active: impl FnMut() -> Result<bool, Error>,
     sample: impl FnOnce() -> [bool; 8],
 ) {
-    // Only message-loop work calls this function. Never interpret inaccessible-desktop zeros
-    // from GetAsyncKeyState as an all-up keyboard, and retain pending recovery on query failure.
     match desktop_active() {
         Ok(true) => {}
         inactive => {
@@ -200,7 +196,6 @@ fn recover_keyboard_state_with(
     else {
         return;
     };
-    // Sample outside the RefCell borrow: reentrant hook events can record fresh evidence.
     let down = sample();
     if desktop_active() != Ok(true) || DESKTOP_BOUNDARY.get() != Some(boundary) {
         return;

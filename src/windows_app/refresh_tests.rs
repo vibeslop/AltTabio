@@ -38,7 +38,10 @@ fn closed_session_refresh_preserves_fresh_alt_tab() {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) if Instant::now() < deadline => {
+                #[allow(clippy::disallowed_methods, reason = "test polls child fixture exit")]
+                std::thread::sleep(Duration::from_millis(10));
+            }
             Ok(None) => break None,
             Err(e) => panic!("{e}"),
         }
@@ -91,7 +94,6 @@ fn close_refresh_fixture() {
     for complete in [true, false] {
         check_fresh_gesture(&mut app, complete);
     }
-    // Exit releases the private desktop, queued closes and all fixture-owned windows.
     std::process::exit(0);
 }
 
@@ -131,14 +133,15 @@ fn check_fresh_gesture(app: &mut App, complete: bool) {
     });
     app.task_refresh.apply_command_outcome(outcome);
     app.sync_hook_interception();
-    // Leave the posted close undelivered, modelling a slow/refused close whose HWND survives.
     assert_eq!(
         app.task_refresh.complete_enumeration(Ok(&tasks)),
         RetryTimer::Start
     );
-    // SAFETY: the live fixture overlay owns this timer, as in a production close refresh.
     assert_ne!(
-        unsafe { SetTimer(Some(app.hwnd), CLOSE_REFRESH_TIMER_ID, 250, None) },
+        unsafe {
+            // SAFETY: the live fixture overlay owns this timer, as in a production close refresh.
+            SetTimer(Some(app.hwnd), CLOSE_REFRESH_TIMER_ID, 250, None)
+        },
         0
     );
     if complete {

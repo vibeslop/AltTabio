@@ -141,7 +141,6 @@ impl HotkeyState {
             return TapOutcome::default();
         }
 
-        // The switcher owns the keyboard from here until it hides.
         let action = match key {
             MacKey::Tab | MacKey::Right => Some(Action::StepApp(forward)),
             MacKey::Backtick | MacKey::Left => Some(Action::StepApp(-forward)),
@@ -161,7 +160,6 @@ impl HotkeyState {
             action,
             Some(Action::Activate | Action::ChooseWindow(_) | Action::Dismiss)
         ) {
-            // A later Tab while the modifier stays down starts a new gesture.
             self.gesture = None;
         }
         action.map_or(TapOutcome::SUPPRESSED, |action| {
@@ -203,8 +201,8 @@ mod tests {
     /// Command down, Tab pressed, and the overlay showing.
     fn in_gesture() -> HotkeyState {
         let mut state = HotkeyState::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
-        let _ = state.process(key(MacKey::Tab), settings());
+        let _cmd = state.process(TapEvent::ModifiersChanged(command_down()), settings());
+        let _tab = state.process(key(MacKey::Tab), settings());
         state.set_overlay_active(true);
         state
     }
@@ -212,7 +210,7 @@ mod tests {
     #[test]
     fn command_tab_opens_and_command_release_switches() {
         let mut state = HotkeyState::default();
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
+        let _cmd = state.process(TapEvent::ModifiersChanged(command_down()), settings());
 
         let outcome = state.process(key(MacKey::Tab), settings());
         assert!(outcome.suppress);
@@ -234,7 +232,7 @@ mod tests {
             action(state.process(key(MacKey::Backtick), settings())),
             Some(Action::StepApp(-1))
         );
-        let _ = state.process(
+        let _mods = state.process(
             TapEvent::ModifiersChanged(ModifierState {
                 command: true,
                 shift: true,
@@ -281,7 +279,7 @@ mod tests {
             command_tab: false,
             option_tab: true,
         };
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings);
+        let _cmd = state.process(TapEvent::ModifiersChanged(command_down()), settings);
 
         assert_eq!(
             state.process(key(MacKey::Tab), settings),
@@ -292,7 +290,7 @@ mod tests {
     #[test]
     fn option_tab_is_the_second_gesture() {
         let mut state = HotkeyState::default();
-        let _ = state.process(
+        let _opt = state.process(
             TapEvent::ModifiersChanged(ModifierState {
                 option: true,
                 ..ModifierState::default()
@@ -344,7 +342,6 @@ mod tests {
             action(state.process(key(MacKey::Return), settings())),
             Some(Action::Activate)
         );
-        // Letting go afterwards does not switch a second time; Tab opens anew.
         assert_eq!(
             action(state.process(
                 TapEvent::ModifiersChanged(ModifierState::default()),
@@ -352,7 +349,7 @@ mod tests {
             )),
             None
         );
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
+        let _cmd = state.process(TapEvent::ModifiersChanged(command_down()), settings());
         assert_eq!(
             action(state.process(key(MacKey::Tab), settings())),
             Some(Action::StepApp(1))
@@ -383,12 +380,11 @@ mod tests {
         let quit = key(MacKey::Command(WindowCommand::Quit));
 
         assert_eq!(state.process(quit, settings()), TapOutcome::SUPPRESSED);
-        let _ = state.process(TapEvent::ModifiersChanged(command_down()), settings());
+        let _cmd = state.process(TapEvent::ModifiersChanged(command_down()), settings());
         assert_eq!(
             action(state.process(quit, settings())),
             Some(Action::Command(WindowCommand::Quit))
         );
-        // Command coming up here was never a gesture, so it does not switch.
         assert_eq!(
             action(state.process(
                 TapEvent::ModifiersChanged(ModifierState::default()),
@@ -402,7 +398,7 @@ mod tests {
     fn keys_pass_through_after_the_overlay_hides() {
         let mut state = in_gesture();
         state.set_overlay_active(false);
-        let _ = state.process(
+        let _mods = state.process(
             TapEvent::ModifiersChanged(ModifierState::default()),
             settings(),
         );

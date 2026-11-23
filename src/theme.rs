@@ -329,8 +329,6 @@ mod tests {
         let dark = SwitcherTokens::new(ResolvedTheme::Dark);
         let light = SwitcherTokens::new(ResolvedTheme::Light);
 
-        // Near-black surfaces want foregrounds at L 0.75 or more; near-white ones at 0.45 or
-        // less. Secondary text has to clear the same floors as it is body-sized.
         assert!(lightness(dark.canvas.color) < 0.25);
         assert!(lightness(dark.text) > 0.9);
         assert!(lightness(dark.text_secondary) > 0.7);

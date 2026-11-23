@@ -139,8 +139,6 @@ impl App {
             // SAFETY: the HWND is live during WM_PAINT and `paint` is a writable PAINTSTRUCT.
             BeginPaint(self.hwnd, &raw mut paint)
         };
-        // Only a successful BeginPaint validates the update region, so after a failure WM_PAINT
-        // keeps arriving until a call succeeds. Logging the first failure of a run is enough.
         let begin_failed = dc.is_invalid();
         if begin_failed {
             if self.begin_paint_failures.fail() {
@@ -162,8 +160,6 @@ impl App {
         ) {
             eprintln!("Could not render the overlay: {error}");
         }
-        // The renderer presents the complete frame, including icons, through its own target.
-        // Only a successful BeginPaint needs a matching EndPaint.
         if begin_failed {
             return;
         }
@@ -201,8 +197,6 @@ fn capture_foreground_windows(foreground: HWND) -> Vec<isize> {
     const MAX_FOREGROUND_WINDOWS: usize = 32;
     let mut windows = Vec::with_capacity(MAX_FOREGROUND_WINDOWS);
     let mut current = foreground;
-    // Owners can disappear or change during capture. Bound work and stop repeated handles
-    // instead of trusting external ownership to form a stable, acyclic chain.
     while !current.is_invalid()
         && windows.len() < MAX_FOREGROUND_WINDOWS
         && !windows.contains(&(current.0 as isize))
@@ -215,8 +209,6 @@ fn capture_foreground_windows(foreground: HWND) -> Vec<isize> {
         };
         match owner {
             Ok(owner) => current = owner,
-            // GW_OWNER normally returns null for ownerless windows; the binding maps that
-            // to Err. A vanished window also ends capture, preserving earlier candidates.
             Err(_) => break,
         }
     }

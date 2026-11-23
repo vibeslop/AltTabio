@@ -1,5 +1,7 @@
 //! Testable application behavior for `AltTabio`.
 
+#![forbid(unsafe_code)]
+
 pub mod activation;
 pub mod app_switcher;
 pub mod close_button;

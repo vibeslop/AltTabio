@@ -86,15 +86,10 @@ impl KeyEvent {
     }
 }
 
-// A numbered key sits at its base plus its number. Only the numbers the switcher acts on decode
-// to it; VK_0, VK_NUMPAD0, F1 to F3 and F10 onward stay `Other`.
 const DIGIT_BASE: u16 = 0x30;
 const NUMPAD_DIGIT_BASE: u16 = 0x60;
 const FUNCTION_BASE: u16 = 0x6F;
 
-// Declare each named key once, with its code. The encoding match and the list that decoding scans
-// are both generated from that declaration. The match has no wildcard arm, so a new variant fails
-// to compile until it is declared, and declaring it also lists it for decoding.
 macro_rules! named_keys {
     ($( $key:ident = $code:literal, )+) => {
         /// The keys with a name of their own. Decoding compares each one's code, so a replayed key
@@ -254,7 +249,6 @@ mod tests {
             let key = Key::Function(number);
             assert_eq!(decode_virtual_key(u32::from(key.virtual_key())), key);
         }
-        // VK_0, VK_NUMPAD0, F1 and F10.
         for code in [0x30_u16, 0x60, 0x70, 0x79] {
             assert_eq!(decode_virtual_key(u32::from(code)), Key::Other(code));
         }

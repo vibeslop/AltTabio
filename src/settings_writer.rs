@@ -87,7 +87,6 @@ mod tests {
         writer.save(settings.clone())?;
         settings.general.auto_update = true;
         writer.save(settings)?;
-        // The first save is still blocked while both subsequent requests return.
         assert!(finished_rx.try_recv().is_err());
         release.send(())?;
         writer.finish()?;

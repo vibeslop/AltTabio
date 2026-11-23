@@ -87,6 +87,12 @@ all = "deny"
 pedantic = "deny"
 expect_used = "deny"
 unwrap_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+let_underscore_must_use = "deny"
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "deny"
 
 [profile.release]
 codegen-units = 1

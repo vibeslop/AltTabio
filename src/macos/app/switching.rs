@@ -68,8 +68,6 @@ impl App {
 
     fn activate_target(&mut self, target: Target) {
         if let Target::Window { handle, .. } = target {
-            // The switch is the window's latest use; the refresh the activation brings may run
-            // before the app has raised it.
             let listed = self.listed_windows();
             self.window_history.note(Some(handle), &listed);
         }
@@ -107,9 +105,6 @@ impl App {
                 name: self.app_name(process),
             },
         };
-        // AX client calls and NSRunningApplication may run off the main thread. Serial dispatch
-        // keeps user commands ordered, independently of enumeration and settings persistence.
-        // https://developer.apple.com/documentation/appkit/nsrunningapplication
         let session = self.session;
         self.command_queue.exec_async(move || {
             let result =
@@ -118,7 +113,6 @@ impl App {
                 match result {
                     Err(error) => eprintln!("{error}"),
                     Ok(()) if command.is_some() => {
-                        // Refresh only after the remote action has completed.
                         app.request_refresh();
                         app.schedule_refresh_burst();
                     }

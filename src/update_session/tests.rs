@@ -37,7 +37,6 @@ fn opening_completed_status_does_not_start_another_check() {
         assert_eq!(session.open(true, now), Effect::Check { manual: true });
         assert_eq!(session.checked(result, now), Effect::None);
         let retained = session.view("1.3.0");
-        // Hiding has no policy event. Opening it again must leave the completion intact.
         for _ in 0..3 {
             assert_eq!(session.open(true, now), Effect::None);
             assert_eq!(session.view("1.3.0"), retained);

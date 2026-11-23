@@ -59,8 +59,6 @@ pub(super) fn foreground_passthrough_policy(
         // SAFETY: process_id is writable and hwnd is the live foreground window.
         GetWindowThreadProcessId(hwnd, Some(&raw mut process_id))
     };
-    // A process that refuses the query or has exited leaves the executable unknown. The window
-    // class still identifies remote desktop clients, so the policy proceeds without it.
     let process = if thread_id == 0 {
         ProcessInfo::unavailable(process_id)
     } else {
@@ -81,8 +79,6 @@ fn is_maximized_or_fullscreen(hwnd: HWND, bounds_failures: &mut FailureRun) -> b
     {
         return true;
     }
-    // Every foreground change and every window move lands here, so a window whose bounds cannot
-    // be read would repeat its log line. Logging the first failure of a run is enough.
     match foreground_bounds(hwnd) {
         Ok((window, monitor)) => {
             bounds_failures.succeed();

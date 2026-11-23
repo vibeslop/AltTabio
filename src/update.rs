@@ -22,7 +22,6 @@ impl Version {
             .strip_prefix('v')
             .unwrap_or(text)
             .split('.')
-            // The integer parser takes a leading `+`, which no tag has.
             .map(|part| {
                 (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
                     .then(|| part.parse().ok())
@@ -193,7 +192,6 @@ impl Updater {
                 self.asked = true;
                 Step::Check
             }
-            // The work under way reports to the user when it ends.
             Phase::Checking | Phase::Installing(_) => {
                 self.asked = true;
                 Step::None

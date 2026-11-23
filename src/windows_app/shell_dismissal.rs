@@ -248,7 +248,6 @@ mod tests {
             SwitchTask::new(2, 20, "Two", "two"),
             SwitchTask::new(3, 30, "Three", "three"),
         ];
-        // A's opening has already been previewed, while shell focus remains pending.
         let _opening = app.session.handle_input(InputAction::MouseWheel(1, (0, 0)));
         app.session.open(tasks.clone(), Some(1));
         let mut input = DeferredSwitch::new(InputAction::MouseWheel(1, (0, 0)));

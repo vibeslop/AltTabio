@@ -18,8 +18,6 @@ impl App {
                 self.hide_overlay();
             }
         }) {
-            // The selection is complete. Reopening here would leave an overlay without
-            // a matching completion event to dismiss it.
             eprintln!("Could not activate the selected window");
         }
     }
@@ -31,8 +29,6 @@ pub(super) fn request_foreground(window: HWND) -> bool {
 }
 
 fn activate_and_hide(target: HWND, hide: impl FnOnce()) -> bool {
-    // Keep the overlay's foreground permission until the target queue has received the
-    // activation request. Hiding first can return foreground ownership to another process.
     let activated = activate_window(target);
     hide();
     activated
@@ -68,8 +64,6 @@ fn activate_window(owner: HWND) -> bool {
         }
     }
 
-    // Separate queues make target activation asynchronous even if the target is hung.
-    // The overlay retains foreground ownership until the activation request is sent.
     let activated = request_foreground(target);
     activated
         || unsafe {
@@ -106,9 +100,11 @@ mod tests {
         for handle in handles.iter().cycle().take(10) {
             let window = HWND(*handle as *mut c_void);
             let mut process = 0;
-            // SAFETY: the supplied HWND is borrowed and the process output is writable.
             assert_ne!(
-                unsafe { GetWindowThreadProcessId(window, Some(&raw mut process)) },
+                unsafe {
+                    // SAFETY: the supplied HWND is borrowed and the process output is writable.
+                    GetWindowThreadProcessId(window, Some(&raw mut process))
+                },
                 0
             );
             assert_ne!(
@@ -120,7 +116,6 @@ mod tests {
                 activate_window(window),
                 "Activation was rejected for {handle}"
             );
-            // SetForegroundWindow may return before a foreign input queue processes activation.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             loop {
                 // SAFETY: this query has no preconditions and transfers no ownership.
@@ -131,6 +126,10 @@ mod tests {
                     std::time::Instant::now() < deadline,
                     "Window {handle} never became foreground"
                 );
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "test polls foreground transition"
+                )]
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }

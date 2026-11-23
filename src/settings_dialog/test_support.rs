@@ -129,7 +129,6 @@ impl RenderTarget {
     }
 
     pub(super) fn save_for_visual_qa(&self, dpi: u32, dark: bool) -> Result<()> {
-        // Render artifacts require no visible window or desktop capture.
         if let Some(folder) = std::env::var_os("ALTTABIO_SETTINGS_RENDER_DIR") {
             let path = std::path::PathBuf::from(folder)
                 .join(format!("settings-choices-{dpi}-{dark}.bgra"));
@@ -159,13 +158,23 @@ impl RenderTarget {
 
 impl Drop for RenderTarget {
     fn drop(&mut self) {
-        // SAFETY: no drawing operation remains; deleting the DC deselects its bitmap first.
         if !self.dc.is_invalid() {
-            assert!(unsafe { DeleteDC(self.dc) }.as_bool());
+            assert!(
+                unsafe {
+                    // SAFETY: no drawing operation remains; deleting the DC deselects its bitmap first.
+                    DeleteDC(self.dc)
+                }
+                .as_bool()
+            );
         }
-        // SAFETY: this test owns the bitmap, and its DC has already been deleted.
         if !self.bitmap.is_invalid() {
-            assert!(unsafe { DeleteObject(HGDIOBJ::from(self.bitmap)) }.as_bool());
+            assert!(
+                unsafe {
+                    // SAFETY: this test owns the bitmap, and its DC has already been deleted.
+                    DeleteObject(HGDIOBJ::from(self.bitmap))
+                }
+                .as_bool()
+            );
         }
     }
 }

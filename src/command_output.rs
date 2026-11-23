@@ -39,7 +39,6 @@ fn capture(child: &mut Child, stdout_limit: usize, stderr_limit: usize) -> io::R
                 .name("alttabio-stdout".to_owned())
                 .spawn_scoped(scope, move || {
                     let result = read_bounded(stdout, stdout_limit, "stdout");
-                    // An earlier failure on the other pipe may have ended capture already.
                     let _delivered = stdout_sender.send((true, result));
                 })?;
             std::thread::Builder::new()
@@ -64,11 +63,10 @@ fn capture(child: &mut Child, stdout_limit: usize, stderr_limit: usize) -> io::R
                 stderr,
             })
         })();
-        if let Err(error) = &result {
-            // Closing the child's pipes also releases the other reader before the scope joins.
-            if let Err(cleanup) = stop(child) {
-                return Err(io::Error::other(format!("{error}; {cleanup}")));
-            }
+        if let Err(error) = &result
+            && let Err(cleanup) = stop(child)
+        {
+            return Err(io::Error::other(format!("{error}; {cleanup}")));
         }
         result
     })
@@ -88,7 +86,6 @@ fn read_bounded(mut reader: impl Read, limit: usize, stream: &str) -> io::Result
     let mut bytes = Vec::new();
     let mut buffer = [0; 8192];
     loop {
-        // Read at most one byte beyond the limit to distinguish exact size from overflow.
         let remaining = limit - bytes.len();
         let length = remaining.saturating_add(1).min(buffer.len());
         let count = match reader.read(&mut buffer[..length]) {
@@ -193,7 +190,6 @@ mod tests {
                 stderr.write_all(&[b'x'; 8192])?;
             },
             _ => {
-                // More than a pipe buffer on both streams detects serial-reader deadlocks.
                 for _ in 0..16_384 {
                     stdout.write_all(b"out-data")?;
                     stderr.write_all(b"err-data")?;

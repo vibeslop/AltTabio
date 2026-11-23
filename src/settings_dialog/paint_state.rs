@@ -75,8 +75,6 @@ impl DialogState {
     }
 
     pub(super) fn refresh_paint_state(&self) {
-        // Build before borrowing the cache. Native queries must never run while its cell
-        // is mutably borrowed, and every callback clones the snapshot before forwarding.
         let snapshot = Rc::new(self.paint_state());
         self.paint.replace(Some(snapshot));
     }

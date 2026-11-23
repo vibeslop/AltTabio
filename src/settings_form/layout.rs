@@ -29,7 +29,6 @@ impl SettingsLayout {
         let footer_y = client.height - scale(58, dpi);
         let viewport_y = scale(if category == Category::About { 74 } else { 99 }, dpi);
         let main_width = (client.width - sidebar_width).max(1);
-        // Reserve a scrollbar column on every page so switching never shifts the controls.
         let usable_width = main_width - scale(17, dpi);
         let content_width = (usable_width - scale(56, dpi)).min(scale(488, dpi)).max(1);
         Self {
@@ -129,7 +128,6 @@ impl SettingsLayout {
                     Control::Label(_) | Control::Selector(_) => 44,
                     _ => 34,
                 };
-                // Scale absolute positions instead of accumulating rounded row heights.
                 let row = Rect::new(
                     self.content_x,
                     s(*y),

@@ -1,0 +1,6 @@
+allow-panic-in-tests = true
+
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "Do not block callbacks or UI threads; use run_later or post_to_app." },
+  { path = "objc2_app_kit::NSColor::controlAccentColor", reason = "Do not read the system accent color; draw from SwitcherTokens in src/theme.rs." },
+]

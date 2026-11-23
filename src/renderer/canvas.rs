@@ -86,7 +86,6 @@ impl Canvas<'_> {
             visible_range,
             switcher.visible_task_count(),
         ));
-        // Icons share the text/selection frame; no window-DC pass or full-frame GDI copy follows.
         let icon_failure = icons.draw(target, switcher, self.options, list_height);
         let presented = unsafe {
             // SAFETY: the target is valid on this UI thread, and this ends the BeginDraw above on

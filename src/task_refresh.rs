@@ -78,8 +78,6 @@ impl ListedRefreshSignal {
         if !self.store(window_handle) {
             self.overflow.store(true, Ordering::Release);
         }
-        // Publish dirty only after the payload so a concurrent UI drain cannot clear the retry
-        // marker before this notice becomes observable.
         self.dirty.store(true, Ordering::Release);
         if self.queued.swap(true, Ordering::AcqRel) {
             RefreshWakeup::AlreadyQueued

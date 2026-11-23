@@ -70,13 +70,8 @@ impl SettingsStore {
         let (temporary_path, mut file) =
             create_temporary_sibling(&self.path).map_err(save_error)?;
         let written = write_and_sync(&mut file, rendered.as_bytes());
-        // Close before renaming or removing: the temporary file denies sharing while being written.
         drop(file);
-        let result = written.and_then(|()| {
-            // A sibling stays on the same filesystem. Rename replaces the destination without
-            // truncating it, and happens only after every byte has been written and synced.
-            std::fs::rename(&temporary_path, &self.path)
-        });
+        let result = written.and_then(|()| std::fs::rename(&temporary_path, &self.path));
         if let Err(error) = result {
             let message = save_error(error);
             return Err(match std::fs::remove_file(&temporary_path) {
@@ -259,7 +254,6 @@ mod tests {
         Ok(())
     }
 
-    // Only Windows refuses to remove a file that another handle still holds open.
     #[cfg(windows)]
     #[test]
     fn cleanup_failure_is_reported_together_with_write_failure()
@@ -270,7 +264,6 @@ mod tests {
         let document = store.document.clone();
         let mut locked_temporary_file = None;
         let result = store.save_with(&Settings::default(), |file, _| {
-            // A duplicate keeps the real no-sharing handle alive through the cleanup attempt.
             locked_temporary_file = Some(file.try_clone()?);
             Err(io::Error::other("injected write failure"))
         });

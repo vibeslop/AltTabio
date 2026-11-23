@@ -278,7 +278,6 @@ impl DialogButton {
     const ALL: [Self; 2] = [Self::Ok, Self::Cancel];
 }
 
-// Keep option identities stable while placing them in the new categories.
 macro_rules! setting_options {
     ($( $name:ident: $category:ident, $section:ident.$field:ident, $label:literal; )+) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
