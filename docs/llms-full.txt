@@ -19,7 +19,7 @@ AltTabio is a free, open-source Alt+Tab replacement for 64-bit Windows that list
 - Homepage: https://vibeslop.github.io/AltTabio/
 - Docs: https://vibeslop.github.io/AltTabio/docs/ (install, shortcuts, settings, permissions, updates, and uninstall for Windows and Mac)
 - Download: https://github.com/vibeslop/AltTabio/releases/latest
-- Current version: 1.4.0 (see GitHub Releases for the latest)
+- Current version: 1.4.1 (see GitHub Releases for the latest)
 
 ## Why it exists
 
