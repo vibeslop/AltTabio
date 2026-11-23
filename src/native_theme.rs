@@ -201,7 +201,7 @@ const fn supports_set_preferred_app_mode(build: u32) -> bool {
     build >= SET_PREFERRED_APP_MODE_MINIMUM_BUILD
 }
 
-fn current_windows_build() -> Result<u32> {
+pub(crate) fn current_windows_build() -> Result<u32> {
     let mut version = NativeOsVersionInfo {
         size: u32::try_from(size_of::<NativeOsVersionInfo>()).unwrap_or(u32::MAX),
         major: 0,

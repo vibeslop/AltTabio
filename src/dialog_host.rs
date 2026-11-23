@@ -10,7 +10,7 @@ use windows::Win32::Foundation::{
     E_FAIL, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
     SetLastError, WIN32_ERROR, WPARAM,
 };
-use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{HBRUSH, InvalidateRect};
 use windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
@@ -480,16 +480,47 @@ pub(crate) fn handle_dpi_changed(
 }
 
 pub(crate) fn set_dark_title_bar(window: HWND, dark: bool) -> Result<()> {
+    let Some(attribute) = alttabio::overlay_window::dark_mode_attribute(
+        crate::native_theme::current_windows_build().ok(),
+    ) else {
+        return Ok(());
+    };
     let immersive_dark = i32::from(dark);
-    unsafe {
+    let apply = |attribute_id: u32| unsafe {
         // SAFETY: window is a live top-level HWND and immersive_dark is BOOL-compatible and
         // remains valid for the synchronous DWM attribute call.
         DwmSetWindowAttribute(
             window,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            DWMWINDOWATTRIBUTE(attribute_id.cast_signed()),
             (&raw const immersive_dark).cast(),
             u32::try_from(size_of_val(&immersive_dark)).unwrap_or(u32::MAX),
         )
+    };
+    match apply(attribute.dwm_attribute()) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if attribute == alttabio::overlay_window::DarkModeAttribute::Modern
+                && alttabio::overlay_window::is_unsupported_dwm_attribute_hresult(
+                    error.code().0,
+                ) =>
+        {
+            match apply(alttabio::overlay_window::DarkModeAttribute::Legacy.dwm_attribute()) {
+                Err(fallback_error)
+                    if alttabio::overlay_window::is_unsupported_dwm_attribute_hresult(
+                        fallback_error.code().0,
+                    ) =>
+                {
+                    Ok(())
+                }
+                other => other,
+            }
+        }
+        Err(error)
+            if alttabio::overlay_window::is_unsupported_dwm_attribute_hresult(error.code().0) =>
+        {
+            Ok(())
+        }
+        other => other,
     }
 }
 
