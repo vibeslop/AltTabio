@@ -25,6 +25,22 @@ pub(super) fn mouse_provenance(data: &MSLLHOOKSTRUCT) -> InputProvenance {
     )
 }
 
+pub(super) fn filter_keyboard_input_for_native_window(lparam: LPARAM) -> Option<LRESULT> {
+    let data = unsafe {
+        // SAFETY: called only during a nonnegative low-level keyboard callback; the original
+        // KBDLLHOOKSTRUCT is live until the callback returns.
+        (lparam.0 as *const KBDLLHOOKSTRUCT).as_ref()
+    }?;
+    if keyboard_provenance(data) == InputProvenance::Injected
+        && !overlay_is_active()
+        && owns_foreground_window()
+    {
+        Some(LRESULT(1))
+    } else {
+        None
+    }
+}
+
 pub(super) fn filter_keyboard_input(
     lparam: LPARAM,
     forward: impl FnOnce() -> LRESULT,
@@ -64,10 +80,11 @@ fn filter_input(
     })
 }
 
-fn owns_input() -> bool {
-    if process_with_context(|context| context.flags.load() & OVERLAY_ACTIVE != 0).unwrap_or(true) {
-        return true;
-    }
+fn overlay_is_active() -> bool {
+    process_with_context(|context| context.flags.load() & OVERLAY_ACTIVE != 0).unwrap_or(true)
+}
+
+fn owns_foreground_window() -> bool {
     let mut process_id = 0;
     unsafe {
         // SAFETY: the foreground HWND is borrowed, and process_id is writable. These bounded
@@ -80,6 +97,10 @@ fn owns_input() -> bool {
         }
     }
     process_id == std::process::id()
+}
+
+fn owns_input() -> bool {
+    overlay_is_active() || owns_foreground_window()
 }
 
 #[cfg(test)]
@@ -99,7 +120,7 @@ mod tests {
     };
 
     #[test]
-    fn all_injected_keyboard_flags_are_rejected_before_state_and_native_dispatch() {
+    fn all_injected_keyboard_flags_reject_commands_and_keep_keyboard_state_untouched() {
         for flags in [
             LLKHF_INJECTED,
             LLKHF_LOWER_IL_INJECTED,
@@ -107,13 +128,13 @@ mod tests {
         ] {
             for marker in [0, REPLAYED_INPUT_MARKER] {
                 if marker != 0 && flags == LLKHF_INJECTED {
-                    continue; // Same-integrity marked replay retains its existing routing.
+                    continue;
                 }
                 let context = test_context();
                 context.flags.sync_overlay(true, false, false);
                 let before = context.flags.load();
                 CONTEXT.with(|slot| *slot.borrow_mut() = Some(context));
-                for vk in [u32::from(VK_LMENU.0), 0x09, 0x77, u32::from(VK_CAPITAL.0)] {
+                for vk in [0x09, 0x73, 0x77, 0x0D, u32::from(VK_CAPITAL.0)] {
                     let data = KBDLLHOOKSTRUCT {
                         vkCode: vk,
                         flags,
@@ -136,6 +157,23 @@ mod tests {
                         commit_keyboard_delivery(WPARAM(message as usize), param);
                     }
                 }
+                let alt_data = KBDLLHOOKSTRUCT {
+                    vkCode: u32::from(VK_LMENU.0),
+                    flags,
+                    dwExtraInfo: marker,
+                    ..Default::default()
+                };
+                let alt_param = LPARAM((&raw const alt_data) as isize);
+                for message in [WM_KEYDOWN, WM_KEYUP] {
+                    assert_eq!(
+                        unsafe {
+                            // SAFETY: the callback receives a live, correctly typed stack record.
+                            keyboard_proc(0, WPARAM(message as usize), alt_param)
+                        },
+                        LRESULT(1)
+                    );
+                    commit_keyboard_delivery(WPARAM(message as usize), alt_param);
+                }
                 CONTEXT.with(|slot| {
                     let mut slot = slot.borrow_mut();
                     let Some(context) = slot.take() else {
@@ -147,6 +185,51 @@ mod tests {
                     assert_eq!(context.pending_errors, 0);
                 });
             }
+        }
+    }
+
+    #[test]
+    fn injected_win_tab_opens_switcher_across_injected_flags_without_mutating_keyboard_state() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::VK_LWIN;
+        for flags in [
+            LLKHF_INJECTED,
+            LLKHF_LOWER_IL_INJECTED,
+            LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED,
+        ] {
+            CONTEXT.with(|slot| *slot.borrow_mut() = Some(test_context()));
+            let send = |vk_code, message| {
+                let data = KBDLLHOOKSTRUCT {
+                    vkCode: vk_code,
+                    flags,
+                    ..Default::default()
+                };
+                process_keyboard_message(
+                    WPARAM(message as usize),
+                    LPARAM((&raw const data) as isize),
+                )
+            };
+            assert_eq!(
+                send(u32::from(VK_LWIN.0), WM_KEYDOWN),
+                Some(alttabio::input::HookOutcome::default())
+            );
+            let tab = send(0x09, WM_KEYDOWN);
+            assert!(tab.is_some_and(|outcome| outcome.suppress));
+            assert_eq!(
+                tab.map(|outcome| outcome.actions().collect::<Vec<_>>()),
+                Some(vec![alttabio::input::InputAction::Switch(1)])
+            );
+            let tab_up = send(0x09, WM_KEYUP);
+            assert!(
+                tab_up
+                    .is_some_and(|outcome| outcome.suppress && outcome.actions().next().is_none())
+            );
+            CONTEXT.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                let Some(context) = slot.take() else {
+                    panic!("missing context")
+                };
+                assert_eq!(context.keyboard_state.key_state(VK_LWIN), 0);
+            });
         }
     }
 
